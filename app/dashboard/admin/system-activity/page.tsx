@@ -32,6 +32,8 @@ interface UnifiedActivityRow {
 }
 
 export const revalidate = 0
+const PAGE_LIMIT = 250
+const PAGE_SIZE = 100
 
 export default async function SystemActivityPage({
   searchParams,
@@ -65,10 +67,14 @@ export default async function SystemActivityPage({
     return moduleFilter === module
   }
 
-  const PAGE_LIMIT = 250
-  const PAGE_SIZE = 100
-
   const activityRows: UnifiedActivityRow[] = []
+  const moduleRowCounts: Record<UnifiedActivityRow["module"], number> = {
+    appointment: 0,
+    emergency: 0,
+    billing: 0,
+    lab: 0,
+    pharmacy: 0,
+  }
 
   // Appointments
   if (shouldInclude("appointment")) {
@@ -93,6 +99,7 @@ export default async function SystemActivityPage({
       appointment_id: string
       patient_id: string | null
     }[]
+    moduleRowCounts.appointment = appointmentRows.length
 
     const patientIds = Array.from(
       new Set(appointmentRows.map((r) => r.patient_id).filter((id): id is string => Boolean(id))),
@@ -150,6 +157,7 @@ export default async function SystemActivityPage({
       actor_user_id: string
       triage_id: string
     }[]
+    moduleRowCounts.emergency = triageRows.length
 
     const triageIds = Array.from(new Set(triageRows.map((r) => r.triage_id))) as string[]
     const triageById = new Map<
@@ -229,6 +237,7 @@ export default async function SystemActivityPage({
         invoice_number?: string | null
       } | null
     }[]
+    moduleRowCounts.billing = billingRows.length
 
     for (const row of billingRows) {
       const meta = row.metadata || {}
@@ -270,6 +279,7 @@ export default async function SystemActivityPage({
       lab_test_id: string
       metadata: { patient_id?: string | null; patient_number?: string | null; patient_name?: string | null; test_name?: string | null } | null
     }[]
+    moduleRowCounts.lab = labRows.length
 
     for (const row of labRows) {
       const meta = row.metadata || {}
@@ -311,6 +321,7 @@ export default async function SystemActivityPage({
       prescription_id: string
       metadata: { patient_id?: string | null; patient_number?: string | null; patient_name?: string | null; prescription_number?: string | null } | null
     }[]
+    moduleRowCounts.pharmacy = pharmacyRows.length
 
     for (const row of pharmacyRows) {
       const meta = row.metadata || {}
@@ -429,8 +440,13 @@ export default async function SystemActivityPage({
     }
   }
 
-  const buildQueryString = () => {
+  const truncatedModules = Object.entries(moduleRowCounts)
+    .filter(([, count]) => count >= PAGE_LIMIT)
+    .map(([module]) => renderModuleLabel(module as UnifiedActivityRow["module"]))
+
+  const buildQueryString = (page = 1) => {
     const params = new URLSearchParams()
+    if (page > 1) params.set("page", String(page))
     if (moduleFilter && moduleFilter !== "all") params.set("module", moduleFilter)
     if (actorFilter) params.set("actor", actorFilter)
     if (patientFilter) params.set("patient", patientFilter)
@@ -519,6 +535,12 @@ export default async function SystemActivityPage({
         </CardContent>
       </Card>
 
+      {truncatedModules.length > 0 ? (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Results were capped at {PAGE_LIMIT} rows for: {truncatedModules.join(", ")}. Narrow filters or export CSV for fuller coverage.
+        </div>
+      ) : null}
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-4">
@@ -527,7 +549,7 @@ export default async function SystemActivityPage({
               <CardDescription>Showing up to {PAGE_LIMIT} events per module (merged and sorted by time).</CardDescription>
             </div>
             <Button asChild size="sm" variant="outline">
-              <Link href={`/api/admin/system-activity${buildQueryString()}`} prefetch={false}>
+              <Link href={`/api/admin/system-activity${buildQueryString(currentPage)}`} prefetch={false}>
                 Export CSV
               </Link>
             </Button>
@@ -550,7 +572,7 @@ export default async function SystemActivityPage({
               <TableBody>
                 {pageRows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="py-6 text-center text-muted-foreground">
                       No system activity found for the selected filters.
                     </TableCell>
                   </TableRow>
@@ -609,29 +631,27 @@ export default async function SystemActivityPage({
           <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
             <span>
               Page {currentPage}
-              {pageRows.length > 0 && `  b7 Showing ${pageRows.length} of ${totalRows} event${totalRows === 1 ? "" : "s"}`}
+              {pageRows.length > 0 && ` · Showing ${pageRows.length} of ${totalRows} event${totalRows === 1 ? "" : "s"}`}
             </span>
             <div className="flex gap-2">
-              <Button
-                asChild
-                size="sm"
-                variant="outline"
-                disabled={currentPage <= 1}
-              >
-                <Link href={`/dashboard/admin/system-activity${buildQueryString().replace(/^\?/, "?page=" + (currentPage - 1) + "&")}`}>
+              {currentPage > 1 ? (
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/dashboard/admin/system-activity${buildQueryString(currentPage - 1)}`}>Previous</Link>
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled>
                   Previous
-                </Link>
-              </Button>
-              <Button
-                asChild
-                size="sm"
-                variant="outline"
-                disabled={!hasNextPage}
-              >
-                <Link href={`/dashboard/admin/system-activity${buildQueryString().replace(/^\?/, "?page=" + (currentPage + 1) + "&")}`}>
+                </Button>
+              )}
+              {hasNextPage ? (
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/dashboard/admin/system-activity${buildQueryString(currentPage + 1)}`}>Next</Link>
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled>
                   Next
-                </Link>
-              </Button>
+                </Button>
+              )}
             </div>
           </div>
         </CardContent>

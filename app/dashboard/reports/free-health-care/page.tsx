@@ -33,6 +33,8 @@ interface VisitReportRow {
     | null
 }
 
+const MAX_FHC_VISITS_ROWS = 3000
+
 function ageFromDob(dob: string | null): number | null {
   if (!dob) return null
   try {
@@ -137,6 +139,7 @@ export default async function FreeHealthCareReportPage(props: {
     .gte("created_at", fromIso)
     .lte("created_at", toIso)
     .order("created_at", { ascending: false })
+    .limit(MAX_FHC_VISITS_ROWS)
 
   if (error) {
     console.error("[fhc-report] Error loading FHC visits:", error.message || error)
@@ -236,6 +239,7 @@ export default async function FreeHealthCareReportPage(props: {
   }
 
   const facilitySummary = Array.from(facilitySummaryMap.values())
+  const visitsTruncated = (data || []).length >= MAX_FHC_VISITS_ROWS
   const facilityOptions = Array.from(
     new Map(
       mappedRows
@@ -377,6 +381,12 @@ export default async function FreeHealthCareReportPage(props: {
           </form>
         </CardContent>
       </Card>
+
+      {visitsTruncated ? (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Showing the first {MAX_FHC_VISITS_ROWS.toLocaleString()} visits for performance. Narrow date/service filters for complete detail.
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>

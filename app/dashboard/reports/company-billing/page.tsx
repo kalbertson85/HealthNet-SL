@@ -43,6 +43,8 @@ interface DoctorProfileLite {
   full_name: string | null
 }
 
+const MAX_COMPANY_BILLING_ROWS = 2000
+
 export default async function CompanyBillingReportsPage({ searchParams }: CompanyBillingReportsPageProps) {
   const supabase = await createServerClient()
   const { user, profile } = await getSessionUserAndProfile()
@@ -83,10 +85,12 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
       )
       .eq("payer_type", "company")
       .gte("created_at", fromIso)
-      .lte("created_at", toIso),
+      .lte("created_at", toIso)
+      .limit(MAX_COMPANY_BILLING_ROWS),
   ])
 
   let filteredInvoices = ((invoices || []) as unknown) as InvoiceRow[]
+  const invoicesTruncated = (invoices || []).length >= MAX_COMPANY_BILLING_ROWS
 
   if (selectedCompanyId) {
     filteredInvoices = filteredInvoices.filter((inv) => (inv.company_id as string | null) === selectedCompanyId)
@@ -315,6 +319,12 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           </CardContent>
         </Card>
       </div>
+
+      {invoicesTruncated ? (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Showing the first {MAX_COMPANY_BILLING_ROWS.toLocaleString()} invoices for performance. Narrow filters to refine results.
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>

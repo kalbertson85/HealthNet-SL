@@ -25,7 +25,10 @@ export async function GET(request: NextRequest) {
 
   const supabase = await createServerClient()
   const { searchParams } = new URL(request.url)
-  const limit = Math.min(200, Math.max(1, Number.parseInt(searchParams.get("limit") || "50", 10) || 50))
+  const page = Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1)
+  const pageSize = Math.min(200, Math.max(1, Number.parseInt(searchParams.get("page_size") || "50", 10) || 50))
+  const from = (page - 1) * pageSize
+  const to = from + pageSize
 
   const [
     { data: acceptedRows, error: acceptedError },
@@ -37,19 +40,19 @@ export async function GET(request: NextRequest) {
       .select("provider, event_id, created_at")
       .eq("provider", "mobile_money")
       .order("created_at", { ascending: false })
-      .limit(limit),
+      .range(from, to),
     supabase
       .from("audit_logs")
       .select("occurred_at, action, metadata")
       .eq("action", "webhook.mobile_money.rejected")
       .order("occurred_at", { ascending: false })
-      .limit(limit),
+      .range(from, to),
     supabase
       .from("audit_logs")
       .select("occurred_at, action, resource_id, metadata")
       .eq("action", "webhook.mobile_money.invoice_mutated")
       .order("occurred_at", { ascending: false })
-      .limit(limit),
+      .range(from, to),
   ])
 
   if (acceptedError || rejectedError || mutatedError) {
@@ -62,12 +65,22 @@ export async function GET(request: NextRequest) {
     return apiError(500, "load_failed", "Failed loading webhook monitor data", request)
   }
 
+  const accepted = acceptedRows || []
+  const rejected = rejectedRows || []
+  const mutated = mutatedRows || []
+  const hasNextPage = accepted.length > pageSize || rejected.length > pageSize || mutated.length > pageSize
+
   return NextResponse.json({
     ok: true,
     data: {
-      accepted: acceptedRows || [],
-      rejected: rejectedRows || [],
-      mutated: mutatedRows || [],
+      accepted: accepted.slice(0, pageSize),
+      rejected: rejected.slice(0, pageSize),
+      mutated: mutated.slice(0, pageSize),
+    },
+    pagination: {
+      page,
+      page_size: pageSize,
+      has_next_page: hasNextPage,
     },
   }, { headers: NO_STORE_JSON_HEADERS })
 }

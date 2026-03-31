@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button"
 import { DashboardPageShell } from "@/components/dashboard-page-shell"
 
 export const revalidate = 0
+const DEFAULT_PAGE_SIZE = 50
+const MAX_PAGE_SIZE = 200
 
 type AcceptedRow = {
   provider: string
@@ -38,7 +40,9 @@ type MutatedRow = {
   } | null
 }
 
-export default async function WebhookEventsPage() {
+export default async function WebhookEventsPage(props: {
+  searchParams?: Promise<{ page?: string; page_size?: string }>
+}) {
   const { user, profile } = await getSessionUserAndProfile()
   if (!user) redirect("/auth/login")
 
@@ -48,6 +52,14 @@ export default async function WebhookEventsPage() {
   }
 
   const supabase = await createServerClient()
+  const searchParams = props.searchParams ? await props.searchParams : {}
+  const currentPage = Math.max(1, Number.parseInt((searchParams.page || "1").trim(), 10) || 1)
+  const pageSize = Math.min(
+    MAX_PAGE_SIZE,
+    Math.max(1, Number.parseInt((searchParams.page_size || String(DEFAULT_PAGE_SIZE)).trim(), 10) || DEFAULT_PAGE_SIZE),
+  )
+  const from = (currentPage - 1) * pageSize
+  const to = from + pageSize
 
   const [{ data: acceptedRows }, { data: rejectedRows }, { data: mutatedRows }] = await Promise.all([
     supabase
@@ -55,24 +67,34 @@ export default async function WebhookEventsPage() {
       .select("provider, event_id, created_at")
       .eq("provider", "mobile_money")
       .order("created_at", { ascending: false })
-      .limit(100),
+      .range(from, to),
     supabase
       .from("audit_logs")
       .select("occurred_at, action, metadata")
       .eq("action", "webhook.mobile_money.rejected")
       .order("occurred_at", { ascending: false })
-      .limit(100),
+      .range(from, to),
     supabase
       .from("audit_logs")
       .select("occurred_at, action, resource_id, metadata")
       .eq("action", "webhook.mobile_money.invoice_mutated")
       .order("occurred_at", { ascending: false })
-      .limit(100),
+      .range(from, to),
   ])
 
-  const accepted = (acceptedRows || []) as AcceptedRow[]
-  const rejected = (rejectedRows || []) as RejectedRow[]
-  const mutated = (mutatedRows || []) as MutatedRow[]
+  const acceptedAll = (acceptedRows || []) as AcceptedRow[]
+  const rejectedAll = (rejectedRows || []) as RejectedRow[]
+  const mutatedAll = (mutatedRows || []) as MutatedRow[]
+  const accepted = acceptedAll.slice(0, pageSize)
+  const rejected = rejectedAll.slice(0, pageSize)
+  const mutated = mutatedAll.slice(0, pageSize)
+  const hasNextPage = acceptedAll.length > pageSize || rejectedAll.length > pageSize || mutatedAll.length > pageSize
+  const buildQuery = (page: number) => {
+    const params = new URLSearchParams()
+    if (page > 1) params.set("page", String(page))
+    if (pageSize !== DEFAULT_PAGE_SIZE) params.set("page_size", String(pageSize))
+    return params.toString()
+  }
 
   return (
     <DashboardPageShell
@@ -84,6 +106,31 @@ export default async function WebhookEventsPage() {
         </Button>
       }
     >
+      <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        <span>
+          Page {currentPage} · showing up to {pageSize} rows per section.
+        </span>
+        <div className="flex items-center gap-2">
+          {currentPage > 1 ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/dashboard/admin/webhook-events?${buildQuery(currentPage - 1)}`}>Previous</Link>
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" disabled>
+              Previous
+            </Button>
+          )}
+          {hasNextPage ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/dashboard/admin/webhook-events?${buildQuery(currentPage + 1)}`}>Next</Link>
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" disabled>
+              Next
+            </Button>
+          )}
+        </div>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>

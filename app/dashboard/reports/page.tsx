@@ -8,6 +8,9 @@ import { createServerClient } from "@/lib/supabase/server"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 
+const MAX_MONTHLY_INVOICE_ROWS = 5000
+const MAX_FHC_ANALYTICS_ROWS = 5000
+
 export default async function ReportsPage() {
   const supabase = await createServerClient()
   const { user, profile } = await getSessionUserAndProfile()
@@ -45,7 +48,8 @@ export default async function ReportsPage() {
       supabase
         .from("invoices")
         .select("total_amount, paid_amount, status, payment_date, created_at, payer_type, company_id, companies(name)")
-        .gte("created_at", startOfMonth.toISOString()),
+        .gte("created_at", startOfMonth.toISOString())
+        .limit(MAX_MONTHLY_INVOICE_ROWS),
       supabase.from("patients").select("id", { count: "exact", head: true }).gte("created_at", thirtyDaysAgo.toISOString()),
       supabase
         .from("visits")
@@ -63,7 +67,8 @@ export default async function ReportsPage() {
              )
            )`,
         )
-        .gte("invoices.created_at", startOfMonth.toISOString()),
+        .gte("invoices.created_at", startOfMonth.toISOString())
+        .limit(MAX_FHC_ANALYTICS_ROWS),
       supabase
         .from("radiology_requests")
         .select(
@@ -72,7 +77,8 @@ export default async function ReportsPage() {
              facilities(name)
            )`,
         )
-        .gte("created_at", startOfMonth.toISOString()),
+        .gte("created_at", startOfMonth.toISOString())
+        .limit(MAX_FHC_ANALYTICS_ROWS),
       supabase
         .from("lab_tests")
         .select(
@@ -81,7 +87,8 @@ export default async function ReportsPage() {
              facilities(name)
            )`,
         )
-        .gte("created_at", startOfMonth.toISOString()),
+        .gte("created_at", startOfMonth.toISOString())
+        .limit(MAX_FHC_ANALYTICS_ROWS),
       supabase
         .from("admissions")
         .select(
@@ -90,7 +97,8 @@ export default async function ReportsPage() {
              facilities(name, code)
            )`,
         )
-        .gte("admission_date", startOfMonth.toISOString()),
+        .gte("admission_date", startOfMonth.toISOString())
+        .limit(MAX_FHC_ANALYTICS_ROWS),
       supabase
         .from("surgeries")
         .select(
@@ -99,7 +107,8 @@ export default async function ReportsPage() {
              facilities(name, code)
            )`,
         )
-        .gte("scheduled_at", startOfMonth.toISOString()),
+        .gte("scheduled_at", startOfMonth.toISOString())
+        .limit(MAX_FHC_ANALYTICS_ROWS),
       supabase
         .from("visit_nursing_notes")
         .select(
@@ -108,7 +117,8 @@ export default async function ReportsPage() {
              facilities(name, code)
            )`,
         )
-        .gte("performed_at", startOfMonth.toISOString()),
+        .gte("performed_at", startOfMonth.toISOString())
+        .limit(MAX_FHC_ANALYTICS_ROWS),
     ])
 
   const now = new Date()
@@ -164,6 +174,14 @@ export default async function ReportsPage() {
   const newPatients = newPatientsCount.count ?? 0
   const completedVisits = completedVisitsCount.count ?? 0
   const pendingLabTests = pendingLabTestsCount.count ?? 0
+  const monthlyDataTruncated =
+    (invoices?.length || 0) >= MAX_MONTHLY_INVOICE_ROWS ||
+    (fhcItems?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
+    (fhcRadiology?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
+    (fhcLab?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
+    (fhcAdmissions?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
+    (fhcSurgeries?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
+    (fhcNursingNotes?.length || 0) >= MAX_FHC_ANALYTICS_ROWS
 
   // FHC admissions by facility (month)
   const fhcAdmissionsByFacility = new Map<
@@ -333,6 +351,12 @@ export default async function ReportsPage() {
 
   return (
     <div className="space-y-8">
+      {monthlyDataTruncated ? (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Some monthly analytics were capped for performance. Use narrower date filters in detailed report pages for full coverage.
+        </div>
+      ) : null}
+
       <div className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight">Reports</h1>
         <p className="text-muted-foreground">

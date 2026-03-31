@@ -35,6 +35,15 @@ interface MedicationOption {
   strength: string | null
   form: string | null
 }
+interface WardRequestInsertItem {
+  request_id: string
+  medication_id: string
+  dose: string | null
+  frequency: string | null
+  route: string | null
+  duration: string | null
+  quantity_requested: number
+}
 
 export const revalidate = 0
 
@@ -112,7 +121,7 @@ export default async function NursingWardRequestPage() {
     }
 
     // Up to three medication line items in one request
-    const itemsToInsert: any[] = []
+    const itemsToInsert: WardRequestInsertItem[] = []
     for (let i = 1; i <= 3; i++) {
       const medId = (formData.get(`medication_id_${i}`) as string | null) ?? null
       const qtyRaw = (formData.get(`quantity_requested_${i}`) as string | null) ?? null

@@ -3,6 +3,7 @@ import { createServerClient } from "@/lib/supabase/server"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { DashboardPageShell } from "@/components/dashboard-page-shell"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { Database, FileText } from "lucide-react"
@@ -25,14 +26,7 @@ export default async function AdminPage() {
   ])
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Admin</h1>
-        <p className="text-muted-foreground">
-          Administrative tools for data export and system configuration.
-        </p>
-      </div>
-
+    <DashboardPageShell title="Admin" description="Administrative tools for data export and system configuration.">
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader>
@@ -153,6 +147,6 @@ export default async function AdminPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </DashboardPageShell>
   )
 }

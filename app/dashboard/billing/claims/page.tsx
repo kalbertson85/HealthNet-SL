@@ -12,6 +12,8 @@ export const revalidate = 0
 
 interface ClaimRow {
   id: string
+  invoice_id: string | null
+  company_id: string | null
   claim_number: string | null
   status: string
   claimed_amount: number | null
@@ -50,7 +52,7 @@ export default async function ClaimsPage(props: { searchParams: Promise<ClaimsPa
   const { data: claimsData } = await supabase
     .from("insurance_claims")
     .select(
-      `id, claim_number, status, claimed_amount, approved_amount, created_at,
+      `id, invoice_id, company_id, claim_number, status, claimed_amount, approved_amount, created_at,
        invoices(invoice_number, total_amount, patients(full_name, patient_number)),
        companies(name)`,
     )
@@ -64,7 +66,7 @@ export default async function ClaimsPage(props: { searchParams: Promise<ClaimsPa
   }
 
   if (companyFilterId) {
-    claims = claims.filter((c) => (c as any).company_id === companyFilterId)
+    claims = claims.filter((c) => c.company_id === companyFilterId)
   }
 
   const statusVariant = (status: string): "default" | "secondary" | "destructive" => {
@@ -130,7 +132,7 @@ export default async function ClaimsPage(props: { searchParams: Promise<ClaimsPa
                       <TableCell>
                         {claim.invoices?.invoice_number ? (
                           <Link
-                            href={`/dashboard/billing/${(claim as any).invoice_id ?? ""}`}
+                            href={`/dashboard/billing/${claim.invoice_id ?? ""}`}
                             className="underline-offset-2 hover:underline"
                           >
                             {claim.invoices.invoice_number}

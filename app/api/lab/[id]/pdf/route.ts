@@ -65,7 +65,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       },
     })
   } catch (error) {
-    const authResponse = toAuthErrorResponse(error)
+    const authResponse = toAuthErrorResponse(error, request)
     if (authResponse) return authResponse
     console.error("[v0] Failed to export lab PDF", error)
     return new NextResponse("Internal Server Error", { status: 500 })

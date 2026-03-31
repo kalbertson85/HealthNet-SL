@@ -154,17 +154,6 @@ export default async function BillingActivityPage({
     return inv.invoice_number || invoiceId
   }
 
-  const buildQueryString = () => {
-    const params = new URLSearchParams()
-    if (actorFilter) params.set("actor", actorFilter)
-    if (patientFilter) params.set("patient", patientFilter)
-    if (actionFilter) params.set("action", actionFilter)
-    if (fromFilter) params.set("from", fromFilter)
-    if (toFilter) params.set("to", toFilter)
-    const qs = params.toString()
-    return qs ? `?${qs}` : ""
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">

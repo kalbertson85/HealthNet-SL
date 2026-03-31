@@ -38,12 +38,12 @@ export async function GET(req: NextRequest) {
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
-    return apiError(401, "unauthorized", "Unauthorized")
+    return apiError(401, "unauthorized", "Unauthorized", req)
   }
 
   const role = profile?.role ?? user.role
   if (role !== ROLES.ADMIN && role !== ROLES.FACILITY_ADMIN) {
-    return apiError(403, "forbidden", "Forbidden")
+    return apiError(403, "forbidden", "Forbidden", req)
   }
 
   const { searchParams } = new URL(req.url)
@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await q
     if (error) {
       console.error("[v0] Error exporting appointment activity for system-activity:", error.message || error)
-      return apiError(500, "export_failed", "Failed to export")
+      return apiError(500, "export_failed", "Failed to export", req)
     }
 
     const appointmentRows = (data || []) as {
@@ -174,7 +174,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await q
     if (error) {
       console.error("[v0] Error exporting emergency activity for system-activity:", error.message || error)
-      return apiError(500, "export_failed", "Failed to export")
+      return apiError(500, "export_failed", "Failed to export", req)
     }
 
     const triageRows = (data || []) as {
@@ -258,7 +258,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await q
     if (error) {
       console.error("[v0] Error exporting billing activity for system-activity:", error.message || error)
-      return apiError(500, "export_failed", "Failed to export")
+      return apiError(500, "export_failed", "Failed to export", req)
     }
 
     const billingRows = (data || []) as {
@@ -310,7 +310,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await q
     if (error) {
       console.error("[v0] Error exporting lab activity for system-activity:", error.message || error)
-      return apiError(500, "export_failed", "Failed to export")
+      return apiError(500, "export_failed", "Failed to export", req)
     }
 
     const labRows = (data || []) as {
@@ -362,7 +362,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await q
     if (error) {
       console.error("[v0] Error exporting pharmacy activity for system-activity:", error.message || error)
-      return apiError(500, "export_failed", "Failed to export")
+      return apiError(500, "export_failed", "Failed to export", req)
     }
 
     const pharmacyRows = (data || []) as {

@@ -1,12 +1,23 @@
 import { updateSession } from "@/lib/supabase/middleware"
+import { REQUEST_ID_HEADER, resolveRequestId } from "@/lib/http/request-id"
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname
+  const requestId = resolveRequestId(request)
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.set(REQUEST_ID_HEADER, requestId)
+
   const response = pathname.startsWith("/api/webhooks/mobile-money")
-    ? NextResponse.next({ request })
-    : await updateSession(request)
+    ? NextResponse.next({
+        request: {
+          headers: requestHeaders,
+        },
+      })
+    : await updateSession(request, requestHeaders)
+
+  response.headers.set(REQUEST_ID_HEADER, requestId)
   response.headers.set("X-Content-Type-Options", "nosniff")
   response.headers.set("X-Frame-Options", "DENY")
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")

@@ -31,6 +31,18 @@ interface WardRequestItemRow {
   duration: string | null
   medications?: { name?: string | null; strength?: string | null; form?: string | null } | null
 }
+interface WardRequestItemQueryRow {
+  id: string
+  request_id: string
+  quantity_requested: number
+  quantity_approved: number | null
+  quantity_dispensed: number | null
+  dose: string | null
+  frequency: string | null
+  route: string | null
+  duration: string | null
+  medications?: WardRequestItemRow["medications"]
+}
 
 export default async function WardRequestsPage() {
   const supabase = await createServerClient()
@@ -70,20 +82,20 @@ export default async function WardRequestsPage() {
       .in("request_id", requestIds)
 
     itemsByRequestId = new Map<string, WardRequestItemRow[]>()
-    for (const row of (itemsData || []) as any[]) {
-      const reqId = row.request_id as string
+    for (const row of (itemsData || []) as WardRequestItemQueryRow[]) {
+      const reqId = row.request_id
       const current = itemsByRequestId.get(reqId) ?? []
       current.push({
-        id: row.id as string,
+        id: row.id,
         request_id: reqId,
-        quantity_requested: row.quantity_requested as number,
-        quantity_approved: (row.quantity_approved as number | null) ?? null,
-        quantity_dispensed: (row.quantity_dispensed as number | null) ?? null,
-        dose: (row.dose as string | null) ?? null,
-        frequency: (row.frequency as string | null) ?? null,
-        route: (row.route as string | null) ?? null,
-        duration: (row.duration as string | null) ?? null,
-        medications: row.medications as WardRequestItemRow["medications"],
+        quantity_requested: row.quantity_requested,
+        quantity_approved: row.quantity_approved ?? null,
+        quantity_dispensed: row.quantity_dispensed ?? null,
+        dose: row.dose ?? null,
+        frequency: row.frequency ?? null,
+        route: row.route ?? null,
+        duration: row.duration ?? null,
+        medications: row.medications,
       })
       itemsByRequestId.set(reqId, current)
     }

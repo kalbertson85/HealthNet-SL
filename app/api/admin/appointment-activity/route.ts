@@ -19,12 +19,12 @@ export async function GET(req: NextRequest) {
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
-    return apiError(401, "unauthorized", "Unauthorized")
+    return apiError(401, "unauthorized", "Unauthorized", req)
   }
 
   const role = profile?.role ?? user.role
   if (role !== ROLES.ADMIN && role !== ROLES.FACILITY_ADMIN) {
-    return apiError(403, "forbidden", "Forbidden")
+    return apiError(403, "forbidden", "Forbidden", req)
   }
 
   const { searchParams } = new URL(req.url)
@@ -65,10 +65,21 @@ export async function GET(req: NextRequest) {
 
   if (error) {
     console.error("[v0] Error exporting appointment activity:", error.message || error)
-    return apiError(500, "export_failed", "Failed to export")
+    return apiError(500, "export_failed", "Failed to export", req)
   }
 
   const rows = data || []
+  type AppointmentAuditRow = {
+    id: string
+    created_at: string
+    action: string
+    old_status: string | null
+    new_status: string | null
+    actor_user_id: string
+    appointment_id: string
+    patient_id: string | null
+    doctor_id: string | null
+  }
 
   const header = [
     "id",
@@ -84,7 +95,7 @@ export async function GET(req: NextRequest) {
 
   const csvLines = [header.join(",")]
 
-  for (const row of rows as any[]) {
+  for (const row of rows as AppointmentAuditRow[]) {
     const values = [
       row.id,
       row.created_at,

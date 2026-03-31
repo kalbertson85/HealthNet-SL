@@ -78,10 +78,11 @@ describe("shouldSendSms", () => {
 
 describe("sendSms", () => {
   const originalEnv = { ...process.env }
+  const testGlobal = globalThis as { fetch?: typeof fetch }
 
   beforeEach(() => {
     process.env = { ...originalEnv }
-    ;(globalThis as any).fetch = undefined
+    testGlobal.fetch = undefined
   })
 
   it("skips when SMS is not configured", async () => {
@@ -98,7 +99,7 @@ describe("sendSms", () => {
     process.env.SMS_API_URL = "https://sms.test/send"
     process.env.SMS_API_KEY = "key"
 
-    ;(globalThis as any).fetch = vi.fn(async () => ({ ok: true }))
+    testGlobal.fetch = vi.fn(async () => ({ ok: true } as Response))
 
     const result = await sendSms("+123", "Hello")
     expect(result.ok).toBe(true)
@@ -108,11 +109,11 @@ describe("sendSms", () => {
     process.env.SMS_API_URL = "https://sms.test/send"
     process.env.SMS_API_KEY = "key"
 
-    ;(globalThis as any).fetch = vi.fn(async () => ({
+    testGlobal.fetch = vi.fn(async () => ({
       ok: false,
       status: 500,
       text: async () => "error",
-    }))
+    } as Response))
 
     const result = await sendSms("+123", "Hello")
     expect(result.ok).toBe(false)
@@ -123,7 +124,7 @@ describe("sendSms", () => {
     process.env.SMS_API_URL = "https://sms.test/send"
     process.env.SMS_API_KEY = "key"
 
-    ;(globalThis as any).fetch = vi.fn(async () => {
+    testGlobal.fetch = vi.fn(async () => {
       throw new Error("network")
     })
 

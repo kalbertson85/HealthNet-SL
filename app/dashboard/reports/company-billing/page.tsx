@@ -24,6 +24,24 @@ interface InvoiceRow {
   visit_id: string | null
   companies?: { name?: string | null } | null
 }
+interface CompanyLite {
+  id: string
+  name: string | null
+}
+interface PatientLite {
+  id: string
+  full_name: string | null
+  patient_number: string | null
+}
+interface PrescriptionLite {
+  id: string
+  visit_id: string | null
+  doctor_id: string | null
+}
+interface DoctorProfileLite {
+  id: string
+  full_name: string | null
+}
 
 export default async function CompanyBillingReportsPage({ searchParams }: CompanyBillingReportsPageProps) {
   const supabase = await createServerClient()
@@ -86,10 +104,10 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   const [{ data: patients }, { data: prescriptions }, { data: doctorProfiles }] = await Promise.all([
     patientIds.length
       ? supabase.from("patients").select("id, full_name, patient_number").in("id", patientIds)
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as PatientLite[] }),
     visitIds.length
       ? supabase.from("prescriptions").select("id, visit_id, doctor_id").in("visit_id", visitIds)
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as PrescriptionLite[] }),
     visitIds.length
       ? (async () => {
           const { data: rx } = await supabase
@@ -97,25 +115,25 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             .select("doctor_id")
             .in("visit_id", visitIds)
           const doctorIds = Array.from(new Set((rx || []).map((r) => r.doctor_id).filter((id): id is string => Boolean(id))))
-          if (!doctorIds.length) return { data: [] as any[] }
+          if (!doctorIds.length) return { data: [] as DoctorProfileLite[] }
           const { data } = await supabase.from("profiles").select("id, full_name").in("id", doctorIds)
           return { data: data || [] }
         })()
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as DoctorProfileLite[] }),
   ])
 
   const patientById = new Map<string, { full_name?: string | null; patient_number?: string | null }>()
-  for (const p of (patients || []) as any[]) {
-    patientById.set(p.id as string, {
-      full_name: (p.full_name as string | null) ?? null,
-      patient_number: (p.patient_number as string | null) ?? null,
+  for (const p of (patients || []) as PatientLite[]) {
+    patientById.set(p.id, {
+      full_name: p.full_name ?? null,
+      patient_number: p.patient_number ?? null,
     })
   }
 
   const doctorIdByVisitId = new Map<string, string>()
-  for (const rx of (prescriptions || []) as any[]) {
-    const vId = (rx.visit_id as string | null) ?? null
-    const dId = (rx.doctor_id as string | null) ?? null
+  for (const rx of (prescriptions || []) as PrescriptionLite[]) {
+    const vId = rx.visit_id ?? null
+    const dId = rx.doctor_id ?? null
     if (!vId || !dId) continue
     if (!doctorIdByVisitId.has(vId)) {
       doctorIdByVisitId.set(vId, dId)
@@ -123,8 +141,8 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   }
 
   const doctorNameById = new Map<string, string | null>()
-  for (const doc of (doctorProfiles || []) as any[]) {
-    doctorNameById.set(doc.id as string, (doc.full_name as string | null) ?? null)
+  for (const doc of (doctorProfiles || []) as DoctorProfileLite[]) {
+    doctorNameById.set(doc.id, doc.full_name ?? null)
   }
 
   const rows = filteredInvoices.map((inv) => {
@@ -214,7 +232,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             className="h-9 min-w-[200px] rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <option value="">All companies</option>
-            {(companies || []).map((c: any) => (
+            {((companies || []) as CompanyLite[]).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>

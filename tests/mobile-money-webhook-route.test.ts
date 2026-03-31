@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto"
 import { afterEach, describe, expect, it } from "vitest"
 import { NextRequest } from "next/server"
-import { POST } from "../app/api/webhooks/mobile-money/route"
+import { GET, POST } from "../app/api/webhooks/mobile-money/route"
 import { toMobileMoneyRawBody } from "./fixtures/mobile-money-payload"
 
 function sign(secret: string, timestamp: string, rawBody: string): string {
@@ -13,6 +13,41 @@ describe("POST /api/webhooks/mobile-money", () => {
 
   afterEach(() => {
     delete process.env.MOBILE_MONEY_WEBHOOK_SECRET
+  })
+
+  it("returns webhook readiness with configured=false when secret is missing", async () => {
+    const request = new NextRequest("http://localhost/api/webhooks/mobile-money", {
+      method: "GET",
+      headers: { "x-forwarded-for": "10.0.0.21" },
+    })
+
+    const response = await GET(request)
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      provider: "mobile_money",
+      configured: false,
+    })
+  })
+
+  it("returns webhook readiness with configured=true when secret exists", async () => {
+    process.env.MOBILE_MONEY_WEBHOOK_SECRET = secret
+    const request = new NextRequest("http://localhost/api/webhooks/mobile-money", {
+      method: "GET",
+      headers: { "x-forwarded-for": "10.0.0.22" },
+    })
+
+    const response = await GET(request)
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      provider: "mobile_money",
+      configured: true,
+    })
   })
 
   it("returns 401 when required signature headers are missing", async () => {
@@ -30,7 +65,7 @@ describe("POST /api/webhooks/mobile-money", () => {
     expect(response.status).toBe(401)
     expect(payload).toMatchObject({
       ok: false,
-      error: { code: "invalid_signature" },
+      error: { code: "missing_signature_headers" },
     })
   })
 
@@ -80,7 +115,7 @@ describe("POST /api/webhooks/mobile-money", () => {
     expect(response.status).toBe(401)
     expect(payload).toMatchObject({
       ok: false,
-      error: { code: "invalid_signature" },
+      error: { code: "stale_timestamp" },
     })
   })
 
@@ -168,6 +203,65 @@ describe("POST /api/webhooks/mobile-money", () => {
       headers: {
         "content-type": "application/json",
         "x-forwarded-for": "10.0.0.17",
+        "x-timestamp": timestamp,
+        "x-signature": sign(secret, timestamp, body),
+      },
+      body,
+    })
+
+    const response = await POST(request)
+    const payload = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(payload).toMatchObject({
+      ok: false,
+      error: { code: "invalid_payload" },
+    })
+  })
+
+  it("returns 400 when status is too long", async () => {
+    process.env.MOBILE_MONEY_WEBHOOK_SECRET = secret
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const body = JSON.stringify({
+      event_id: "evt_status_too_long",
+      status: "x".repeat(33),
+      amount: "1000",
+    })
+    const request = new NextRequest("http://localhost/api/webhooks/mobile-money", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": "10.0.0.19",
+        "x-timestamp": timestamp,
+        "x-signature": sign(secret, timestamp, body),
+      },
+      body,
+    })
+
+    const response = await POST(request)
+    const payload = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(payload).toMatchObject({
+      ok: false,
+      error: { code: "invalid_payload" },
+    })
+  })
+
+  it("returns 400 when invoice_id is too long", async () => {
+    process.env.MOBILE_MONEY_WEBHOOK_SECRET = secret
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const body = JSON.stringify({
+      event_id: "evt_invoice_id_too_long",
+      invoice_id: "a".repeat(65),
+      status: "success",
+      amount: "1000",
+    })
+    const request = new NextRequest("http://localhost/api/webhooks/mobile-money", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": "10.0.0.20",
         "x-timestamp": timestamp,
         "x-signature": sign(secret, timestamp, body),
       },

@@ -16,7 +16,7 @@ export function enforceTrustedOrigin(request: NextRequest) {
   const normalizedOrigin = origin.toLowerCase()
 
   if (normalizedOrigin !== expected) {
-    return apiError(403, "forbidden_origin", "Cross-origin request rejected")
+    return apiError(403, "forbidden_origin", "Cross-origin request rejected", request)
   }
 
   return null

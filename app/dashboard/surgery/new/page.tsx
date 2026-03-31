@@ -13,7 +13,6 @@ import { ArrowLeft } from "lucide-react"
 export default async function NewSurgeryPage(props: {
   searchParams: Promise<{ visit_id?: string; patient_id?: string }>
 }) {
-  const supabase = await createServerClient()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {

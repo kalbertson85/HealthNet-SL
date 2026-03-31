@@ -14,6 +14,12 @@ interface FacilityRow {
   code: string | null
   is_active: boolean
 }
+interface FacilityQueryRow {
+  id: string | null
+  name: string | null
+  code: string | null
+  is_active: boolean | null
+}
 
 export const revalidate = 0
 
@@ -45,10 +51,10 @@ export default async function FacilitiesAdminPage(props: {
     console.error("[facilities-admin] Error loading facilities:", error.message || error)
   }
 
-  const facilities: FacilityRow[] = (data || []).map((row: any) => ({
-    id: row.id as string,
+  const facilities: FacilityRow[] = ((data || []) as FacilityQueryRow[]).map((row) => ({
+    id: String(row.id ?? ""),
     name: String(row.name ?? ""),
-    code: (row.code as string | null) ?? null,
+    code: row.code ?? null,
     is_active: Boolean(row.is_active ?? true),
   }))
 

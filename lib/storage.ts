@@ -5,8 +5,8 @@ const STORAGE_BUCKET = process.env.NEXT_PUBLIC_PATIENT_PHOTOS_BUCKET || "patient
 const HOSPITAL_LOGO_BUCKET = process.env.NEXT_PUBLIC_HOSPITAL_LOGO_BUCKET || "hospital-logos"
 const COMPANY_LOGO_BUCKET = process.env.NEXT_PUBLIC_COMPANY_LOGO_BUCKET || "company-logos"
 
-function resolvePhotoExtension(file: File): string {
-  switch (file.type) {
+function resolvePhotoExtensionFromMimeType(mimeType: string): string | null {
+  switch (mimeType) {
     case "image/jpeg":
       return "jpg"
     case "image/png":
@@ -14,7 +14,7 @@ function resolvePhotoExtension(file: File): string {
     case "image/webp":
       return "webp"
     default:
-      return "bin"
+      return null
   }
 }
 
@@ -33,13 +33,18 @@ export async function uploadPatientPhotoWithClient(
   supabase: SupabaseClient,
   patientId: string,
   file: File,
+  opts?: { validatedMimeType?: string },
 ): Promise<string> {
-  const ext = resolvePhotoExtension(file)
+  const mimeType = opts?.validatedMimeType ?? file.type
+  const ext = resolvePhotoExtensionFromMimeType(mimeType)
+  if (!ext) {
+    throw new Error(`Unsupported image mime type: ${mimeType}`)
+  }
   const path = `${patientId}/${Date.now()}.${ext}`
 
   const { data, error } = await supabase.storage.from(STORAGE_BUCKET).upload(path, file, {
     upsert: false,
-    contentType: file.type || "application/octet-stream",
+    contentType: mimeType,
   })
 
   if (error) {

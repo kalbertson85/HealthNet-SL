@@ -1,4 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
+import { NO_STORE_JSON_HEADERS } from "./headers"
+import { REQUEST_ID_HEADER, resolveRequestId } from "./request-id"
 
 type RateLimitEntry = {
   count: number
@@ -18,16 +20,34 @@ function getRateLimitStore(): Map<string, RateLimitEntry> {
   return globalObj[RATE_LIMIT_STORE_KEY] as Map<string, RateLimitEntry>
 }
 
-export function apiError(status: number, code: string, message: string) {
+export function apiError(status: number, code: string, message: string, request?: NextRequest) {
+  const requestId = request ? resolveRequestId(request) : null
   return NextResponse.json(
+    requestId
+      ? {
+          ok: false,
+          error: {
+            code,
+            message,
+            request_id: requestId,
+          },
+        }
+      : {
+          ok: false,
+          error: {
+            code,
+            message,
+          },
+        },
     {
-      ok: false,
-      error: {
-        code,
-        message,
-      },
+      status,
+      headers: requestId
+        ? {
+            ...NO_STORE_JSON_HEADERS,
+            [REQUEST_ID_HEADER]: requestId,
+          }
+        : NO_STORE_JSON_HEADERS,
     },
-    { status },
   )
 }
 
@@ -65,6 +85,38 @@ function maybeSweepRateLimitStore(store: Map<string, RateLimitEntry>, nowMs: num
   globalObj[RATE_LIMIT_SWEEP_LAST_RUN_KEY] = nowMs
 }
 
+function rateLimitedResponse(
+  request: NextRequest,
+  current: RateLimitEntry,
+  nowMs: number,
+  maxRequests: number,
+): NextResponse {
+  const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAtMs - nowMs) / 1000))
+  const resetEpochSeconds = Math.max(0, Math.ceil(current.resetAtMs / 1000))
+  const requestId = resolveRequestId(request)
+  return NextResponse.json(
+    {
+      ok: false,
+      error: {
+        code: "rate_limited",
+        message: "Too many requests. Please retry shortly.",
+        request_id: requestId,
+      },
+    },
+    {
+      status: 429,
+      headers: {
+        ...NO_STORE_JSON_HEADERS,
+        [REQUEST_ID_HEADER]: requestId,
+        "Retry-After": String(retryAfterSeconds),
+        "X-RateLimit-Limit": String(maxRequests),
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": String(resetEpochSeconds),
+      },
+    },
+  )
+}
+
 export function enforceFixedWindowRateLimit(
   request: NextRequest,
   opts: {
@@ -87,7 +139,7 @@ export function enforceFixedWindowRateLimit(
   }
 
   if (current.count >= opts.maxRequests) {
-    return apiError(429, "rate_limited", "Too many requests. Please retry shortly.")
+    return rateLimitedResponse(request, current, nowMs, opts.maxRequests)
   }
 
   current.count += 1

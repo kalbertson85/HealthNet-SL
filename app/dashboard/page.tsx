@@ -4,6 +4,7 @@ import { Users, Calendar, FileText, DollarSign, Activity, AlertCircle } from "lu
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { StatCard } from "@/components/stat-card"
+import { DashboardPageShell } from "@/components/dashboard-page-shell"
 import { redirect } from "next/navigation"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
@@ -99,13 +100,10 @@ export default async function DashboardPage() {
   const { recentPatients, todayAppointments } = await fetchRecentActivity()
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-balance text-3xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-pretty text-muted-foreground">
-          High-level overview of patients, appointments, billing, and clinical activity.
-        </p>
-      </div>
+    <DashboardPageShell
+      title="Dashboard"
+      description="High-level overview of patients, appointments, billing, and clinical activity."
+    >
 
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-2">
@@ -258,6 +256,6 @@ export default async function DashboardPage() {
         </Card>
         </div>
       </div>
-    </div>
+    </DashboardPageShell>
   )
 }

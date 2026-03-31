@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     supabase.from("companies").select("id, name"),
   ])
 
-  interface InvoiceRow {
+interface InvoiceRow {
     id: string
     invoice_number: string | null
     total_amount: number | null
@@ -55,8 +55,26 @@ export async function GET(request: NextRequest) {
     company_id: string | null
     patient_id: string | null
     visit_id: string | null
-    companies?: { name?: string | null } | null
-  }
+  companies?: { name?: string | null } | null
+}
+interface PatientLite {
+  id: string
+  full_name: string | null
+  patient_number: string | null
+}
+interface PrescriptionLite {
+  id: string
+  visit_id: string | null
+  doctor_id: string | null
+}
+interface DoctorProfileLite {
+  id: string
+  full_name: string | null
+}
+interface CompanyLite {
+  id: string
+  name: string | null
+}
 
   let filteredInvoices = ((invoices || []) as unknown) as InvoiceRow[]
 
@@ -76,36 +94,36 @@ export async function GET(request: NextRequest) {
   const [{ data: patients }, { data: prescriptions }] = await Promise.all([
     patientIds.length
       ? supabase.from("patients").select("id, full_name, patient_number").in("id", patientIds)
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as PatientLite[] }),
     visitIds.length
       ? supabase.from("prescriptions").select("id, visit_id, doctor_id").in("visit_id", visitIds)
-      : Promise.resolve({ data: [] as any[] }),
+      : Promise.resolve({ data: [] as PrescriptionLite[] }),
   ])
 
   const doctorIds = Array.from(
     new Set(
-      ((prescriptions || []) as any[])
-        .map((rx) => (rx.doctor_id as string | null) || null)
+      ((prescriptions || []) as PrescriptionLite[])
+        .map((rx) => rx.doctor_id || null)
         .filter((id): id is string => Boolean(id)),
     ),
   )
 
   const { data: doctorProfiles } = doctorIds.length
     ? await supabase.from("profiles").select("id, full_name").in("id", doctorIds)
-    : { data: [] as any[] }
+    : { data: [] as DoctorProfileLite[] }
 
   const patientById = new Map<string, { full_name?: string | null; patient_number?: string | null }>()
-  for (const p of (patients || []) as any[]) {
-    patientById.set(p.id as string, {
-      full_name: (p.full_name as string | null) ?? null,
-      patient_number: (p.patient_number as string | null) ?? null,
+  for (const p of (patients || []) as PatientLite[]) {
+    patientById.set(p.id, {
+      full_name: p.full_name ?? null,
+      patient_number: p.patient_number ?? null,
     })
   }
 
   const doctorIdByVisitId = new Map<string, string>()
-  for (const rx of (prescriptions || []) as any[]) {
-    const vId = (rx.visit_id as string | null) ?? null
-    const dId = (rx.doctor_id as string | null) ?? null
+  for (const rx of (prescriptions || []) as PrescriptionLite[]) {
+    const vId = rx.visit_id ?? null
+    const dId = rx.doctor_id ?? null
     if (!vId || !dId) continue
     if (!doctorIdByVisitId.has(vId)) {
       doctorIdByVisitId.set(vId, dId)
@@ -113,13 +131,13 @@ export async function GET(request: NextRequest) {
   }
 
   const doctorNameById = new Map<string, string | null>()
-  for (const doc of (doctorProfiles || []) as any[]) {
-    doctorNameById.set(doc.id as string, (doc.full_name as string | null) ?? null)
+  for (const doc of (doctorProfiles || []) as DoctorProfileLite[]) {
+    doctorNameById.set(doc.id, doc.full_name ?? null)
   }
 
   const companyNameById = new Map<string, string | null>()
-  for (const c of (companies || []) as any[]) {
-    companyNameById.set(c.id as string, (c.name as string | null) ?? null)
+  for (const c of (companies || []) as CompanyLite[]) {
+    companyNameById.set(c.id, c.name ?? null)
   }
 
   const headers = [
@@ -186,7 +204,7 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error) {
-    const authResponse = toAuthErrorResponse(error)
+    const authResponse = toAuthErrorResponse(error, request)
     if (authResponse) return authResponse
     console.error("[v0] Failed to export company billing report", error)
     return new NextResponse("Internal Server Error", { status: 500 })

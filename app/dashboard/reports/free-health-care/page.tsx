@@ -17,6 +17,21 @@ interface FhcRow {
   facility_name: string | null
   facility_code: string | null
 }
+interface VisitReportRow {
+  id: string
+  created_at: string
+  visit_status: string | null
+  is_free_health_care: boolean | null
+  payer_category: string | null
+  patients:
+    | { full_name?: string | null; date_of_birth?: string | null; free_health_category?: string | null }
+    | Array<{ full_name?: string | null; date_of_birth?: string | null; free_health_category?: string | null }>
+    | null
+  facilities:
+    | { name?: string | null; code?: string | null }
+    | Array<{ name?: string | null; code?: string | null }>
+    | null
+}
 
 function ageFromDob(dob: string | null): number | null {
   if (!dob) return null
@@ -123,20 +138,20 @@ export default async function FreeHealthCareReportPage(props: {
     console.error("[fhc-report] Error loading FHC visits:", error.message || error)
   }
 
-  const mappedRows: FhcRow[] = (data || []).map((row: any) => {
-    const p = row.patients || {}
-    const f = row.facilities || {}
+  const mappedRows: FhcRow[] = ((data || []) as VisitReportRow[]).map((row) => {
+    const p = Array.isArray(row.patients) ? row.patients[0] : row.patients
+    const f = Array.isArray(row.facilities) ? row.facilities[0] : row.facilities
     return {
-      id: row.id as string,
-      created_at: row.created_at as string,
-      visit_status: (row.visit_status as string) || "",
+      id: row.id,
+      created_at: row.created_at,
+      visit_status: row.visit_status || "",
       is_free_health_care: Boolean(row.is_free_health_care),
-      payer_category: (row.payer_category as string | null) ?? null,
-      free_health_category: (p.free_health_category as string | null) ?? "none",
-      date_of_birth: (p.date_of_birth as string | null) ?? null,
-      full_name: (p.full_name as string | null) ?? null,
-      facility_name: (f.name as string | null) ?? null,
-      facility_code: (f.code as string | null) ?? null,
+      payer_category: row.payer_category ?? null,
+      free_health_category: p?.free_health_category ?? "none",
+      date_of_birth: p?.date_of_birth ?? null,
+      full_name: p?.full_name ?? null,
+      facility_name: f?.name ?? null,
+      facility_code: f?.code ?? null,
     }
   })
 

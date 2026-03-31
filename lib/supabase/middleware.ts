@@ -2,15 +2,23 @@ import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
 import type { SessionUserLike } from "@/lib/utils"
 import { normalizeRole, ensureCan, PermissionError, type PermissionKey } from "@/lib/utils"
+import { apiError } from "@/lib/http/api"
 
 /**
  * Updates the user session in proxy by refreshing tokens and handling auth state.
  * This function should be called in your proxy.ts file.
  */
-export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  })
+export async function updateSession(request: NextRequest, requestHeaders?: Headers) {
+  const createPassThroughResponse = () =>
+    requestHeaders
+      ? NextResponse.next({
+          request: {
+            headers: requestHeaders,
+          },
+        })
+      : NextResponse.next({ request })
+
+  let supabaseResponse = createPassThroughResponse()
 
   // With Fluid compute, don't put this client in a global environment variable.
   // Always create a new one on each request.
@@ -24,9 +32,7 @@ export async function updateSession(request: NextRequest) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({
-            request,
-          })
+          supabaseResponse = createPassThroughResponse()
           cookiesToSet.forEach(({ name, value, options }) => supabaseResponse.cookies.set(name, value, options))
         },
       },
@@ -117,9 +123,10 @@ export async function requirePermission(request: NextRequest, permission: Permis
   return ctx
 }
 
-export function toAuthErrorResponse(error: unknown): NextResponse | null {
+export function toAuthErrorResponse(error: unknown, request?: NextRequest): NextResponse | null {
   if (error instanceof PermissionError) {
-    return NextResponse.json({ error: error.message }, { status: error.status })
+    const code = error.status === 401 ? "unauthorized" : "forbidden"
+    return apiError(error.status, code, error.message, request)
   }
   return null
 }

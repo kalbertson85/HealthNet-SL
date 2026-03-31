@@ -252,7 +252,7 @@ export default async function HomePage() {
             <Card className="shadow-sm">
               <CardContent className="pt-6 text-sm text-gray-700 space-y-3">
                 <p className="italic">
-                  "We save hours every week on manual registers. Patient records are now one click away for our doctors."
+                  &quot;We save hours every week on manual registers. Patient records are now one click away for our doctors.&quot;
                 </p>
                 <div>
                   <p className="font-semibold">Medical Superintendent</p>
@@ -264,8 +264,8 @@ export default async function HomePage() {
             <Card className="shadow-sm">
               <CardContent className="pt-6 text-sm text-gray-700 space-y-3">
                 <p className="italic">
-                  "Billing, pharmacy, and lab now talk to each other. It&apos;s easier to see what is going on in the
-                  hospital."
+                  &quot;Billing, pharmacy, and lab now talk to each other. It&apos;s easier to see what is going on in the
+                  hospital.&quot;
                 </p>
                 <div>
                   <p className="font-semibold">Hospital Administrator</p>
@@ -277,7 +277,7 @@ export default async function HomePage() {
             <Card className="shadow-sm">
               <CardContent className="pt-6 text-sm text-gray-700 space-y-3">
                 <p className="italic">
-                  "As a pharmacist, I can see all pending prescriptions and what has been dispensed today in one place."
+                  &quot;As a pharmacist, I can see all pending prescriptions and what has been dispensed today in one place.&quot;
                 </p>
                 <div>
                   <p className="font-semibold">Pharmacy Lead</p>

@@ -6,6 +6,7 @@ import { ROLES } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
+import { DashboardPageShell } from "@/components/dashboard-page-shell"
 
 export const revalidate = 0
 
@@ -74,16 +75,15 @@ export default async function WebhookEventsPage() {
   const mutated = (mutatedRows || []) as MutatedRow[]
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Webhook Events Monitor</h1>
-          <p className="text-muted-foreground">Recent accepted and rejected mobile money webhook events.</p>
-        </div>
+    <DashboardPageShell
+      title="Webhook Events Monitor"
+      description="Recent accepted and rejected mobile money webhook events."
+      actions={
         <Button asChild size="sm" variant="outline">
           <Link href="/dashboard/admin">Back to Admin</Link>
         </Button>
-      </div>
+      }
+    >
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
@@ -195,6 +195,6 @@ export default async function WebhookEventsPage() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+    </DashboardPageShell>
   )
 }

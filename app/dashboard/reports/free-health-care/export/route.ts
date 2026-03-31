@@ -206,7 +206,7 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error) {
-    const authResponse = toAuthErrorResponse(error)
+    const authResponse = toAuthErrorResponse(error, request)
     if (authResponse) return authResponse
     console.error("[v0] Failed to export free health care report", error)
     return new NextResponse("Internal Server Error", { status: 500 })

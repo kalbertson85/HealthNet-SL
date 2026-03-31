@@ -182,7 +182,7 @@ export default async function RecordsPage(props: {
         <div>
           <h1 className="text-balance text-3xl font-bold tracking-tight">Records</h1>
           <p className="text-pretty text-muted-foreground">
-            Records staff can look up a patient, start today's visit, and print a compact patient card.
+            Records staff can look up a patient, start today&apos;s visit, and print a compact patient card.
           </p>
         </div>
         <Button asChild variant="outline" size="sm">

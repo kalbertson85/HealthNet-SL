@@ -17,6 +17,19 @@ export interface InvoicePaymentComputation {
   paymentDate: string | null
 }
 
+export function isInvoiceMutationNoOp(
+  invoice: Pick<InvoiceRow, "paid_amount" | "status" | "payment_date">,
+  computed: InvoicePaymentComputation,
+): boolean {
+  const currentPaid = Math.max(Number(invoice.paid_amount ?? 0), 0)
+  const currentStatus = (invoice.status || "").trim().toLowerCase()
+  const computedStatus = computed.status.toLowerCase()
+  const currentPaymentDate = invoice.payment_date ?? null
+  const computedPaymentDate = computed.paymentDate ?? null
+
+  return currentPaid === computed.paidAmount && currentStatus === computedStatus && currentPaymentDate === computedPaymentDate
+}
+
 export function isMobileMoneyInvoiceMutationEnabled(): boolean {
   const raw = (process.env[ENABLE_MOBILE_MONEY_INVOICE_MUTATION_ENV] || "").trim().toLowerCase()
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on"
@@ -82,6 +95,10 @@ export async function maybeApplyMobileMoneyInvoicePayment(input: {
 
     const typedInvoice = invoice as InvoiceRow
     const computed = computeInvoicePaymentUpdate(typedInvoice, paymentAmount, new Date().toISOString())
+    if (isInvoiceMutationNoOp(typedInvoice, computed)) {
+      return
+    }
+
     const updatePayload = {
       paid_amount: computed.paidAmount,
       status: computed.status,

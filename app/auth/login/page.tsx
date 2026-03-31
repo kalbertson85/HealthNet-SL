@@ -183,8 +183,9 @@ function LoginPageContent() {
 
             <div className="mt-8 max-w-md space-y-4 text-slate-50">
               <p className="text-lg leading-relaxed font-medium">
-                "HealthNet-SL HMS is a cloud-based hospital platform built in Sierra Leone, helping hospitals connect
-                emergency, outpatient, inpatient, pharmacy, lab, and billing in one place for smoother patient journeys."
+                &quot;HealthNet-SL HMS is a cloud-based hospital platform built in Sierra Leone, helping hospitals
+                connect emergency, outpatient, inpatient, pharmacy, lab, and billing in one place for smoother patient
+                journeys.&quot;
               </p>
               <div className="space-y-1 text-sm">
                 <p className="font-semibold">Built for Sierra Leone&apos;s health system</p>

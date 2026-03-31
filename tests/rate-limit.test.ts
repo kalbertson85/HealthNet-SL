@@ -24,6 +24,10 @@ describe("enforceFixedWindowRateLimit", () => {
     expect(enforceFixedWindowRateLimit(req, opts)).toBeNull()
     const limited = enforceFixedWindowRateLimit(req, opts)
     expect(limited?.status).toBe(429)
+    expect(limited?.headers.get("retry-after")).toBe("10")
+    expect(limited?.headers.get("x-ratelimit-limit")).toBe("2")
+    expect(limited?.headers.get("x-ratelimit-remaining")).toBe("0")
+    expect(limited?.headers.get("x-ratelimit-reset")).toBe("11")
   })
 
   it("resets counts after window passes", () => {

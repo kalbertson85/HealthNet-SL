@@ -419,7 +419,7 @@ export async function GET(
       },
     })
   } catch (error) {
-    const authResponse = toAuthErrorResponse(error)
+    const authResponse = toAuthErrorResponse(error, request)
     if (authResponse) return authResponse
     console.error("[v0] Failed to export invoice PDF", error)
     return new NextResponse("Internal Server Error", { status: 500 })

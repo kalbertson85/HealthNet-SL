@@ -3,6 +3,7 @@ import { createServerClient } from "@/lib/supabase/server"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { ROLES } from "@/lib/utils"
 import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { NO_STORE_JSON_HEADERS } from "@/lib/http/headers"
 
 export const dynamic = "force-dynamic"
 
@@ -15,11 +16,11 @@ export async function GET(request: NextRequest) {
   if (limited) return limited
 
   const { user, profile } = await getSessionUserAndProfile()
-  if (!user) return apiError(401, "unauthorized", "Unauthorized")
+  if (!user) return apiError(401, "unauthorized", "Unauthorized", request)
 
   const role = profile?.role ?? user.role
   if (role !== ROLES.ADMIN && role !== ROLES.FACILITY_ADMIN) {
-    return apiError(403, "forbidden", "Forbidden")
+    return apiError(403, "forbidden", "Forbidden", request)
   }
 
   const supabase = await createServerClient()
@@ -58,7 +59,7 @@ export async function GET(request: NextRequest) {
       rejectedError?.message || rejectedError,
       mutatedError?.message || mutatedError,
     )
-    return apiError(500, "load_failed", "Failed loading webhook monitor data")
+    return apiError(500, "load_failed", "Failed loading webhook monitor data", request)
   }
 
   return NextResponse.json({
@@ -68,5 +69,5 @@ export async function GET(request: NextRequest) {
       rejected: rejectedRows || [],
       mutated: mutatedRows || [],
     },
-  })
+  }, { headers: NO_STORE_JSON_HEADERS })
 }

@@ -8,8 +8,6 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 
 export default async function NewMedicationPage() {
-  const supabase = await createServerClient()
-
   async function createMedicationWithStock(formData: FormData) {
     "use server"
 

@@ -22,15 +22,19 @@ interface VisitRow {
   created_at: string
 }
 
+const PAGE_SIZE = 20
+const MAX_SEARCH_LENGTH = 80
+
 export const revalidate = 0
 
 export default async function RecordsPage(props: {
-  searchParams?: Promise<{ q?: string; error?: string }>
+  searchParams?: Promise<{ q?: string; error?: string; page?: string }>
 }) {
   const supabase = await createServerClient()
 
   const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
-  const searchQuery = (resolvedSearchParams?.q || "").trim()
+  const searchQuery = (resolvedSearchParams?.q || "").trim().slice(0, MAX_SEARCH_LENGTH)
+  const currentPage = Math.max(1, Number.parseInt((resolvedSearchParams?.page || "1").trim(), 10) || 1)
   const errorCode = resolvedSearchParams?.error
 
   const errorMessage = (() => {
@@ -43,9 +47,15 @@ export default async function RecordsPage(props: {
   })()
 
   let patients: PatientRow[] = []
+  let totalMatched = 0
+  let hasNextPage = false
+  const isLikelyId = searchQuery.length === 36 && searchQuery.includes("-")
+  const hasSearchQuery = searchQuery.length > 0
+  const isSearchTooShort = hasSearchQuery && !isLikelyId && searchQuery.length < 2
 
-  if (searchQuery) {
-    const isLikelyId = searchQuery.length === 36 && searchQuery.includes("-")
+  if (hasSearchQuery && !isSearchTooShort) {
+    const from = (currentPage - 1) * PAGE_SIZE
+    const to = from + PAGE_SIZE
 
     const { data, error } = await supabase
       .from("patients")
@@ -56,12 +66,15 @@ export default async function RecordsPage(props: {
           : `patient_number.ilike.%${searchQuery}%,full_name.ilike.%${searchQuery}%`
       )
       .order("created_at", { ascending: false })
-      .limit(20)
+      .range(from, to)
 
     if (error) {
       console.error("[records] Error searching patients:", error.message || error)
     } else if (data) {
-      patients = data as PatientRow[]
+      const rows = data as PatientRow[]
+      hasNextPage = rows.length > PAGE_SIZE
+      patients = rows.slice(0, PAGE_SIZE)
+      totalMatched = from + patients.length + (hasNextPage ? 1 : 0)
     }
   }
 
@@ -88,6 +101,13 @@ export default async function RecordsPage(props: {
         }
       }
     }
+  }
+
+  const buildQueryString = (page: number) => {
+    const params = new URLSearchParams()
+    if (searchQuery) params.set("q", searchQuery)
+    if (page > 1) params.set("page", String(page))
+    return params.toString()
   }
 
   async function ensureVisit(formData: FormData) {
@@ -224,12 +244,21 @@ export default async function RecordsPage(props: {
           <CardHeader>
             <CardTitle>Search results</CardTitle>
             <CardDescription>
-              {patients.length === 0
+              {isSearchTooShort
+                ? "Enter at least 2 characters when searching by name or patient number."
+                : patients.length === 0
                 ? "No patients match that query. Try a different patient number or name."
                 : "Select a patient to start or continue today's visit and print a card."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {!isSearchTooShort && patients.length > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Showing page {currentPage}, {patients.length} result{patients.length === 1 ? "" : "s"}
+                {totalMatched ? ` (at least ${totalMatched} matched so far)` : ""}.
+              </p>
+            ) : null}
+
             {patients.map((p) => {
               const todayVisit = todaysVisitsByPatientId.get(p.id)
 
@@ -261,6 +290,33 @@ export default async function RecordsPage(props: {
                 </div>
               )
             })}
+
+            {!isSearchTooShort && (currentPage > 1 || hasNextPage) ? (
+              <div className="mt-2 flex items-center justify-end gap-2">
+                {currentPage > 1 ? (
+                  <Button asChild variant="outline" size="sm">
+                    <Link href={`/dashboard/records?${buildQueryString(currentPage - 1)}`} prefetch={false}>
+                      Previous
+                    </Link>
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" disabled>
+                    Previous
+                  </Button>
+                )}
+                {hasNextPage ? (
+                  <Button asChild variant="outline" size="sm">
+                    <Link href={`/dashboard/records?${buildQueryString(currentPage + 1)}`} prefetch={false}>
+                      Next
+                    </Link>
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" disabled>
+                    Next
+                  </Button>
+                )}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       )}

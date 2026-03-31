@@ -101,26 +101,25 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   )
   const visitIds = Array.from(new Set(filteredInvoices.map((inv) => inv.visit_id).filter((id): id is string => Boolean(id))))
 
-  const [{ data: patients }, { data: prescriptions }, { data: doctorProfiles }] = await Promise.all([
+  const [{ data: patients }, { data: prescriptions }] = await Promise.all([
     patientIds.length
       ? supabase.from("patients").select("id, full_name, patient_number").in("id", patientIds)
       : Promise.resolve({ data: [] as PatientLite[] }),
     visitIds.length
       ? supabase.from("prescriptions").select("id, visit_id, doctor_id").in("visit_id", visitIds)
       : Promise.resolve({ data: [] as PrescriptionLite[] }),
-    visitIds.length
-      ? (async () => {
-          const { data: rx } = await supabase
-            .from("prescriptions")
-            .select("doctor_id")
-            .in("visit_id", visitIds)
-          const doctorIds = Array.from(new Set((rx || []).map((r) => r.doctor_id).filter((id): id is string => Boolean(id))))
-          if (!doctorIds.length) return { data: [] as DoctorProfileLite[] }
-          const { data } = await supabase.from("profiles").select("id, full_name").in("id", doctorIds)
-          return { data: data || [] }
-        })()
-      : Promise.resolve({ data: [] as DoctorProfileLite[] }),
   ])
+
+  const doctorIds = Array.from(
+    new Set(
+      ((prescriptions || []) as PrescriptionLite[])
+        .map((rx) => rx.doctor_id || null)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  )
+  const { data: doctorProfiles } = doctorIds.length
+    ? await supabase.from("profiles").select("id, full_name").in("id", doctorIds)
+    : { data: [] as DoctorProfileLite[] }
 
   const patientById = new Map<string, { full_name?: string | null; patient_number?: string | null }>()
   for (const p of (patients || []) as PatientLite[]) {
@@ -293,7 +292,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         <Card>
           <CardHeader>
             <CardTitle>Total billed</CardTitle>
-            <CardDescription>Sum of invoice totals in this period.</CardDescription>
+            <CardDescription>Sum of {rows.length} matching invoice(s) in this period.</CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">Le {totalAmount.toLocaleString()}</p>

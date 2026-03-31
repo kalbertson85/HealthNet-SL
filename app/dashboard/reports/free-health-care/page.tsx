@@ -112,14 +112,18 @@ export default async function FreeHealthCareReportPage(props: {
     999,
   ).toISOString()
 
-  let visitIdsForServiceType: string[] | null = null
+  let visitIdSetForServiceType: Set<string> | null = null
   if (serviceType === "radiology_requests" || serviceType === "lab_tests") {
     const { data: serviceRows } = await supabase
       .from(serviceType)
       .select("visit_id")
       .gte("created_at", fromIso)
       .lte("created_at", toIso)
-    visitIdsForServiceType = (serviceRows || []).map((r: { visit_id: string | null }) => r.visit_id as string).filter(Boolean)
+    visitIdSetForServiceType = new Set(
+      (serviceRows || [])
+        .map((r: { visit_id: string | null }) => r.visit_id)
+        .filter((id): id is string => Boolean(id)),
+    )
   }
 
   const { data, error } = await supabase
@@ -173,7 +177,7 @@ export default async function FreeHealthCareReportPage(props: {
       if (!code || code !== facilityFilter) return false
     }
 
-    if (visitIdsForServiceType && !visitIdsForServiceType.includes(row.id)) {
+    if (visitIdSetForServiceType && !visitIdSetForServiceType.has(row.id)) {
       return false
     }
 
@@ -232,6 +236,19 @@ export default async function FreeHealthCareReportPage(props: {
   }
 
   const facilitySummary = Array.from(facilitySummaryMap.values())
+  const facilityOptions = Array.from(
+    new Map(
+      mappedRows
+        .map((row) => {
+          const code = (row.facility_code || "").trim()
+          const name = (row.facility_name || "Unknown facility").trim() || "Unknown facility"
+          return code ? [code, name] : null
+        })
+        .filter((entry): entry is [string, string] => Boolean(entry)),
+    ).entries(),
+  )
+    .map(([code, name]) => ({ code, name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 
   return (
     <div className="space-y-8">
@@ -308,16 +325,36 @@ export default async function FreeHealthCareReportPage(props: {
             </div>
             <div className="space-y-1">
               <label htmlFor="facility" className="text-xs font-medium text-muted-foreground">
-                Facility (code)
+                Facility
               </label>
-              <input
+              <select
                 id="facility"
                 name="facility"
-                type="text"
-                placeholder="e.g. OPD-1"
-                defaultValue={facilityFilter === "all" ? "" : facilityFilter}
+                defaultValue={facilityFilter || "all"}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
-              />
+              >
+                <option value="all">All facilities</option>
+                {facilityOptions.map((facility) => (
+                  <option key={facility.code} value={facility.code}>
+                    {facility.name} ({facility.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="service_type" className="text-xs font-medium text-muted-foreground">
+                Service type
+              </label>
+              <select
+                id="service_type"
+                name="service_type"
+                defaultValue={serviceType || "all"}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+              >
+                <option value="all">All services</option>
+                <option value="radiology_requests">Radiology</option>
+                <option value="lab_tests">Lab</option>
+              </select>
             </div>
             <div className="mt-2 flex gap-2 md:col-span-4">
               <button

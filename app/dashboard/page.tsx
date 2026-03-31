@@ -12,9 +12,12 @@ import { can } from "@/lib/utils"
 interface TodayAppointmentRow {
   id: string
   appointment_time: string
-  patients?: { full_name?: string | null } | null
-  profiles?: { full_name?: string | null } | null
+  patients?: { full_name?: string | null } | { full_name?: string | null }[] | null
+  profiles?: { full_name?: string | null } | { full_name?: string | null }[] | null
 }
+
+const RECENT_ITEMS_LIMIT = 5
+const MAX_REVENUE_INVOICE_SCAN = 5000
 
 export default async function DashboardPage() {
   const supabase = await createServerClient()
@@ -26,6 +29,7 @@ export default async function DashboardPage() {
   }
 
   const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
+  const todayIsoDate = new Date().toISOString().split("T")[0]
 
   // Fetch dashboard statistics with error handling
   const fetchStats = async () => {
@@ -36,21 +40,27 @@ export default async function DashboardPage() {
           supabase
             .from("appointments")
             .select("id", { count: "exact", head: true })
-            .eq("appointment_date", new Date().toISOString().split("T")[0])
+            .eq("appointment_date", todayIsoDate)
             .neq("status", "cancelled"),
           supabase.from("prescriptions").select("id", { count: "exact", head: true }).eq("status", "pending"),
-          supabase.from("invoices").select("total_amount"),
+          supabase
+            .from("invoices")
+            .select("paid_amount")
+            .order("created_at", { ascending: false })
+            .limit(MAX_REVENUE_INVOICE_SCAN),
           supabase.from("admissions").select("id", { count: "exact", head: true }).eq("status", "active"),
           supabase.from("lab_tests").select("id", { count: "exact", head: true }).eq("status", "pending"),
         ])
 
-      const revenue = totalRevenue.data?.reduce((sum, invoice) => sum + Number(invoice.total_amount || 0), 0) || 0
+      const revenue = totalRevenue.data?.reduce((sum, invoice) => sum + Number(invoice.paid_amount || 0), 0) || 0
+      const revenueTruncated = (totalRevenue.data?.length || 0) >= MAX_REVENUE_INVOICE_SCAN
 
       return {
         patients: patientsCount.count || 0,
         appointments: appointmentsToday.count || 0,
         prescriptions: pendingPrescriptions.count || 0,
         revenue,
+        revenueTruncated,
         admissions: activeAdmissions.count || 0,
         labTests: pendingLabTests.count || 0,
       }
@@ -61,6 +71,7 @@ export default async function DashboardPage() {
         appointments: 0,
         prescriptions: 0,
         revenue: 0,
+        revenueTruncated: false,
         admissions: 0,
         labTests: 0,
       }
@@ -72,16 +83,16 @@ export default async function DashboardPage() {
     try {
       const { data: recentPatients } = await supabase
         .from("patients")
-        .select("*")
+        .select("id, full_name, patient_number")
         .order("created_at", { ascending: false })
-        .limit(5)
+        .limit(RECENT_ITEMS_LIMIT)
 
       const { data: todayAppointments } = await supabase
         .from("appointments")
-        .select("*, patients(full_name), profiles(full_name)")
-        .eq("appointment_date", new Date().toISOString().split("T")[0])
+        .select("id, appointment_time, patients(full_name), profiles(full_name)")
+        .eq("appointment_date", todayIsoDate)
         .order("appointment_time", { ascending: true })
-        .limit(5)
+        .limit(RECENT_ITEMS_LIMIT)
 
       return {
         recentPatients: recentPatients || [],
@@ -104,6 +115,11 @@ export default async function DashboardPage() {
       title="Dashboard"
       description="High-level overview of patients, appointments, billing, and clinical activity."
     >
+      {stats.revenueTruncated ? (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Revenue is computed from the latest {MAX_REVENUE_INVOICE_SCAN.toLocaleString()} invoices for performance.
+        </div>
+      ) : null}
 
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-2">
@@ -139,7 +155,7 @@ export default async function DashboardPage() {
                 Le {stats.revenue.toLocaleString()}
               </>
             }
-            description="All-time revenue"
+            description={stats.revenueTruncated ? "Recent invoice-window revenue" : "All-time collected revenue"}
             icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
           />
 
@@ -235,19 +251,23 @@ export default async function DashboardPage() {
           <CardContent>
             {todayAppointments.length > 0 ? (
               <div className="space-y-4">
-                {todayAppointments.map((appointment: TodayAppointmentRow) => (
-                  <div key={appointment.id} className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">{appointment.patients?.full_name || "Unknown"}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {appointment.appointment_time} - Dr. {appointment.profiles?.full_name || "Unassigned"}
-                      </p>
+                {todayAppointments.map((appointment: TodayAppointmentRow) => {
+                  const patient = Array.isArray(appointment.patients) ? appointment.patients[0] : appointment.patients
+                  const doctor = Array.isArray(appointment.profiles) ? appointment.profiles[0] : appointment.profiles
+                  return (
+                    <div key={appointment.id} className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium">{patient?.full_name || "Unknown"}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {appointment.appointment_time} - Dr. {doctor?.full_name || "Unassigned"}
+                        </p>
+                      </div>
+                      <Button asChild size="sm" variant="ghost">
+                        <Link href={`/dashboard/appointments/${appointment.id}`}>View</Link>
+                      </Button>
                     </div>
-                    <Button asChild size="sm" variant="ghost">
-                      <Link href={`/dashboard/appointments/${appointment.id}`}>View</Link>
-                    </Button>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">No appointments today</p>

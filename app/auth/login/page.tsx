@@ -56,7 +56,7 @@ function LoginPageContent() {
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-sky-50 via-white to-emerald-50 flex items-center justify-center px-2 py-6 sm:px-4 sm:py-8">
-      <div className="w-full min-w-0 max-w-sm overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xl md:max-w-6xl md:grid md:grid-cols-2">
+      <div className="w-full min-w-0 max-w-[calc(100vw-1rem)] sm:max-w-md overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xl md:max-w-6xl md:grid md:grid-cols-2">
         {/* Left column: logo, branding and form */}
         <div className="flex min-w-0 flex-col justify-center gap-6 px-4 py-6 sm:gap-8 sm:px-8 sm:py-8 md:px-10 md:py-10">
           <header className="flex min-w-0 flex-col items-center justify-center gap-2 sm:flex-row sm:gap-3">

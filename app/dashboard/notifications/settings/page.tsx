@@ -45,7 +45,9 @@ export default async function NotificationSettingsPage() {
   // Fetch preferences
   let { data: preferences } = await supabase
     .from("notification_preferences")
-    .select("*")
+    .select(
+      "user_id, email_enabled, sms_enabled, push_enabled, appointment_reminders, lab_results, prescription_ready, payment_reminders, system_alerts",
+    )
     .eq("user_id", user.id)
     .single()
 
@@ -54,7 +56,9 @@ export default async function NotificationSettingsPage() {
     const { data: newPreferences } = await supabase
       .from("notification_preferences")
       .insert({ user_id: user.id })
-      .select()
+      .select(
+        "user_id, email_enabled, sms_enabled, push_enabled, appointment_reminders, lab_results, prescription_ready, payment_reminders, system_alerts",
+      )
       .single()
     preferences = newPreferences
   }

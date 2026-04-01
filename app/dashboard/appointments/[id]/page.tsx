@@ -28,7 +28,7 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
 
   const { data: appointment, error: appointmentError } = await supabase
     .from("appointments")
-    .select("*")
+    .select("id, patient_id, doctor_id, appointment_date, appointment_time, status, reason, notes")
     .eq("id", id)
     .maybeSingle()
 

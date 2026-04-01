@@ -16,7 +16,13 @@ export default async function PatientDetailPage({
   const supabase = await createServerClient()
   const { id } = await params
 
-  const { data: patient, error } = await supabase.from("patients").select("*").eq("id", id).maybeSingle()
+  const { data: patient, error } = await supabase
+    .from("patients")
+    .select(
+      "id, full_name, patient_number, photo_url, company_id, free_health_category, national_id, gender, date_of_birth, blood_group, phone_number, email, address, emergency_contact_name, emergency_contact_phone, next_of_kin, allergies, medical_history",
+    )
+    .eq("id", id)
+    .maybeSingle()
 
   if (error) {
     console.error("[v0] Error loading patient detail:", error.message || error)
@@ -26,6 +32,7 @@ export default async function PatientDetailPage({
     console.warn("[v0] Patient not found for id:", id)
     notFound()
   }
+  const patientRecord = patient
 
   // Fetch related data
   const [{ count: appointmentsCount }, { count: prescriptionsCount }, { count: labTestsCount }] = await Promise.all([
@@ -34,11 +41,11 @@ export default async function PatientDetailPage({
     supabase.from("lab_tests").select("id", { count: "exact", head: true }).eq("patient_id", id),
   ])
 
-  const age = patient.date_of_birth
-    ? Math.floor((new Date().getTime() - new Date(patient.date_of_birth).getTime()) / 31557600000)
+  const age = patientRecord.date_of_birth
+    ? Math.floor((new Date().getTime() - new Date(patientRecord.date_of_birth).getTime()) / 31557600000)
     : null
 
-  const nextOfKin = (patient.next_of_kin || null) as
+  const nextOfKin = (patientRecord.next_of_kin || null) as
     | { name?: string | null; relationship?: string | null; phone?: string | null; address?: string | null }
     | null
 
@@ -52,7 +59,7 @@ export default async function PatientDetailPage({
       redirect("/auth/login")
     }
 
-    const patientId = patient.id as string
+    const patientId = patientRecord.id as string
 
     try {
       // Avoid creating multiple visits for the same patient on the same day
@@ -69,7 +76,7 @@ export default async function PatientDetailPage({
         .maybeSingle()
 
       if (!existingVisit) {
-        const companyAwarePatient = patient as { company_id?: string | null; free_health_category?: string | null }
+        const companyAwarePatient = patientRecord as { company_id?: string | null; free_health_category?: string | null }
 
         const freeHealthCategory = (companyAwarePatient.free_health_category as string | null) ?? "none"
         const isFreeHealthCare = freeHealthCategory !== "none"
@@ -113,15 +120,15 @@ export default async function PatientDetailPage({
             </Link>
           </Button>
           <div className="flex items-center gap-4">
-            <PatientPhotoCapture patientId={patient.id} initialPhotoUrl={patient.photo_url} />
+            <PatientPhotoCapture patientId={patientRecord.id} initialPhotoUrl={patientRecord.photo_url} />
             <div>
-              <h1 className="text-balance text-3xl font-bold tracking-tight">{patient.full_name}</h1>
-              <p className="text-pretty text-muted-foreground">Patient Number: {patient.patient_number}</p>
+              <h1 className="text-balance text-3xl font-bold tracking-tight">{patientRecord.full_name}</h1>
+              <p className="text-pretty text-muted-foreground">Patient Number: {patientRecord.patient_number}</p>
             </div>
           </div>
         </div>
         <Button asChild>
-          <Link href={`/dashboard/patients/${patient.id}/edit`}>
+          <Link href={`/dashboard/patients/${patientRecord.id}/edit`}>
             <Edit className="mr-2 h-4 w-4" />
             Edit
           </Link>
@@ -170,11 +177,11 @@ export default async function PatientDetailPage({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">National ID</p>
-                <p>{patient.national_id || "N/A"}</p>
+                <p>{patientRecord.national_id || "N/A"}</p>
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Gender</p>
-                <p className="capitalize">{patient.gender}</p>
+                <p className="capitalize">{patientRecord.gender}</p>
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Age</p>
@@ -182,21 +189,21 @@ export default async function PatientDetailPage({
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Blood Group</p>
-                <p>{patient.blood_group || "N/A"}</p>
+                <p>{patientRecord.blood_group || "N/A"}</p>
               </div>
             </div>
             <Separator />
             <div>
               <p className="text-sm font-medium text-muted-foreground">Phone Number</p>
-              <p>{patient.phone_number || "N/A"}</p>
+              <p>{patientRecord.phone_number || "N/A"}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Email</p>
-              <p>{patient.email || "N/A"}</p>
+              <p>{patientRecord.email || "N/A"}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Address</p>
-              <p>{patient.address || "N/A"}</p>
+              <p>{patientRecord.address || "N/A"}</p>
             </div>
           </CardContent>
         </Card>
@@ -209,11 +216,11 @@ export default async function PatientDetailPage({
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Name</p>
-              <p>{patient.emergency_contact_name || "N/A"}</p>
+              <p>{patientRecord.emergency_contact_name || "N/A"}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Phone</p>
-              <p>{patient.emergency_contact_phone || "N/A"}</p>
+              <p>{patientRecord.emergency_contact_phone || "N/A"}</p>
             </div>
           </CardContent>
         </Card>
@@ -253,12 +260,12 @@ export default async function PatientDetailPage({
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Allergies</p>
-              <p className="text-sm">{patient.allergies || "None recorded"}</p>
+              <p className="text-sm">{patientRecord.allergies || "None recorded"}</p>
             </div>
             <Separator />
             <div>
               <p className="text-sm font-medium text-muted-foreground">Medical History</p>
-              <p className="text-sm">{patient.medical_history || "No history recorded"}</p>
+              <p className="text-sm">{patientRecord.medical_history || "No history recorded"}</p>
             </div>
           </CardContent>
         </Card>
@@ -276,18 +283,18 @@ export default async function PatientDetailPage({
             </Button>
           </form>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/appointments/new?patient_id=${patient.id}`}>Book Appointment</Link>
+            <Link href={`/dashboard/appointments/new?patient_id=${patientRecord.id}`}>Book Appointment</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/prescriptions/new?patient_id=${patient.patient_number}`}>
+            <Link href={`/dashboard/prescriptions/new?patient_id=${patientRecord.id}`}>
               Create Prescription
             </Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/lab/new?patient_id=${patient.id}`}>Order Lab Test</Link>
+            <Link href={`/dashboard/lab/new?patient_id=${patientRecord.id}`}>Order Lab Test</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/billing/new?patient_id=${patient.id}`}>Create Invoice</Link>
+            <Link href={`/dashboard/billing/new?patient_id=${patientRecord.id}`}>Create Invoice</Link>
           </Button>
         </CardContent>
       </Card>

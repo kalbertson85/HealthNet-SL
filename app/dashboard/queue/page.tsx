@@ -7,6 +7,93 @@ import { Badge } from "@/components/ui/badge"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 
+const ACTIVE_QUEUE_LIMIT = 300
+
+function normalizeQueuePatient(
+  relation:
+    | {
+        id?: string | null
+        patient_number?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        phone?: string | null
+      }
+    | Array<{
+        id?: string | null
+        patient_number?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        phone?: string | null
+      }>
+    | null
+    | undefined,
+) {
+  if (!relation) {
+    return null
+  }
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
+function normalizeQueueVisit(
+  relation:
+    | {
+        id?: string | null
+        is_free_health_care?: boolean | null
+        facility_id?: string | null
+        facilities?:
+          | {
+              name?: string | null
+              code?: string | null
+            }
+          | Array<{
+              name?: string | null
+              code?: string | null
+            }>
+          | null
+      }
+    | Array<{
+        id?: string | null
+        is_free_health_care?: boolean | null
+        facility_id?: string | null
+        facilities?:
+          | {
+              name?: string | null
+              code?: string | null
+            }
+          | Array<{
+              name?: string | null
+              code?: string | null
+            }>
+          | null
+      }>
+    | null
+    | undefined,
+) {
+  if (!relation) {
+    return null
+  }
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
+function normalizeFacility(
+  relation:
+    | {
+        name?: string | null
+        code?: string | null
+      }
+    | Array<{
+        name?: string | null
+        code?: string | null
+      }>
+    | null
+    | undefined,
+) {
+  if (!relation) {
+    return null
+  }
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
 const departments = [
   { id: "opd", name: "OPD (Out-Patient)", icon: Users, color: "text-blue-600" },
   { id: "emergency", name: "Emergency", icon: AlertCircle, color: "text-red-600" },
@@ -52,7 +139,7 @@ export default async function QueuePage(props: {
   const { data: queues } = await supabase
     .from("queues")
     .select(`
-      *,
+      id, department, status, priority, queue_number, check_in_time,
       patient:patients(id, patient_number, first_name, last_name, phone),
       visits:is_visit_id(id, is_free_health_care, facility_id,
         facilities(name, code)
@@ -61,9 +148,12 @@ export default async function QueuePage(props: {
     .in("status", ["waiting", "in_progress"])
     .order("priority", { ascending: false })
     .order("check_in_time", { ascending: true })
+    .limit(ACTIVE_QUEUE_LIMIT)
 
   // Fetch queue settings
-  const { data: settings } = await supabase.from("queue_settings").select("*")
+  const { data: settings } = await supabase
+    .from("queue_settings")
+    .select("department, average_service_time, current_serving")
 
   // Group queues by department
   const queuesByDept = departments.map((dept) => {
@@ -121,6 +211,11 @@ export default async function QueuePage(props: {
           </button>
         </Link>
       </div>
+      {(queues?.length || 0) >= ACTIVE_QUEUE_LIMIT && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Showing the first {ACTIVE_QUEUE_LIMIT} active queue rows. Refine queue state by department for full detail.
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {queuesByDept.map((dept) => (
@@ -194,7 +289,11 @@ export default async function QueuePage(props: {
           </form>
           <div className="space-y-3">
             {filteredQueues && filteredQueues.length > 0 ? (
-              filteredQueues.map((queue) => (
+              filteredQueues.map((queue) => {
+                const patient = normalizeQueuePatient(queue.patient)
+                const visit = normalizeQueueVisit(queue.visits)
+                const facility = normalizeFacility(visit?.facilities)
+                return (
                 <div
                   key={queue.id}
                   className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent/50 transition-colors"
@@ -206,13 +305,13 @@ export default async function QueuePage(props: {
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
                         <Link
-                          href={queue.patient?.id ? `/dashboard/patients/${queue.patient.id}` : "#"}
+                          href={patient?.id ? `/dashboard/patients/${patient.id}` : "#"}
                           className="font-medium hover:underline"
                         >
-                          {queue.patient?.first_name} {queue.patient?.last_name}
+                          {patient?.first_name} {patient?.last_name}
                         </Link>
                         <Badge variant="outline" className="text-xs">
-                          {queue.patient?.patient_number}
+                          {patient?.patient_number}
                         </Badge>
                       </div>
                       <div className="flex flex-wrap items-center gap-3 mt-1 text-sm text-muted-foreground">
@@ -226,13 +325,13 @@ export default async function QueuePage(props: {
                             minute: "2-digit",
                           })}
                         </span>
-                        {queue.visits?.facilities?.name && (
+                        {facility?.name && (
                           <>
                             <span>•</span>
                             <span>
-                              {queue.visits.facilities.name}
-                              {queue.visits.facilities.code
-                                ? ` (${queue.visits.facilities.code})`
+                              {facility.name}
+                              {facility.code
+                                ? ` (${facility.code})`
                                 : ""}
                             </span>
                           </>
@@ -244,7 +343,7 @@ export default async function QueuePage(props: {
                     <Badge className={statusColors[queue.status as keyof typeof statusColors]}>
                       {queue.status.replace("_", " ")}
                     </Badge>
-                    {queue.visits?.is_free_health_care && (
+                    {visit?.is_free_health_care && (
                       <Badge variant="outline" className="text-[10px] font-normal">
                         Free Health Care visit
                       </Badge>
@@ -256,7 +355,7 @@ export default async function QueuePage(props: {
                     )}
                   </div>
                 </div>
-              ))
+              )})
             ) : (
               <div className="text-center py-8 text-muted-foreground">No patients in queue</div>
             )}

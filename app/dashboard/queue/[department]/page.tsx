@@ -7,6 +7,33 @@ import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { assertQueueTransition, type QueueStatus } from "@/lib/queues"
 
+const DEPARTMENT_QUEUE_LIMIT = 200
+
+function normalizeQueuePatient(
+  relation:
+    | {
+        id?: string | null
+        patient_number?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        phone?: string | null
+      }
+    | Array<{
+        id?: string | null
+        patient_number?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        phone?: string | null
+      }>
+    | null
+    | undefined,
+) {
+  if (!relation) {
+    return null
+  }
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
 const statusColors = {
   waiting: "bg-yellow-500",
   in_progress: "bg-blue-500",
@@ -25,7 +52,7 @@ async function callNext(department: string) {
   // Get next waiting patient
   const { data: nextQueue } = await supabase
     .from("queues")
-    .select("*")
+    .select("id, status, queue_number")
     .eq("department", department)
     .eq("status", "waiting")
     .order("priority", { ascending: false })
@@ -320,15 +347,20 @@ export default async function DepartmentQueuePage(props: {
   const { data: queues } = await supabase
     .from("queues")
     .select(`
-      *,
+      id, patient_id, visit_id, queue_number, check_in_time, priority, status,
       patient:patients(id, patient_number, first_name, last_name, phone)
     `)
     .eq("department", department)
     .in("status", ["waiting", "in_progress"])
     .order("priority", { ascending: false })
     .order("check_in_time", { ascending: true })
+    .limit(DEPARTMENT_QUEUE_LIMIT)
 
-  const { data: setting } = await supabase.from("queue_settings").select("*").eq("department", department).single()
+  const { data: setting } = await supabase
+    .from("queue_settings")
+    .select("department, current_serving")
+    .eq("department", department)
+    .single()
 
   const waitingQueues = queues?.filter((q) => q.status === "waiting") || []
   const inProgressQueues = queues?.filter((q) => q.status === "in_progress") || []
@@ -392,6 +424,11 @@ export default async function DepartmentQueuePage(props: {
           Apply
         </button>
       </form>
+      {(queues?.length || 0) >= DEPARTMENT_QUEUE_LIMIT && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Showing the first {DEPARTMENT_QUEUE_LIMIT} active queue rows for this department.
+        </div>
+      )}
 
       {setting?.current_serving && (
         <Card className="border-primary">
@@ -411,16 +448,18 @@ export default async function DepartmentQueuePage(props: {
           </CardHeader>
           <CardContent className="space-y-3">
             {visibleInProgressQueues.length > 0 ? (
-              visibleInProgressQueues.map((queue) => (
+              visibleInProgressQueues.map((queue) => {
+                const patient = normalizeQueuePatient(queue.patient)
+                return (
                 <div key={queue.id} className="p-4 border rounded-lg space-y-3">
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="font-medium">
                         <Link
-                          href={queue.patient?.id ? `/dashboard/patients/${queue.patient.id}` : "#"}
+                          href={patient?.id ? `/dashboard/patients/${patient.id}` : "#"}
                           className="hover:underline"
                         >
-                          {queue.patient?.first_name} {queue.patient?.last_name}
+                          {patient?.first_name} {patient?.last_name}
                         </Link>
                       </p>
                       <p className="text-sm text-muted-foreground">Queue: {queue.queue_number}</p>
@@ -440,7 +479,7 @@ export default async function DepartmentQueuePage(props: {
                     </form>
                   </div>
                 </div>
-              ))
+              )})
             ) : (
               <p className="text-center text-muted-foreground py-8">No patients in progress</p>
             )}
@@ -453,7 +492,9 @@ export default async function DepartmentQueuePage(props: {
           </CardHeader>
           <CardContent className="space-y-3">
             {visibleWaitingQueues.length > 0 ? (
-              visibleWaitingQueues.map((queue, index) => (
+              visibleWaitingQueues.map((queue, index) => {
+                const patient = normalizeQueuePatient(queue.patient)
+                return (
                 <div key={queue.id} className="p-4 border rounded-lg">
                   <div className="flex items-start justify-between">
                     <div>
@@ -461,10 +502,10 @@ export default async function DepartmentQueuePage(props: {
                         <span className="font-semibold text-lg">#{index + 1}</span>
                         <p className="font-medium">
                           <Link
-                            href={queue.patient?.id ? `/dashboard/patients/${queue.patient.id}` : "#"}
+                            href={patient?.id ? `/dashboard/patients/${patient.id}` : "#"}
                             className="hover:underline"
                           >
-                            {queue.patient?.first_name} {queue.patient?.last_name}
+                            {patient?.first_name} {patient?.last_name}
                           </Link>
                         </p>
                       </div>
@@ -503,7 +544,7 @@ export default async function DepartmentQueuePage(props: {
                           className="w-full"
                         >
                           <Link
-                            href={`/dashboard/inpatient/new?patient_id=${queue.patient?.id ?? ""}$${
+                            href={`/dashboard/inpatient/new?patient_id=${patient?.id ?? ""}$${
                               queue.visit_id ? `&visit_id=${queue.visit_id}` : ""
                             }`}
                           >
@@ -519,7 +560,7 @@ export default async function DepartmentQueuePage(props: {
                     </form>
                   </div>
                 </div>
-              ))
+              )})
             ) : (
               <p className="text-center text-muted-foreground py-8">No patients waiting</p>
             )}

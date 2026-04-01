@@ -17,16 +17,16 @@ export default async function HomePage() {
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-blue-50 via-white to-teal-50">
-      <div className="container mx-auto px-4 py-16">
+      <div className="mx-auto w-full max-w-7xl px-3 py-16 sm:px-4">
         {/* Header */}
         <div className="text-center mb-16">
           <div className="flex justify-center mb-6">
             <Activity className="h-16 w-16 text-blue-600" />
           </div>
-          <h1 className="mb-4 text-balance text-3xl font-bold text-gray-900 sm:text-4xl md:text-5xl">
+          <h1 className="mb-4 break-words text-xl font-bold leading-tight text-gray-900 sm:text-4xl md:text-5xl">
             Smarter Health Management for Stronger Care
           </h1>
-          <p className="mx-auto max-w-2xl text-base text-gray-700 sm:text-xl">
+          <p className="mx-auto max-w-2xl text-sm text-gray-700 sm:text-xl">
             HealthNet-SL HMS empowers hospitals in Sierra Leone with real-time digital records, analytics, and
             automation.
           </p>

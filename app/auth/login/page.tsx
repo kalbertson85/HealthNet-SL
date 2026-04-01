@@ -55,11 +55,11 @@ function LoginPageContent() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-sky-50 via-white to-emerald-50 flex items-center justify-center px-4 py-6 sm:py-8">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xl md:max-w-6xl md:grid md:grid-cols-2">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-sky-50 via-white to-emerald-50 flex items-center justify-center px-2 py-6 sm:px-4 sm:py-8">
+      <div className="w-full min-w-0 max-w-sm overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xl md:max-w-6xl md:grid md:grid-cols-2">
         {/* Left column: logo, branding and form */}
-        <div className="flex flex-col justify-center gap-6 sm:gap-8 px-6 py-6 sm:px-8 sm:py-8 md:px-10 md:py-10">
-          <header className="flex items-center justify-center gap-3">
+        <div className="flex min-w-0 flex-col justify-center gap-6 px-4 py-6 sm:gap-8 sm:px-8 sm:py-8 md:px-10 md:py-10">
+          <header className="flex min-w-0 flex-col items-center justify-center gap-2 sm:flex-row sm:gap-3">
             <Image
               src="/healthnet-logo.png"
               alt="HealthNet-SL HMS logo"
@@ -67,13 +67,13 @@ function LoginPageContent() {
               height={64}
               className="h-14 w-14 rounded-md object-contain"
             />
-            <div>
-              <p className="text-sm font-semibold tracking-wide text-sky-700">HealthNet-SL HMS</p>
-              <p className="text-xs text-slate-500">Smarter Health Management for Stronger Care</p>
+            <div className="min-w-0 text-center sm:text-left">
+              <p className="break-words text-sm font-semibold tracking-wide text-sky-700">HealthNet-SL HMS</p>
+              <p className="hidden text-xs text-slate-500 sm:block">Smarter Health Management for Stronger Care</p>
             </div>
           </header>
 
-          <div className="space-y-6">
+          <div className="min-w-0 space-y-6">
             <Card className="shadow-none border-0 p-0">
               <CardHeader className="px-0 pt-0 pb-4 items-center text-center">
                 <CardTitle className="text-2xl md:text-3xl font-semibold text-slate-900">Welcome back</CardTitle>

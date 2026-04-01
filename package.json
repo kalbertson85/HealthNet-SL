@@ -10,7 +10,8 @@
     "release:check": "bash scripts/release-check.sh",
     "start": "next start",
     "test": "vitest",
-    "webhook:test:local": "bash scripts/test-mobile-money-mutation-local.sh"
+    "webhook:test:local": "bash scripts/test-mobile-money-mutation-local.sh",
+    "repo:check": "bash scripts/repo-hygiene-check.sh"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

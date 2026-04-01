@@ -7,6 +7,7 @@ import { maybeApplyMobileMoneyInvoicePayment } from "@/lib/webhooks/mobile-money
 import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_JSON_HEADERS } from "@/lib/http/headers"
 import { logSystemAuditEvent } from "@/lib/audit"
+import { logApiRequestComplete, logApiRequestFailure, logApiRequestStart } from "@/lib/http/observability"
 
 const MAX_WEBHOOK_BODY_BYTES = 128 * 1024
 const MAX_EVENT_ID_LENGTH = 128
@@ -100,12 +101,16 @@ function webhookVerificationError(verification: {
 // For now, it only logs the payload and returns 200, without mutating billing state.
 
 export async function POST(request: NextRequest) {
+  const logCtx = logApiRequestStart(request, "api.webhooks.mobile_money")
   const limited = enforceFixedWindowRateLimit(request, {
     key: "api_webhook_mobile_money",
     maxRequests: 240,
     windowMs: 60_000,
   })
-  if (limited) return limited
+  if (limited) {
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, limited.status)
+    return limited
+  }
 
   const secret = process.env.MOBILE_MONEY_WEBHOOK_SECRET
   const signature = request.headers.get("x-signature") || request.headers.get("X-Signature")
@@ -113,12 +118,14 @@ export async function POST(request: NextRequest) {
 
   if (!secret) {
     console.error("[v0] Mobile money webhook called but MOBILE_MONEY_WEBHOOK_SECRET is not configured")
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 500)
     return apiError(500, "webhook_not_configured", "Webhook not configured", request)
   }
 
   const contentType = request.headers.get("content-type")?.toLowerCase() || ""
   if (!contentType.includes("application/json")) {
     await logRejectedWebhookAttempt(request, "unsupported_media_type")
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 415)
     return apiError(415, "unsupported_media_type", "Content-Type must be application/json", request)
   }
 
@@ -127,6 +134,7 @@ export async function POST(request: NextRequest) {
     const declaredSize = Number.parseInt(contentLength, 10)
     if (Number.isFinite(declaredSize) && declaredSize > MAX_WEBHOOK_BODY_BYTES) {
       await logRejectedWebhookAttempt(request, "payload_too_large_declared")
+      logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 413)
       return apiError(413, "payload_too_large", "Payload too large", request)
     }
   }
@@ -134,6 +142,7 @@ export async function POST(request: NextRequest) {
   const rawBody = await request.text()
   if (Buffer.byteLength(rawBody, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
     await logRejectedWebhookAttempt(request, "payload_too_large_actual")
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 413)
     return apiError(413, "payload_too_large", "Payload too large", request)
   }
 
@@ -147,7 +156,11 @@ export async function POST(request: NextRequest) {
   if (!verification.ok) {
     console.warn("[v0] Mobile money webhook rejected", { reason: verification.reason })
     await logRejectedWebhookAttempt(request, verification.reason)
-    return webhookVerificationError(verification, request)
+    const response = webhookVerificationError(verification, request)
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, response.status, {
+      reason: verification.reason,
+    })
+    return response
   }
 
   let payload: unknown = null
@@ -155,11 +168,13 @@ export async function POST(request: NextRequest) {
     payload = rawBody ? JSON.parse(rawBody) : null
   } catch {
     await logRejectedWebhookAttempt(request, "invalid_json")
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 400)
     return apiError(400, "invalid_json", "Invalid JSON", request)
   }
 
   if (!payload || typeof payload !== "object") {
     await logRejectedWebhookAttempt(request, "invalid_payload_not_object")
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 400)
     return apiError(400, "invalid_payload", "Payload must be a JSON object", request)
   }
 
@@ -171,6 +186,7 @@ export async function POST(request: NextRequest) {
         code: issue.code,
       })),
     })
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 400)
     return apiError(400, "invalid_payload", "Payload missing required fields", request)
   }
 
@@ -178,44 +194,57 @@ export async function POST(request: NextRequest) {
   const eventId = extractEventId(validatedPayload)
   if (!eventId) {
     await logRejectedWebhookAttempt(request, "invalid_event_id")
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 400)
     return apiError(400, "invalid_payload", "Payload must include a valid event_id", request)
   }
 
   const persistent = await registerWebhookReplayEvent(WEBHOOK_PROVIDER, eventId)
   if (persistent === "duplicate") {
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 200, { duplicate: true, event_id: eventId })
     return NextResponse.json({ ok: true, duplicate: true }, { status: 200 })
   }
   if (persistent === "unavailable" && !registerWebhookEventId(eventId)) {
+    logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 200, { duplicate: true, event_id: eventId })
     return NextResponse.json({ ok: true, duplicate: true }, { status: 200 })
   }
 
-  await maybeApplyMobileMoneyInvoicePayment({
-    eventId,
-    invoiceId: validatedPayload.invoice_id ?? null,
-    amount: validatedPayload.amount,
-    status: validatedPayload.status,
-    transactionId: validatedPayload.transaction_id ?? null,
-    reference: validatedPayload.reference ?? null,
-  })
+  try {
+    await maybeApplyMobileMoneyInvoicePayment({
+      eventId,
+      invoiceId: validatedPayload.invoice_id ?? null,
+      amount: validatedPayload.amount,
+      status: validatedPayload.status,
+      transactionId: validatedPayload.transaction_id ?? null,
+      reference: validatedPayload.reference ?? null,
+    })
+  } catch (error) {
+    logApiRequestFailure(request, "api.webhooks.mobile_money", logCtx, 500, error, { event_id: eventId })
+    return apiError(500, "webhook_processing_failed", "Webhook processing failed", request)
+  }
 
   void maybeCleanupWebhookReplayEvents()
 
   // Log a minimal event summary only to avoid leaking full payment payloads.
   console.log("[v0] Mobile money webhook received", summarizePayload(validatedPayload))
 
+  logApiRequestComplete(request, "api.webhooks.mobile_money", logCtx, 200, { event_id: eventId })
   return NextResponse.json({ ok: true }, { status: 200 })
 }
 
 export async function GET(request: NextRequest) {
+  const logCtx = logApiRequestStart(request, "api.webhooks.mobile_money.health")
   const limited = enforceFixedWindowRateLimit(request, {
     key: "api_webhook_mobile_money_health",
     maxRequests: 120,
     windowMs: 60_000,
   })
-  if (limited) return limited
+  if (limited) {
+    logApiRequestComplete(request, "api.webhooks.mobile_money.health", logCtx, limited.status)
+    return limited
+  }
 
   const secret = process.env.MOBILE_MONEY_WEBHOOK_SECRET
-  return NextResponse.json(
+  const response = NextResponse.json(
     {
       ok: true,
       provider: WEBHOOK_PROVIDER,
@@ -227,4 +256,8 @@ export async function GET(request: NextRequest) {
     },
     { headers: NO_STORE_JSON_HEADERS },
   )
+  logApiRequestComplete(request, "api.webhooks.mobile_money.health", logCtx, 200, {
+    configured: Boolean(secret),
+  })
+  return response
 }

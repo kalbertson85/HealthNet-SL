@@ -3,6 +3,8 @@ import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middlewar
 import { enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
+const EXPORT_ROW_LIMIT = 5_000
+
 function ageFromDob(dob: string | null): number | null {
   if (!dob) return null
   try {
@@ -87,10 +89,12 @@ export async function GET(request: NextRequest) {
       .select("visit_id")
       .gte("created_at", fromIso)
       .lte("created_at", toIso)
+      .order("created_at", { ascending: false })
+      .limit(EXPORT_ROW_LIMIT + 1)
     visitIdsForServiceType = (serviceRows || []).map((r: { visit_id: string | null }) => r.visit_id as string).filter(Boolean)
   }
 
-  const { data, error } = await supabase
+  const { data: fetchedRows, error } = await supabase
     .from("visits")
     .select(
       `id, created_at, visit_status, is_free_health_care, payer_category,
@@ -100,12 +104,19 @@ export async function GET(request: NextRequest) {
     .eq("is_free_health_care", true)
     .gte("created_at", fromIso)
     .lte("created_at", toIso)
+    .order("created_at", { ascending: false })
+    .limit(EXPORT_ROW_LIMIT + 1)
 
   if (error) {
     console.error("[fhc-export] Error loading FHC visits:", error.message || error)
   }
 
-  const rows: FhcExportRow[] = (data || []).map((row: {
+  const cappedRows = (fetchedRows || []).slice(0, EXPORT_ROW_LIMIT)
+  const isVisitQueryTruncated = (fetchedRows || []).length > EXPORT_ROW_LIMIT
+  const serviceVisitIdSet = visitIdsForServiceType ? new Set(visitIdsForServiceType.slice(0, EXPORT_ROW_LIMIT)) : null
+  const isServiceQueryTruncated = (visitIdsForServiceType || []).length > EXPORT_ROW_LIMIT
+
+  const rows: FhcExportRow[] = cappedRows.map((row: {
     id: string;
     created_at: string;
     visit_status: string;
@@ -157,7 +168,7 @@ export async function GET(request: NextRequest) {
       if (!code || code !== facilityFilter) return false
     }
 
-    if (visitIdsForServiceType && !visitIdsForServiceType.includes(row.id)) {
+    if (serviceVisitIdSet && !serviceVisitIdSet.has(row.id)) {
       return false
     }
 
@@ -202,6 +213,8 @@ export async function GET(request: NextRequest) {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename=fhc_activity_${new Date().toISOString()}.csv`,
+        "X-Export-Truncated": String(isVisitQueryTruncated || isServiceQueryTruncated),
+        "X-Export-Row-Limit": String(EXPORT_ROW_LIMIT),
         ...NO_STORE_DOWNLOAD_HEADERS,
       },
     })

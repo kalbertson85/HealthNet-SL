@@ -3,6 +3,8 @@ import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middlewar
 import { enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
+const EXPORT_ROW_LIMIT = 10_000
+
 export async function GET(request: NextRequest) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "report_export_free_health_care_facility_cost",
@@ -31,7 +33,7 @@ export async function GET(request: NextRequest) {
   const fromIso = fromDate.toISOString()
   const toIso = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59, 999).toISOString()
 
-  const { data, error } = await supabase
+  const { data: fetchedItems, error } = await supabase
     .from("invoice_items")
     .select(
       `quantity, unit_price, item_type,
@@ -43,10 +45,14 @@ export async function GET(request: NextRequest) {
     )
     .gte("invoices.created_at", fromIso)
     .lte("invoices.created_at", toIso)
+    .limit(EXPORT_ROW_LIMIT + 1)
 
   if (error) {
     console.error("[fhc-facility-cost-export] Error loading invoice items:", error.message || error)
   }
+
+  const invoiceItems = (fetchedItems || []).slice(0, EXPORT_ROW_LIMIT)
+  const isQueryTruncated = (fetchedItems || []).length > EXPORT_ROW_LIMIT
 
   type Row = {
     quantity: number | null
@@ -67,7 +73,7 @@ export async function GET(request: NextRequest) {
 
   const fhcCostByFacility = new Map<string, { name: string; code: string | null; amount: number }>()
 
-  for (const row of (data || []) as Row[]) {
+  for (const row of invoiceItems as Row[]) {
     const inv = row.invoices
     const visit = inv?.visits
     if (!visit?.is_free_health_care) continue
@@ -112,6 +118,8 @@ export async function GET(request: NextRequest) {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename=fhc_facility_economic_cost_${new Date().toISOString()}.csv`,
+        "X-Export-Truncated": String(isQueryTruncated),
+        "X-Export-Row-Limit": String(EXPORT_ROW_LIMIT),
         ...NO_STORE_DOWNLOAD_HEADERS,
       },
     })

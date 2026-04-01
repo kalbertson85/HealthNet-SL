@@ -3,6 +3,8 @@ import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middlewar
 import { enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
+const EXPORT_ROW_LIMIT = 5_000
+
 export async function GET(request: NextRequest) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "report_export_company_billing",
@@ -30,7 +32,7 @@ export async function GET(request: NextRequest) {
   const fromIso = fromDate.toISOString()
   const toIso = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59, 999).toISOString()
 
-  const [{ data: invoices }, { data: companies }] = await Promise.all([
+  const [{ data: fetchedInvoices }, { data: companies }] = await Promise.all([
     supabase
       .from("invoices")
       .select(
@@ -39,7 +41,9 @@ export async function GET(request: NextRequest) {
       )
       .eq("payer_type", "company")
       .gte("created_at", fromIso)
-      .lte("created_at", toIso),
+      .lte("created_at", toIso)
+      .order("created_at", { ascending: false })
+      .limit(EXPORT_ROW_LIMIT + 1),
     supabase.from("companies").select("id, name"),
   ])
 
@@ -76,7 +80,9 @@ interface CompanyLite {
   name: string | null
 }
 
-  let filteredInvoices = ((invoices || []) as unknown) as InvoiceRow[]
+  const invoices = ((fetchedInvoices || []) as unknown) as InvoiceRow[]
+  const isQueryTruncated = invoices.length > EXPORT_ROW_LIMIT
+  let filteredInvoices = invoices.slice(0, EXPORT_ROW_LIMIT)
 
   if (selectedCompanyId) {
     filteredInvoices = filteredInvoices.filter((inv) => (inv.company_id as string | null) === selectedCompanyId)
@@ -200,6 +206,8 @@ interface CompanyLite {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename=company_billing_${new Date().toISOString()}.csv`,
+        "X-Export-Truncated": String(isQueryTruncated),
+        "X-Export-Row-Limit": String(EXPORT_ROW_LIMIT),
         ...NO_STORE_DOWNLOAD_HEADERS,
       },
     })

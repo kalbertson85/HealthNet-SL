@@ -3,6 +3,8 @@ import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middlewar
 import { enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
+const EXPORT_ROW_LIMIT = 5_000
+
 export async function GET(request: NextRequest) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "report_export_company_insurance",
@@ -22,7 +24,8 @@ export async function GET(request: NextRequest) {
   startOfMonth.setDate(1)
   startOfMonth.setHours(0, 0, 0, 0)
 
-  const [{ data: companies }, { data: employees }, { data: dependents }, { data: visits }] = await Promise.all([
+  const [{ data: companies }, { data: fetchedEmployees }, { data: fetchedDependents }, { data: fetchedVisits }] =
+    await Promise.all([
     supabase
       .from("companies")
       .select("id, name")
@@ -30,16 +33,28 @@ export async function GET(request: NextRequest) {
     supabase
       .from("company_employees")
       .select("id, company_id, status, insurance_expiry_date")
-      .order("company_id"),
+      .order("company_id")
+      .limit(EXPORT_ROW_LIMIT + 1),
     supabase
       .from("employee_dependents")
       .select("id, employee_id, status, insurance_expiry_date")
-      .order("employee_id"),
+      .order("employee_id")
+      .limit(EXPORT_ROW_LIMIT + 1),
     supabase
       .from("visits")
       .select("id, patient_id, created_at, assigned_company_id")
-      .gte("created_at", startOfMonth.toISOString()),
+      .gte("created_at", startOfMonth.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(EXPORT_ROW_LIMIT + 1),
   ])
+
+  const employees = (fetchedEmployees || []).slice(0, EXPORT_ROW_LIMIT)
+  const dependents = (fetchedDependents || []).slice(0, EXPORT_ROW_LIMIT)
+  const visits = (fetchedVisits || []).slice(0, EXPORT_ROW_LIMIT)
+  const isQueryTruncated =
+    (fetchedEmployees || []).length > EXPORT_ROW_LIMIT ||
+    (fetchedDependents || []).length > EXPORT_ROW_LIMIT ||
+    (fetchedVisits || []).length > EXPORT_ROW_LIMIT
 
   const companyMap = new Map<
     string,
@@ -132,6 +147,8 @@ export async function GET(request: NextRequest) {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename=company_insurance_${new Date().toISOString()}.csv`,
+        "X-Export-Truncated": String(isQueryTruncated),
+        "X-Export-Row-Limit": String(EXPORT_ROW_LIMIT),
         ...NO_STORE_DOWNLOAD_HEADERS,
       },
     })

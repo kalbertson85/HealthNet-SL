@@ -95,12 +95,12 @@ export default function UpdatePasswordPage() {
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4" aria-label="Update password form">
               {error && (
-                <Alert variant="destructive">
+                <Alert variant="destructive" aria-live="assertive">
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
               {success && (
-                <Alert>
+                <Alert aria-live="polite">
                   <AlertDescription>{success}</AlertDescription>
                 </Alert>
               )}
@@ -116,6 +116,7 @@ export default function UpdatePasswordPage() {
                 <Input
                   id="new_password"
                   type="password"
+                  autoComplete="new-password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="Enter a new password"
@@ -129,6 +130,7 @@ export default function UpdatePasswordPage() {
                 <Input
                   id="confirm_password"
                   type="password"
+                  autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter the new password"

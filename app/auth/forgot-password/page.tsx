@@ -134,12 +134,12 @@ export default function ForgotPasswordPage() {
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4" aria-label="Forgot password form">
               {error && (
-                <Alert variant="destructive">
+                <Alert variant="destructive" aria-live="assertive">
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
               {success && (
-                <Alert>
+                <Alert aria-live="polite">
                   <AlertDescription>{success}</AlertDescription>
                 </Alert>
               )}
@@ -158,6 +158,7 @@ export default function ForgotPasswordPage() {
                 <Input
                   id="email"
                   type="email"
+                  autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"

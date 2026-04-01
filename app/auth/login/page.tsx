@@ -84,14 +84,14 @@ function LoginPageContent() {
               <CardContent className="px-0 pb-0">
                 <form onSubmit={handleLogin} className="space-y-4" aria-label="HealthNet-SL HMS login form">
                   {isBlocked && (
-                    <Alert variant="destructive">
+                    <Alert variant="destructive" aria-live="assertive">
                       <AlertDescription>
                         Your account has been disabled. Please contact your hospital administrator to regain access.
                       </AlertDescription>
                     </Alert>
                   )}
                   {error && (
-                    <Alert variant="destructive">
+                    <Alert variant="destructive" aria-live="assertive">
                       <AlertDescription>{error}</AlertDescription>
                     </Alert>
                   )}
@@ -101,6 +101,7 @@ function LoginPageContent() {
                     <Input
                       id="email"
                       type="email"
+                      autoComplete="email"
                       placeholder="doctor@hospital.sl"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -114,6 +115,7 @@ function LoginPageContent() {
                     <Input
                       id="password"
                       type="password"
+                      autoComplete="current-password"
                       placeholder="Enter your password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}

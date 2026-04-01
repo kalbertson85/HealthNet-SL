@@ -9,13 +9,25 @@ import { TableCard } from "@/components/table-card"
 
 export const revalidate = 0
 
+const PAGE_SIZE = 50
+const PAGE_SCAN_LIMIT = 500
+
 interface AppointmentRow {
   id: string
   appointment_date: string
   appointment_time: string
   status: string
   reason: string | null
-  patients?: { full_name?: string | null; patient_number?: string | null } | null
+  patients?:
+    | {
+        full_name?: string | null
+        patient_number?: string | null
+      }
+    | Array<{
+        full_name?: string | null
+        patient_number?: string | null
+      }>
+    | null
   doctor_id: string
 }
 
@@ -24,6 +36,16 @@ interface AppointmentsPageSearchParams {
   from?: string
   to?: string
   status?: string
+  page?: string
+}
+
+function normalizePatient(
+  relation: AppointmentRow["patients"],
+): { full_name?: string | null; patient_number?: string | null } | null {
+  if (!relation) {
+    return null
+  }
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
 }
 
 export default async function AppointmentsPage({
@@ -51,11 +73,42 @@ export default async function AppointmentsPage({
   const fromDate = (sp.from || "").trim()
   const toDate = (sp.to || "").trim()
   const statusFilter = (sp.status || "all").trim().toLowerCase()
+  const parsedPage = Number.parseInt(sp.page || "1", 10)
+  const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1
+  const from = (currentPage - 1) * PAGE_SIZE
+  const to = from + PAGE_SIZE
+  const scanCapReached = to >= PAGE_SCAN_LIMIT
+
+  const buildPageHref = (page: number) => {
+    const qs = new URLSearchParams()
+    if (doctorFilterId) {
+      qs.set("doctor_id", doctorFilterId)
+    }
+    if (fromDate) {
+      qs.set("from", fromDate)
+    }
+    if (toDate) {
+      qs.set("to", toDate)
+    }
+    if (statusFilter && statusFilter !== "all") {
+      qs.set("status", statusFilter)
+    }
+    if (page > 1) {
+      qs.set("page", String(page))
+    }
+    const queryString = qs.toString()
+    return queryString ? `/dashboard/appointments?${queryString}` : "/dashboard/appointments"
+  }
 
   let appointmentsQuery = supabase
     .from("appointments")
     .select(`
-      *,
+      id,
+      appointment_date,
+      appointment_time,
+      status,
+      reason,
+      doctor_id,
       patients(full_name, patient_number)
     `)
 
@@ -83,7 +136,10 @@ export default async function AppointmentsPage({
     { data: appointments, error: appointmentsError },
     { data: doctors, error: doctorsError },
   ] = await Promise.all([
-    appointmentsQuery.order("appointment_date", { ascending: true }).order("appointment_time", { ascending: true }),
+    appointmentsQuery
+      .order("appointment_date", { ascending: true })
+      .order("appointment_time", { ascending: true })
+      .range(from, Math.min(to, PAGE_SCAN_LIMIT) - 1),
     supabase.from("profiles").select("id, full_name").eq("role", "doctor").order("full_name"),
   ])
 
@@ -110,6 +166,7 @@ export default async function AppointmentsPage({
   const upcomingAppointments = (appointments || []).filter(
     (apt: AppointmentRow) => apt.appointment_date !== today,
   )
+  const hasNextPage = (appointments?.length || 0) === PAGE_SIZE && !scanCapReached
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -217,6 +274,11 @@ export default async function AppointmentsPage({
           </div>
         </form>
       </div>
+      {scanCapReached ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Showing the first {PAGE_SCAN_LIMIT} matching appointments. Narrow your filters to inspect older records.
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -260,8 +322,10 @@ export default async function AppointmentsPage({
                       <TableCell className="font-medium">{appointment.appointment_time}</TableCell>
                       <TableCell>
                         <div>
-                          <p className="font-medium">{appointment.patients?.full_name}</p>
-                          <p className="text-sm text-muted-foreground">{appointment.patients?.patient_number}</p>
+                          <p className="font-medium">{normalizePatient(appointment.patients)?.full_name}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {normalizePatient(appointment.patients)?.patient_number}
+                          </p>
                         </div>
                       </TableCell>
                       <TableCell>{doctorsById.get(appointment.doctor_id) ?? "-"}</TableCell>
@@ -327,8 +391,10 @@ export default async function AppointmentsPage({
                       <TableCell className="font-medium">{appointment.appointment_time}</TableCell>
                       <TableCell>
                         <div>
-                          <p className="font-medium">{appointment.patients?.full_name}</p>
-                          <p className="text-sm text-muted-foreground">{appointment.patients?.patient_number}</p>
+                          <p className="font-medium">{normalizePatient(appointment.patients)?.full_name}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {normalizePatient(appointment.patients)?.patient_number}
+                          </p>
                         </div>
                       </TableCell>
                       <TableCell>{doctorsById.get(appointment.doctor_id) ?? "-"}</TableCell>
@@ -352,6 +418,20 @@ export default async function AppointmentsPage({
                 )}
               </TableBody>
             </Table>
+            <div className="mt-4 flex items-center justify-between gap-2 text-sm">
+              <span className="text-muted-foreground">
+                Page {currentPage}
+                {scanCapReached ? ` of max ${Math.ceil(PAGE_SCAN_LIMIT / PAGE_SIZE)}` : ""}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button asChild size="sm" variant="outline" disabled={currentPage <= 1}>
+                  <Link href={buildPageHref(currentPage - 1)}>Previous</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline" disabled={!hasNextPage}>
+                  <Link href={buildPageHref(currentPage + 1)}>Next</Link>
+                </Button>
+              </div>
+            </div>
           </TableCard>
         </CardContent>
       </Card>

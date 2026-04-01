@@ -10,6 +10,9 @@ import { TableCard } from "@/components/table-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 
+const PAGE_SIZE = 25
+const PAGE_SCAN_LIMIT = 250
+
 interface AdmissionRow {
   id: string
   admission_number: string
@@ -17,14 +20,74 @@ interface AdmissionRow {
   status: string
   patient_id: string
   visit_id?: string | null
-  patients?: { full_name?: string | null; patient_number?: string | null } | null
-  wards?: { name?: string | null } | null
-  beds?: { bed_number?: string | null } | null
-  profiles?: { full_name?: string | null } | null
+  patients?:
+    | {
+        full_name?: string | null
+        patient_number?: string | null
+      }
+    | Array<{
+        full_name?: string | null
+        patient_number?: string | null
+      }>
+    | null
+  wards?:
+    | {
+        name?: string | null
+      }
+    | Array<{
+        name?: string | null
+      }>
+    | null
+  beds?:
+    | {
+        bed_number?: string | null
+      }
+    | Array<{
+        bed_number?: string | null
+      }>
+    | null
+  profiles?:
+    | {
+        full_name?: string | null
+      }
+    | Array<{
+        full_name?: string | null
+      }>
+    | null
   visits?: {
     is_free_health_care?: boolean | null
-    facilities?: { name?: string | null; code?: string | null } | null
-  } | null
+    facilities?:
+      | {
+          name?: string | null
+          code?: string | null
+        }
+      | Array<{
+          name?: string | null
+          code?: string | null
+        }>
+      | null
+  } | Array<{
+    is_free_health_care?: boolean | null
+    facilities?:
+      | {
+          name?: string | null
+          code?: string | null
+        }
+      | Array<{
+          name?: string | null
+          code?: string | null
+        }>
+      | null
+  }> | null
+}
+
+interface WardRow {
+  id: string
+  name: string
+  ward_number: string
+  total_beds: number
+  available_beds: number
+  status: string
 }
 
 interface BedRow {
@@ -35,7 +98,14 @@ interface BedRow {
   status: string
 }
 
-export default async function InpatientPage() {
+function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
+  if (!relation) {
+    return null
+  }
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
+export default async function InpatientPage(props: { searchParams?: Promise<{ page?: string }> }) {
   const supabase = await createServerClient()
 
   const { user, profile } = await getSessionUserAndProfile()
@@ -48,13 +118,19 @@ export default async function InpatientPage() {
   if (!can(rbacUser, "inpatient.manage")) {
     redirect("/dashboard")
   }
+  const sp = props.searchParams ? await props.searchParams : undefined
+  const parsedPage = Number.parseInt(sp?.page || "1", 10)
+  const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1
+  const from = (currentPage - 1) * PAGE_SIZE
+  const to = from + PAGE_SIZE
+  const scanCapReached = to >= PAGE_SCAN_LIMIT
 
   // Fetch admissions, wards, beds, and visit context (FHC + facility)
   const [{ data: admissions }, { data: wards }, { data: beds }] = await Promise.all([
     supabase
       .from("admissions")
       .select(`
-        *,
+        id, admission_number, admission_date, status, patient_id, visit_id,
         patients(full_name, patient_number),
         wards(name, ward_number),
         beds(bed_number),
@@ -62,10 +138,12 @@ export default async function InpatientPage() {
         visits(is_free_health_care, facilities(name, code))
       `)
       .order("admission_date", { ascending: false })
-      .limit(50),
-    supabase.from("wards").select("*").order("ward_number"),
-    supabase.from("beds").select("*").order("ward_id, bed_number"),
+      .range(from, Math.min(to, PAGE_SCAN_LIMIT) - 1),
+    supabase.from("wards").select("id, name, ward_number, total_beds, available_beds, status").order("ward_number"),
+    supabase.from("beds").select("id, ward_id, bed_number, bed_type, status").order("ward_id, bed_number"),
   ])
+  const hasNextPage = (admissions?.length || 0) === PAGE_SIZE && !scanCapReached
+  const buildPageHref = (page: number) => (page <= 1 ? "/dashboard/inpatient" : `/dashboard/inpatient?page=${page}`)
 
   return (
     <div className="space-y-8">
@@ -81,10 +159,15 @@ export default async function InpatientPage() {
           </Link>
         </Button>
       </div>
+      {scanCapReached ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Showing the first {PAGE_SCAN_LIMIT} admissions. Use narrower time windows for older records.
+        </div>
+      ) : null}
 
       {/* Wards Overview */}
       <div className="grid gap-4 md:grid-cols-3">
-        {wards?.map((ward) => {
+        {(wards as WardRow[] | null | undefined)?.map((ward) => {
           const occupancyRate =
             ward.total_beds > 0 ? (((ward.total_beds - ward.available_beds) / ward.total_beds) * 100).toFixed(0) : 0
 
@@ -174,12 +257,12 @@ export default async function InpatientPage() {
                       <TableCell className="font-medium">{admission.admission_number}</TableCell>
                       <TableCell>
                         <div>
-                          <p className="font-medium">{admission.patients?.full_name}</p>
-                          <p className="text-sm text-muted-foreground">{admission.patients?.patient_number}</p>
+                          <p className="font-medium">{normalizeSingle(admission.patients)?.full_name}</p>
+                          <p className="text-sm text-muted-foreground">{normalizeSingle(admission.patients)?.patient_number}</p>
                         </div>
                       </TableCell>
                       <TableCell>
-                        {admission.wards?.name} - Bed {admission.beds?.bed_number}
+                        {normalizeSingle(admission.wards)?.name} - Bed {normalizeSingle(admission.beds)?.bed_number}
                         {admission.visit_id && (
                           <div className="mt-1 text-xs">
                             <a
@@ -193,21 +276,23 @@ export default async function InpatientPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1 text-xs">
-                          {admission.visits?.is_free_health_care && (
+                          {normalizeSingle(admission.visits)?.is_free_health_care && (
                             <Badge variant="secondary" className="w-fit text-[11px]">
                               Free Health Care
                             </Badge>
                           )}
-                          {admission.visits?.facilities?.name && (
+                          {normalizeSingle(normalizeSingle(admission.visits)?.facilities)?.name && (
                             <span className="text-muted-foreground">
-                              {admission.visits.facilities.name}
-                              {admission.visits.facilities.code ? ` (${admission.visits.facilities.code})` : ""}
+                              {normalizeSingle(normalizeSingle(admission.visits)?.facilities)?.name}
+                              {normalizeSingle(normalizeSingle(admission.visits)?.facilities)?.code
+                                ? ` (${normalizeSingle(normalizeSingle(admission.visits)?.facilities)?.code})`
+                                : ""}
                             </span>
                           )}
                         </div>
                       </TableCell>
                       <TableCell>{new Date(admission.admission_date).toLocaleDateString()}</TableCell>
-                      <TableCell>Dr. {admission.profiles?.full_name}</TableCell>
+                      <TableCell>Dr. {normalizeSingle(admission.profiles)?.full_name}</TableCell>
                       <TableCell>
                         <Badge variant={admission.status === "active" ? "default" : "secondary"}>
                           {admission.status}
@@ -252,13 +337,27 @@ export default async function InpatientPage() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground">
                       No admissions found
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
+            <div className="mt-4 flex items-center justify-between gap-2 text-sm">
+              <span className="text-muted-foreground">
+                Page {currentPage}
+                {scanCapReached ? ` of max ${Math.ceil(PAGE_SCAN_LIMIT / PAGE_SIZE)}` : ""}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button asChild size="sm" variant="outline" disabled={currentPage <= 1}>
+                  <Link href={buildPageHref(currentPage - 1)}>Previous</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline" disabled={!hasNextPage}>
+                  <Link href={buildPageHref(currentPage + 1)}>Next</Link>
+                </Button>
+              </div>
+            </div>
           </TableCard>
         </CardContent>
       </Card>

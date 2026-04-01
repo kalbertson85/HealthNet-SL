@@ -27,6 +27,96 @@ interface NursingNote {
   created_at: string
 }
 
+interface AdmissionDetailRow {
+  id: string
+  admission_number: string
+  admission_date: string
+  admission_reason: string | null
+  diagnosis: string | null
+  treatment_plan: string | null
+  discharge_date: string | null
+  discharge_summary: string | null
+  discharge_instructions: string | null
+  emergency_admission: boolean | null
+  status: string
+  bed_id: string | null
+  ward_id: string | null
+  visit_id: string | null
+  patients?:
+    | {
+        full_name?: string | null
+        patient_number?: string | null
+        phone_number?: string | null
+      }
+    | Array<{
+        full_name?: string | null
+        patient_number?: string | null
+        phone_number?: string | null
+      }>
+    | null
+  wards?:
+    | {
+        name?: string | null
+        ward_number?: string | null
+      }
+    | Array<{
+        name?: string | null
+        ward_number?: string | null
+      }>
+    | null
+  beds?:
+    | {
+        bed_number?: string | null
+        bed_type?: string | null
+      }
+    | Array<{
+        bed_number?: string | null
+        bed_type?: string | null
+      }>
+    | null
+  profiles?:
+    | {
+        full_name?: string | null
+      }
+    | Array<{
+        full_name?: string | null
+      }>
+    | null
+  visits?:
+    | {
+        is_free_health_care?: boolean | null
+        facilities?:
+          | {
+              name?: string | null
+              code?: string | null
+            }
+          | Array<{
+              name?: string | null
+              code?: string | null
+            }>
+          | null
+      }
+    | Array<{
+        is_free_health_care?: boolean | null
+        facilities?:
+          | {
+              name?: string | null
+              code?: string | null
+            }
+          | Array<{
+              name?: string | null
+              code?: string | null
+            }>
+          | null
+      }>
+    | null
+}
+
+function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
+  if (!relation) return null
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
 export default async function AdmissionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
 
@@ -35,7 +125,9 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
   const { data: admission } = await supabase
     .from("admissions")
     .select(`
-      *,
+      id, admission_number, admission_date, admission_reason, diagnosis, treatment_plan,
+      discharge_date, discharge_summary, discharge_instructions,
+      emergency_admission, status, bed_id, ward_id, visit_id,
       patients(full_name, patient_number, phone_number),
       wards(name, ward_number),
       beds(bed_number, bed_type),
@@ -48,18 +140,27 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
   if (!admission) {
     notFound()
   }
+  const admissionRow = admission as AdmissionDetailRow
+  const admissionPatient = normalizeSingle(admissionRow.patients)
+  const admissionWard = normalizeSingle(admissionRow.wards)
+  const admissionBed = normalizeSingle(admissionRow.beds)
+  const admissionDoctor = normalizeSingle(admissionRow.profiles)
+  const admissionVisit = normalizeSingle(admissionRow.visits)
+  const admissionFacility = normalizeSingle(admissionVisit?.facilities)
 
   // Fetch vitals
   const { data: vitals } = await supabase
     .from("admission_vitals")
-    .select("*")
+    .select(
+      "id, recorded_at, blood_pressure_systolic, blood_pressure_diastolic, pulse_rate, temperature, oxygen_saturation",
+    )
     .eq("admission_id", id)
     .order("recorded_at", { ascending: false })
     .limit(5)
 
   const { data: nursingNotes } = await supabase
     .from("nursing_notes")
-    .select("*")
+    .select("id, admission_id, recorded_by, note_type, note, created_at")
     .eq("admission_id", id)
     .order("created_at", { ascending: false })
     .limit(20)
@@ -72,11 +173,11 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
     is_free_health_care: boolean | null
   } | null = null
 
-  if (admission.visit_id) {
+  if (admissionRow.visit_id) {
     const { data } = await supabase
       .from("visits")
       .select("id, facility_id, payer_category, is_free_health_care")
-      .eq("id", admission.visit_id as string)
+      .eq("id", admissionRow.visit_id as string)
       .maybeSingle()
 
     visitMeta = (data || null) as {
@@ -131,20 +232,20 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
       .eq("id", id)
 
     // Update bed status
-    await supabase.from("beds").update({ status: "available" }).eq("id", admission.bed_id)
+    await supabase.from("beds").update({ status: "available" }).eq("id", admissionRow.bed_id)
 
     // Update ward available beds
-    const { data: ward } = await supabase.from("wards").select("available_beds").eq("id", admission.ward_id).single()
+    const { data: ward } = await supabase.from("wards").select("available_beds").eq("id", admissionRow.ward_id).single()
 
     if (ward) {
       await supabase
         .from("wards")
         .update({ available_beds: (ward.available_beds || 0) + 1 })
-        .eq("id", admission.ward_id)
+        .eq("id", admissionRow.ward_id)
     }
 
     // If this admission is linked to a visit, reflect completion on that visit
-    const visitId = (admission.visit_id as string | null) ?? null
+    const visitId = (admissionRow.visit_id as string | null) ?? null
     if (visitId) {
       const { data: beforeVisit } = await supabase
         .from("visits")
@@ -172,8 +273,8 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
     redirect(`/dashboard/inpatient/${id}`)
   }
 
-  const daysAdmitted = admission.admission_date
-    ? Math.floor((new Date().getTime() - new Date(admission.admission_date).getTime()) / 86400000)
+  const daysAdmitted = admissionRow.admission_date
+    ? Math.floor((new Date().getTime() - new Date(admissionRow.admission_date).getTime()) / 86400000)
     : 0
 
   return (
@@ -182,28 +283,28 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
         <div>
           <h1 className="text-balance text-3xl font-bold tracking-tight">Admission Details</h1>
           <p className="text-pretty text-muted-foreground flex flex-wrap items-center gap-2">
-            <span>Admission #{admission.admission_number}</span>
-            {admission.visits?.is_free_health_care && (
+            <span>Admission #{admissionRow.admission_number}</span>
+            {admissionVisit?.is_free_health_care && (
               <Badge variant="secondary" className="text-[11px]">
                 Free Health Care
               </Badge>
             )}
-            {admission.visits?.facilities?.name && (
+            {admissionFacility?.name && (
               <span className="text-xs text-muted-foreground">
-                {admission.visits.facilities.name}
-                {admission.visits.facilities.code ? ` (${admission.visits.facilities.code})` : ""}
+                {admissionFacility.name}
+                {admissionFacility.code ? ` (${admissionFacility.code})` : ""}
               </span>
             )}
           </p>
         </div>
         <div className="flex gap-2">
-          {admission.emergency_admission && (
+          {admissionRow.emergency_admission && (
             <Badge variant="destructive" className="flex items-center gap-1">
               <AlertCircle className="h-3 w-3" />
               Emergency
             </Badge>
           )}
-          <Badge variant={admission.status === "admitted" ? "default" : "secondary"}>{admission.status}</Badge>
+          <Badge variant={admissionRow.status === "admitted" ? "default" : "secondary"}>{admissionRow.status}</Badge>
         </div>
       </div>
 
@@ -222,9 +323,9 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
             <CardTitle>Ward & Bed</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{admission.wards?.name}</p>
+            <p className="text-2xl font-bold">{admissionWard?.name}</p>
             <p className="text-sm text-muted-foreground">
-              Bed {admission.beds?.bed_number} ({admission.beds?.bed_type})
+              Bed {admissionBed?.bed_number} ({admissionBed?.bed_type})
             </p>
           </CardContent>
         </Card>
@@ -234,8 +335,8 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
             <CardTitle>Admission Date</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-xl font-bold">{new Date(admission.admission_date).toLocaleDateString()}</p>
-            <p className="text-sm text-muted-foreground">{new Date(admission.admission_date).toLocaleTimeString()}</p>
+            <p className="text-xl font-bold">{new Date(admissionRow.admission_date).toLocaleDateString()}</p>
+            <p className="text-sm text-muted-foreground">{new Date(admissionRow.admission_date).toLocaleTimeString()}</p>
           </CardContent>
         </Card>
       </div>
@@ -249,15 +350,15 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Name</p>
-              <p className="text-lg font-medium">{admission.patients?.full_name}</p>
+              <p className="text-lg font-medium">{admissionPatient?.full_name}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Patient Number</p>
-              <p>{admission.patients?.patient_number}</p>
+              <p>{admissionPatient?.patient_number}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Phone</p>
-              <p>{admission.patients?.phone_number || "N/A"}</p>
+              <p>{admissionPatient?.phone_number || "N/A"}</p>
             </div>
           </CardContent>
         </Card>
@@ -270,7 +371,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Admitting Doctor</p>
-              <p>Dr. {admission.profiles?.full_name}</p>
+              <p>Dr. {admissionDoctor?.full_name}</p>
             </div>
           </CardContent>
         </Card>
@@ -283,7 +384,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
         </CardHeader>
         <CardContent className="space-y-1 text-xs font-mono text-muted-foreground">
           <p>
-            visit_id: {visitMeta?.id ?? ((admission.visit_id as string | null) || "none")}
+            visit_id: {visitMeta?.id ?? ((admissionRow.visit_id as string | null) || "none")}
           </p>
           <p>facility_id: {visitMeta?.facility_id ?? "none"}</p>
           <p>payer_category: {visitMeta?.payer_category ?? "unknown"}</p>
@@ -299,17 +400,17 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
         <CardContent className="space-y-4">
           <div>
             <p className="text-sm font-medium text-muted-foreground">Reason for Admission</p>
-            <p>{admission.admission_reason}</p>
+            <p>{admissionRow.admission_reason}</p>
           </div>
           <Separator />
           <div>
             <p className="text-sm font-medium text-muted-foreground">Diagnosis</p>
-            <p>{admission.diagnosis || "Not specified"}</p>
+            <p>{admissionRow.diagnosis || "Not specified"}</p>
           </div>
           <Separator />
           <div>
             <p className="text-sm font-medium text-muted-foreground">Treatment Plan</p>
-            <p className="whitespace-pre-wrap">{admission.treatment_plan || "Not specified"}</p>
+            <p className="whitespace-pre-wrap">{admissionRow.treatment_plan || "Not specified"}</p>
           </div>
         </CardContent>
       </Card>
@@ -358,7 +459,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
             <p className="text-sm text-muted-foreground">No nursing notes recorded yet.</p>
           )}
 
-          {admission.status === "admitted" && (
+          {admissionRow.status === "admitted" && (
             <form action={addNursingNote} className="space-y-3 pt-2 border-t mt-2">
               <div className="grid gap-3 md:grid-cols-3 items-end">
                 <div className="space-y-2 md:col-span-1">
@@ -399,7 +500,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
         </CardContent>
       </Card>
 
-      {admission.status === "admitted" && (
+      {admissionRow.status === "admitted" && (
         <Card>
           <CardHeader>
             <CardTitle>Discharge Patient</CardTitle>
@@ -439,7 +540,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
         </Card>
       )}
 
-      {admission.status === "discharged" && admission.discharge_summary && (
+      {admissionRow.status === "discharged" && admissionRow.discharge_summary && (
         <Card>
           <CardHeader>
             <CardTitle>Discharge Information</CardTitle>
@@ -448,17 +549,17 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Discharge Date</p>
-              <p>{admission.discharge_date ? new Date(admission.discharge_date).toLocaleString() : "N/A"}</p>
+              <p>{admissionRow.discharge_date ? new Date(admissionRow.discharge_date).toLocaleString() : "N/A"}</p>
             </div>
             <Separator />
             <div>
               <p className="text-sm font-medium text-muted-foreground">Discharge Summary</p>
-              <p className="whitespace-pre-wrap">{admission.discharge_summary}</p>
+              <p className="whitespace-pre-wrap">{admissionRow.discharge_summary}</p>
             </div>
             <Separator />
             <div>
               <p className="text-sm font-medium text-muted-foreground">Discharge Instructions</p>
-              <p className="whitespace-pre-wrap">{admission.discharge_instructions}</p>
+              <p className="whitespace-pre-wrap">{admissionRow.discharge_instructions}</p>
             </div>
           </CardContent>
         </Card>

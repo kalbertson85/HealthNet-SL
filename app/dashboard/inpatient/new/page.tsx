@@ -22,11 +22,15 @@ export default async function NewAdmissionPage(props: { searchParams: Promise<{ 
   const [{ data: patients }, { data: doctors }, { data: wards }] = await Promise.all([
     supabase.from("patients").select("id, full_name, patient_number").eq("status", "active").order("full_name"),
     supabase.from("profiles").select("id, full_name").eq("role", "doctor").order("full_name"),
-    supabase.from("wards").select("*").eq("status", "active").order("ward_number"),
+    supabase.from("wards").select("id, name, ward_number").eq("status", "active").order("ward_number"),
   ])
 
   // Fetch available beds
-  const { data: beds } = await supabase.from("beds").select("*").eq("status", "available").order("ward_id, bed_number")
+  const { data: beds } = await supabase
+    .from("beds")
+    .select("id, ward_id, bed_number, bed_type")
+    .eq("status", "available")
+    .order("ward_id, bed_number")
 
   async function createAdmission(formData: FormData) {
     "use server"
@@ -43,8 +47,8 @@ export default async function NewAdmissionPage(props: { searchParams: Promise<{ 
     const bedId = formData.get("bed_id") as string
     const visitId = ((formData.get("visit_id") as string | null) || "").trim() || null
 
-    // Get bed and ward info
-    const { data: bed } = await supabase.from("beds").select("*, wards(*)").eq("id", bedId).single()
+    // Get selected bed and linked ward.
+    const { data: bed } = await supabase.from("beds").select("id, ward_id").eq("id", bedId).single()
 
     const admissionData = {
       patient_id: formData.get("patient_id") as string,
@@ -72,11 +76,14 @@ export default async function NewAdmissionPage(props: { searchParams: Promise<{ 
     await supabase.from("beds").update({ status: "occupied" }).eq("id", bedId)
 
     // Update ward available beds count
-    if (bed?.wards) {
-      await supabase
-        .from("wards")
-        .update({ available_beds: (bed.wards.available_beds || 1) - 1 })
-        .eq("id", bed.ward_id)
+    if (bed?.ward_id) {
+      const { data: ward } = await supabase.from("wards").select("id, available_beds").eq("id", bed.ward_id).single()
+      if (ward) {
+        await supabase
+          .from("wards")
+          .update({ available_beds: Math.max(0, (ward.available_beds || 0) - 1) })
+          .eq("id", bed.ward_id)
+      }
     }
 
     // If this admission is linked to a visit, reflect the admitted status on that visit

@@ -7,6 +7,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
+const PAGE_SIZE = 40
+const PAGE_SCAN_LIMIT = 400
+
 const typeIcons = {
   appointment: Calendar,
   lab_result: FileText,
@@ -48,7 +51,7 @@ async function markAllAsRead() {
     .eq("is_read", false)
 }
 
-export default async function NotificationsPage() {
+export default async function NotificationsPage(props: { searchParams?: Promise<{ page?: string }> }) {
   const supabase = await createServerClient()
   const {
     data: { user },
@@ -57,16 +60,35 @@ export default async function NotificationsPage() {
   if (!user) {
     redirect("/auth/login")
   }
+  const sp = props.searchParams ? await props.searchParams : undefined
+  const parsedPage = Number.parseInt(sp?.page || "1", 10)
+  const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1
+  const from = (currentPage - 1) * PAGE_SIZE
+  const to = from + PAGE_SIZE
+  const scanCapReached = to >= PAGE_SCAN_LIMIT
+  const maxPage = Math.ceil(PAGE_SCAN_LIMIT / PAGE_SIZE)
 
-  // Fetch notifications
-  const { data: notifications } = await supabase
-    .from("notifications")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(100)
+  const [{ data: notifications }, { count: totalCount }, { count: unreadCount }] = await Promise.all([
+    supabase
+      .from("notifications")
+      .select("id, title, message, type, priority, is_read, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .range(from, Math.min(to, PAGE_SCAN_LIMIT) - 1),
+    supabase.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+    supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("is_read", false),
+  ])
+  const boundedTotal = Math.min(totalCount || 0, PAGE_SCAN_LIMIT)
+  const boundedUnread = Math.min(unreadCount || 0, boundedTotal)
+  const boundedRead = Math.max(0, boundedTotal - boundedUnread)
+  const hasNextPage = currentPage * PAGE_SIZE < boundedTotal && !scanCapReached
+  const buildPageHref = (page: number) =>
+    page <= 1 ? "/dashboard/notifications" : `/dashboard/notifications?page=${page}`
 
-  const unreadCount = notifications?.filter((n) => !n.is_read).length || 0
   const unreadNotifications = notifications?.filter((n) => !n.is_read) || []
   const readNotifications = notifications?.filter((n) => n.is_read) || []
 
@@ -76,8 +98,8 @@ export default async function NotificationsPage() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Notifications</h1>
           <p className="text-muted-foreground">
-            {unreadCount > 0
-              ? `You have ${unreadCount} unread notification${unreadCount === 1 ? "" : "s"}`
+            {boundedUnread > 0
+              ? `You have ${boundedUnread} unread notification${boundedUnread === 1 ? "" : "s"}`
               : "All caught up!"}
           </p>
         </div>
@@ -85,7 +107,7 @@ export default async function NotificationsPage() {
           <Link href="/dashboard/notifications/settings">
             <Button variant="outline">Notification Settings</Button>
           </Link>
-          {unreadCount > 0 && (
+          {boundedUnread > 0 && (
             <form action={markAllAsRead}>
               <Button type="submit">
                 <CheckCheck className="mr-2 h-4 w-4" />
@@ -95,12 +117,17 @@ export default async function NotificationsPage() {
           )}
         </div>
       </div>
+      {scanCapReached || (totalCount || 0) > PAGE_SCAN_LIMIT ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Showing the latest {PAGE_SCAN_LIMIT} notifications. Use a narrower workflow to access older history.
+        </div>
+      ) : null}
 
       <Tabs defaultValue="unread" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="unread">Unread ({unreadCount})</TabsTrigger>
-          <TabsTrigger value="all">All ({notifications?.length || 0})</TabsTrigger>
-          <TabsTrigger value="read">Read ({readNotifications.length})</TabsTrigger>
+          <TabsTrigger value="unread">Unread ({boundedUnread})</TabsTrigger>
+          <TabsTrigger value="all">All ({boundedTotal})</TabsTrigger>
+          <TabsTrigger value="read">Read ({boundedRead})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="unread" className="space-y-4">
@@ -139,6 +166,20 @@ export default async function NotificationsPage() {
           )}
         </TabsContent>
       </Tabs>
+      <div className="flex items-center justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">
+          Page {currentPage}
+          {scanCapReached ? ` of max ${maxPage}` : ""}
+        </span>
+        <div className="flex items-center gap-2">
+          <Button asChild size="sm" variant="outline" disabled={currentPage <= 1}>
+            <Link href={buildPageHref(currentPage - 1)}>Previous</Link>
+          </Button>
+          <Button asChild size="sm" variant="outline" disabled={!hasNextPage}>
+            <Link href={buildPageHref(currentPage + 1)}>Next</Link>
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }

@@ -56,7 +56,7 @@ function LoginPageContent() {
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-sky-50 via-white to-emerald-50 flex items-center justify-center px-2 py-6 sm:px-4 sm:py-8">
-      <div className="w-full min-w-0 max-w-[calc(100vw-1rem)] sm:max-w-md overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xl md:max-w-6xl md:grid md:grid-cols-2">
+      <div className="w-full min-w-0 max-w-[calc(100vw-0.75rem)] sm:max-w-md overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xl md:max-w-6xl md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         {/* Left column: logo, branding and form */}
         <div className="flex min-w-0 flex-col justify-center gap-6 px-4 py-6 sm:gap-8 sm:px-8 sm:py-8 md:px-10 md:py-10">
           <header className="flex min-w-0 flex-col items-center justify-center gap-2 sm:flex-row sm:gap-3">
@@ -148,16 +148,16 @@ function LoginPageContent() {
               </CardContent>
             </Card>
 
-            <section className="mt-3 sm:mt-4 space-y-2 text-xs text-slate-600">
+            <section className="mt-3 space-y-2 text-xs text-slate-600 sm:mt-4">
               <p className="font-semibold text-slate-800">Purpose</p>
-              <p>
+              <p className="break-words">
                 A cloud-based hospital management platform that simplifies patient care, administration, and reporting
                 for Sierra Leone&apos;s hospitals.
               </p>
               <p className="mt-3 font-semibold text-slate-800">Target users</p>
-              <p>Public and private hospitals, health centers, district hospitals, and mission hospitals.</p>
+              <p className="break-words">Public and private hospitals, health centers, district hospitals, and mission hospitals.</p>
               <p className="mt-3 font-semibold text-slate-800">Core value</p>
-              <p>Efficient management, accurate data, and better patient outcomes.</p>
+              <p className="break-words">Efficient management, accurate data, and better patient outcomes.</p>
             </section>
           </div>
         </div>

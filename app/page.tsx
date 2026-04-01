@@ -16,8 +16,8 @@ export default async function HomePage() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-blue-50 via-white to-teal-50">
-      <div className="mx-auto w-full max-w-7xl px-3 py-16 sm:px-4">
+    <div className="min-h-screen w-full overflow-x-hidden bg-gradient-to-br from-blue-50 via-white to-teal-50">
+      <div className="mx-auto w-full min-w-0 max-w-7xl px-3 py-16 sm:px-4">
         {/* Header */}
         <div className="text-center mb-16">
           <div className="flex justify-center mb-6">
@@ -45,94 +45,100 @@ export default async function HomePage() {
         </div>
 
         {/* Features Grid */}
-        <div className="grid grid-cols-1 gap-6 mb-16 md:grid-cols-2 lg:grid-cols-4">
-          <Card>
+        <div className="mb-16 grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:grid-cols-4">
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <Users className="h-8 w-8 text-blue-600 mb-2" />
               <CardTitle>Patient Records</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>
+              <CardDescription className="break-words">
                 Complete patient records, demographics, medical history, and emergency contacts
               </CardDescription>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <Calendar className="h-8 w-8 text-teal-600 mb-2" />
               <CardTitle>Appointments</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>
+              <CardDescription className="break-words">
                 Schedule and manage appointments with doctors, track consultations and follow-ups
               </CardDescription>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <Pill className="h-8 w-8 text-purple-600 mb-2" />
               <CardTitle>Pharmacy & Prescriptions</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>
+              <CardDescription className="break-words">
                 Create prescriptions, manage pharmacy inventory, and track dispensed medications
               </CardDescription>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <TestTube className="h-8 w-8 text-pink-600 mb-2" />
               <CardTitle>Lab Management</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>Order lab tests, record results, and track diagnostic procedures</CardDescription>
+              <CardDescription className="break-words">
+                Order lab tests, record results, and track diagnostic procedures
+              </CardDescription>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <DollarSign className="h-8 w-8 text-green-600 mb-2" />
               <CardTitle>Billing & Finance</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>
+              <CardDescription className="break-words">
                 Generate invoices, track payments with mobile money support for Sierra Leone
               </CardDescription>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <BedDouble className="h-8 w-8 text-orange-600 mb-2" />
               <CardTitle>Inpatient Care</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>Manage ward admissions, bed assignments, and patient vitals monitoring</CardDescription>
+              <CardDescription className="break-words">
+                Manage ward admissions, bed assignments, and patient vitals monitoring
+              </CardDescription>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <Activity className="h-8 w-8 text-red-600 mb-2" />
               <CardTitle>Emergency & Queue</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>
+              <CardDescription className="break-words">
                 Priority-based triage assessment with color-coded emergency case management
               </CardDescription>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0 w-full">
             <CardHeader>
               <FileText className="h-8 w-8 text-blue-600 mb-2" />
               <CardTitle>Reports & SMS Alerts</CardTitle>
             </CardHeader>
             <CardContent>
-              <CardDescription>Comprehensive reporting with DHIS2 export for national health data</CardDescription>
+              <CardDescription className="break-words">
+                Comprehensive reporting with DHIS2 export for national health data
+              </CardDescription>
             </CardContent>
           </Card>
         </div>
@@ -185,7 +191,7 @@ export default async function HomePage() {
               and support.
             </p>
           </div>
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-6">
             <Card className="border border-blue-100 shadow-sm">
               <CardHeader>
                 <CardTitle>Starter</CardTitle>
@@ -256,7 +262,7 @@ export default async function HomePage() {
               HealthNet-SL HMS is designed together with clinicians, administrators, and pharmacists in Sierra Leone.
             </p>
           </div>
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-6">
             <Card className="shadow-sm">
               <CardContent className="pt-6 text-sm text-gray-700 space-y-3">
                 <p className="italic">

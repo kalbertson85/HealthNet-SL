@@ -45,7 +45,7 @@ export default async function HomePage() {
         </div>
 
         {/* Features Grid */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
+        <div className="grid grid-cols-1 gap-6 mb-16 md:grid-cols-2 lg:grid-cols-4">
           <Card>
             <CardHeader>
               <Users className="h-8 w-8 text-blue-600 mb-2" />
@@ -185,7 +185,7 @@ export default async function HomePage() {
               and support.
             </p>
           </div>
-          <div className="grid gap-6 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
             <Card className="border border-blue-100 shadow-sm">
               <CardHeader>
                 <CardTitle>Starter</CardTitle>
@@ -256,7 +256,7 @@ export default async function HomePage() {
               HealthNet-SL HMS is designed together with clinicians, administrators, and pharmacists in Sierra Leone.
             </p>
           </div>
-          <div className="grid gap-6 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
             <Card className="shadow-sm">
               <CardContent className="pt-6 text-sm text-gray-700 space-y-3">
                 <p className="italic">

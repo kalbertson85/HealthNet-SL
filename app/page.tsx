@@ -198,9 +198,11 @@ export default async function HomePage() {
                   <li>• Basic billing and invoices</li>
                   <li>• Single facility, limited users</li>
                 </ul>
-                <Button variant="outline" className="mt-2 w-full">
-                  Talk to sales
-                </Button>
+                <Link href="/contact" className="block">
+                  <Button variant="outline" className="mt-2 w-full">
+                    Talk to sales
+                  </Button>
+                </Link>
               </CardContent>
             </Card>
 
@@ -218,7 +220,9 @@ export default async function HomePage() {
                   <li>• Lab, pharmacy, inpatient and queue management</li>
                   <li>• SMS alerts and DHIS2-ready exports</li>
                 </ul>
-                <Button className="mt-2 w-full bg-primary hover:bg-primary/90">Request demo</Button>
+                <Link href="/auth/sign-up" className="block">
+                  <Button className="mt-2 w-full bg-primary hover:bg-primary/90">Request demo</Button>
+                </Link>
               </CardContent>
             </Card>
 
@@ -234,9 +238,11 @@ export default async function HomePage() {
                   <li>• Advanced analytics and multi-site support</li>
                   <li>• Integration with national eHealth systems</li>
                 </ul>
-                <Button variant="outline" className="mt-2 w-full">
-                  Book a consultation
-                </Button>
+                <Link href="/contact" className="block">
+                  <Button variant="outline" className="mt-2 w-full">
+                    Book a consultation
+                  </Button>
+                </Link>
               </CardContent>
             </Card>
           </div>
@@ -300,36 +306,36 @@ export default async function HomePage() {
               </p>
             </div>
             <nav className="flex flex-wrap gap-2 text-xs md:text-sm">
-              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
+              <Link href="/about" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 About
               </Link>
-              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
+              <Link href="/privacy" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 Privacy
               </Link>
-              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
+              <Link href="/terms" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 Terms
               </Link>
-              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
+              <Link href="/contact" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 Contact
               </Link>
             </nav>
             <div className="flex items-center gap-3 text-gray-500">
               <Link
-                href="#"
+                href="/contact#social"
                 aria-label="HealthNet-SL on Facebook"
                 className="inline-flex h-11 w-11 items-center justify-center rounded-md hover:text-primary"
               >
                 <Facebook className="h-4 w-4" />
               </Link>
               <Link
-                href="#"
+                href="/contact#social"
                 aria-label="HealthNet-SL on LinkedIn"
                 className="inline-flex h-11 w-11 items-center justify-center rounded-md hover:text-primary"
               >
                 <Linkedin className="h-4 w-4" />
               </Link>
               <Link
-                href="#"
+                href="/contact#social"
                 aria-label="HealthNet-SL on Twitter"
                 className="inline-flex h-11 w-11 items-center justify-center rounded-md hover:text-primary"
               >

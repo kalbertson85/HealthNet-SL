@@ -27,10 +27,13 @@ interface AuditLogsPageProps {
     action?: string
     from?: string
     to?: string
+    page?: string
   }>
 }
 
 export const revalidate = 0
+const PAGE_SIZE = 100
+const PAGE_SCAN_LIMIT = 1000
 
 export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps) {
   const supabase = await createServerClient()
@@ -52,12 +55,15 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
   const actionFilter = (sp?.action || "").trim() || null
   const fromFilter = (sp?.from || "").trim() || null
   const toFilter = (sp?.to || "").trim() || null
+  const currentPage = Math.max(1, Number.parseInt((sp?.page || "1").trim(), 10) || 1)
+  const from = (currentPage - 1) * PAGE_SIZE
+  const to = from + PAGE_SIZE
 
   let query = supabase
     .from("admin_audit_logs")
     .select("id, created_at, actor_user_id, target_user_id, action, old_role, new_role, old_status, new_status")
     .order("created_at", { ascending: false })
-    .limit(200)
+    .range(from, to)
 
   if (actorFilter) {
     query = query.eq("actor_user_id", actorFilter)
@@ -81,7 +87,10 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
     console.error("[v0] Error loading admin audit logs", error)
   }
 
-  const rows = (logs || []) as AdminAuditLogRow[]
+  const logRows = (logs || []) as AdminAuditLogRow[]
+  const rows = logRows.slice(0, PAGE_SIZE)
+  const hasNextPage = logRows.length > PAGE_SIZE
+  const isWindowCapped = to + 1 >= PAGE_SCAN_LIMIT
 
   const actorTargetIds: string[] = Array.from(
     new Set(
@@ -120,6 +129,18 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
     const p = profileMap.get(id)
     if (!p) return id
     return p.email ? `${p.name} <${p.email}>` : p.name
+  }
+
+  const buildQueryString = (page = 1) => {
+    const params = new URLSearchParams()
+    if (actorFilter) params.set("actor", actorFilter)
+    if (targetFilter) params.set("target", targetFilter)
+    if (actionFilter) params.set("action", actionFilter)
+    if (fromFilter) params.set("from", fromFilter)
+    if (toFilter) params.set("to", toFilter)
+    if (page > 1) params.set("page", String(page))
+    const query = params.toString()
+    return query ? `?${query}` : ""
   }
 
   return (
@@ -230,9 +251,14 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
       <Card>
         <CardHeader>
           <CardTitle>Recent admin actions</CardTitle>
-          <CardDescription>Showing up to 200 matching entries.</CardDescription>
+          <CardDescription>Showing up to {PAGE_SIZE} matching entries per page.</CardDescription>
         </CardHeader>
         <CardContent>
+          {isWindowCapped ? (
+            <div className="mb-3 rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Reached the scan window limit. Narrow your filters for older matching entries.
+            </div>
+          ) : null}
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -284,6 +310,32 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
                 )}
               </TableBody>
             </Table>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              Page {currentPage}
+              {rows.length > 0 ? ` · Showing ${rows.length} row${rows.length === 1 ? "" : "s"}` : ""}
+            </span>
+            <div className="flex items-center gap-2">
+              {currentPage > 1 ? (
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/dashboard/admin/audit-logs${buildQueryString(currentPage - 1)}`}>Previous</Link>
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled>
+                  Previous
+                </Button>
+              )}
+              {hasNextPage ? (
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/dashboard/admin/audit-logs${buildQueryString(currentPage + 1)}`}>Next</Link>
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" disabled>
+                  Next
+                </Button>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>

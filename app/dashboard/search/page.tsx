@@ -6,6 +6,57 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
+const SEARCH_RESULT_LIMIT = 10
+const SEARCH_RESULT_WINDOW = SEARCH_RESULT_LIMIT + 1
+const MAX_QUERY_LENGTH = 64
+
+type RelatedPatient = {
+  first_name?: string | null
+  last_name?: string | null
+  patient_number?: string | null
+}
+type PatientRow = {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  patient_number: string | null
+  phone: string | null
+  status: string | null
+}
+type AppointmentRow = {
+  id: string
+  appointment_date: string
+  appointment_time: string
+  status: string | null
+  reason: string | null
+  patient?: RelatedPatient | RelatedPatient[] | null
+}
+type PrescriptionRow = {
+  id: string
+  prescription_number: string | null
+  status: string | null
+  patient?: RelatedPatient | RelatedPatient[] | null
+}
+type InvoiceRow = {
+  id: string
+  invoice_number: string | null
+  status: string | null
+  patient?: RelatedPatient | RelatedPatient[] | null
+}
+
+function normalizeSearchQuery(value: string): string {
+  return value
+    .trim()
+    .slice(0, MAX_QUERY_LENGTH)
+    .replace(/[^\p{L}\p{N}\s\-_.@+]/gu, " ")
+    .replace(/\s+/g, " ")
+}
+
+function normalizeRelatedPatient(patient: RelatedPatient | RelatedPatient[] | null | undefined): RelatedPatient | null {
+  if (!patient) return null
+  return Array.isArray(patient) ? (patient[0] ?? null) : patient
+}
+
 export default async function GlobalSearchPage({
   searchParams,
 }: {
@@ -21,21 +72,27 @@ export default async function GlobalSearchPage({
   }
 
   const resolvedSearchParams = await searchParams
-  const query = resolvedSearchParams.q || ""
+  const rawQuery = resolvedSearchParams.q || ""
+  const query = normalizeSearchQuery(rawQuery)
+  const isQueryTooShort = query.length > 0 && query.length < 2
 
-  if (!query) {
+  if (!query || isQueryTooShort) {
     return (
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Global Search</h1>
-          <p className="text-muted-foreground">Search across all hospital records</p>
+          <p className="text-muted-foreground">
+            {isQueryTooShort ? "Enter at least 2 characters to search records." : "Search across all hospital records"}
+          </p>
         </div>
 
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Search className="h-12 w-12 text-muted-foreground mb-4" />
             <p className="text-muted-foreground text-center">
-              Enter a search term to find patients, appointments, prescriptions, and more
+              {isQueryTooShort
+                ? "Please type at least 2 characters."
+                : "Enter a search term to find patients, appointments, prescriptions, and more"}
             </p>
           </CardContent>
         </Card>
@@ -47,30 +104,40 @@ export default async function GlobalSearchPage({
   const [{ data: patients }, { data: appointments }, { data: prescriptions }, { data: invoices }] = await Promise.all([
     supabase
       .from("patients")
-      .select("*")
+      .select("id, first_name, last_name, patient_number, phone, status")
       .or(
         `first_name.ilike.%${query}%,last_name.ilike.%${query}%,patient_number.ilike.%${query}%,phone.ilike.%${query}%`,
       )
-      .limit(10),
+      .limit(SEARCH_RESULT_WINDOW),
     supabase
       .from("appointments")
-      .select("*, patient:patients(first_name, last_name, patient_number)")
+      .select("id, appointment_date, appointment_time, status, reason, patient:patients(first_name, last_name, patient_number)")
       .or(`reason.ilike.%${query}%`)
-      .limit(10),
+      .limit(SEARCH_RESULT_WINDOW),
     supabase
       .from("prescriptions")
-      .select("*, patient:patients(first_name, last_name, patient_number)")
+      .select("id, prescription_number, status, patient:patients(first_name, last_name, patient_number)")
       .ilike("prescription_number", `%${query}%`)
-      .limit(10),
+      .limit(SEARCH_RESULT_WINDOW),
     supabase
       .from("invoices")
-      .select("*, patient:patients(first_name, last_name, patient_number)")
+      .select("id, invoice_number, status, patient:patients(first_name, last_name, patient_number)")
       .ilike("invoice_number", `%${query}%`)
-      .limit(10),
+      .limit(SEARCH_RESULT_WINDOW),
   ])
 
+  const patientsSlice = ((patients || []) as PatientRow[]).slice(0, SEARCH_RESULT_LIMIT)
+  const appointmentsSlice = ((appointments || []) as AppointmentRow[]).slice(0, SEARCH_RESULT_LIMIT)
+  const prescriptionsSlice = ((prescriptions || []) as PrescriptionRow[]).slice(0, SEARCH_RESULT_LIMIT)
+  const invoicesSlice = ((invoices || []) as InvoiceRow[]).slice(0, SEARCH_RESULT_LIMIT)
+  const resultsCapped =
+    (patients?.length || 0) > SEARCH_RESULT_LIMIT ||
+    (appointments?.length || 0) > SEARCH_RESULT_LIMIT ||
+    (prescriptions?.length || 0) > SEARCH_RESULT_LIMIT ||
+    (invoices?.length || 0) > SEARCH_RESULT_LIMIT
+
   const totalResults =
-    (patients?.length || 0) + (appointments?.length || 0) + (prescriptions?.length || 0) + (invoices?.length || 0)
+    patientsSlice.length + appointmentsSlice.length + prescriptionsSlice.length + invoicesSlice.length
 
   return (
     <div className="space-y-6">
@@ -79,6 +146,9 @@ export default async function GlobalSearchPage({
         <p className="text-muted-foreground">
           Found {totalResults} results for “{query}”
         </p>
+        {resultsCapped ? (
+          <p className="text-xs text-amber-700">Results are capped at {SEARCH_RESULT_LIMIT} per section for performance.</p>
+        ) : null}
       </div>
 
       <Tabs defaultValue="all" className="space-y-4">
@@ -91,13 +161,13 @@ export default async function GlobalSearchPage({
         </TabsList>
 
         <TabsContent value="all" className="space-y-4">
-          {patients && patients.length > 0 && (
+          {patientsSlice.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <User className="h-5 w-5" />
                 Patients
               </h3>
-              {patients.map((patient) => (
+              {patientsSlice.map((patient) => (
                 <Link key={patient.id} href={`/dashboard/patients/${patient.id}`}>
                   <Card className="hover:border-primary transition-colors">
                     <CardHeader>
@@ -119,20 +189,23 @@ export default async function GlobalSearchPage({
             </div>
           )}
 
-          {appointments && appointments.length > 0 && (
+          {appointmentsSlice.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Calendar className="h-5 w-5" />
                 Appointments
               </h3>
-              {appointments.map((apt) => (
+              {appointmentsSlice.map((apt) => (
+                (() => {
+                  const patient = normalizeRelatedPatient(apt.patient)
+                  return (
                 <Link key={apt.id} href={`/dashboard/appointments/${apt.id}`}>
                   <Card className="hover:border-primary transition-colors">
                     <CardHeader>
                       <div className="flex items-start justify-between">
                         <div>
                           <CardTitle className="text-lg">
-                            {apt.patient?.first_name} {apt.patient?.last_name}
+                            {patient?.first_name} {patient?.last_name}
                           </CardTitle>
                           <CardDescription>
                             {new Date(apt.appointment_date).toLocaleDateString()} at {apt.appointment_time}
@@ -143,17 +216,22 @@ export default async function GlobalSearchPage({
                     </CardHeader>
                   </Card>
                 </Link>
+                  )
+                })()
               ))}
             </div>
           )}
 
-          {prescriptions && prescriptions.length > 0 && (
+          {prescriptionsSlice.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Pill className="h-5 w-5" />
                 Prescriptions
               </h3>
-              {prescriptions.map((rx) => (
+              {prescriptionsSlice.map((rx) => (
+                (() => {
+                  const patient = normalizeRelatedPatient(rx.patient)
+                  return (
                 <Link key={rx.id} href={`/dashboard/prescriptions/${rx.id}`}>
                   <Card className="hover:border-primary transition-colors">
                     <CardHeader>
@@ -161,7 +239,7 @@ export default async function GlobalSearchPage({
                         <div>
                           <CardTitle className="text-lg">{rx.prescription_number}</CardTitle>
                           <CardDescription>
-                            {rx.patient?.first_name} {rx.patient?.last_name}
+                            {patient?.first_name} {patient?.last_name}
                           </CardDescription>
                         </div>
                         <Badge>{rx.status}</Badge>
@@ -169,6 +247,8 @@ export default async function GlobalSearchPage({
                     </CardHeader>
                   </Card>
                 </Link>
+                  )
+                })()
               ))}
             </div>
           )}
@@ -184,8 +264,8 @@ export default async function GlobalSearchPage({
         </TabsContent>
 
         <TabsContent value="patients" className="space-y-3">
-          {patients && patients.length > 0 ? (
-            patients.map((patient) => (
+          {patientsSlice.length > 0 ? (
+            patientsSlice.map((patient) => (
               <Link key={patient.id} href={`/dashboard/patients/${patient.id}`}>
                 <Card className="hover:border-primary transition-colors">
                   <CardHeader>
@@ -214,16 +294,19 @@ export default async function GlobalSearchPage({
         </TabsContent>
 
         <TabsContent value="appointments">
-          {appointments && appointments.length > 0 ? (
+          {appointmentsSlice.length > 0 ? (
             <div className="space-y-3">
-              {appointments.map((apt) => (
+              {appointmentsSlice.map((apt) => (
+                (() => {
+                  const patient = normalizeRelatedPatient(apt.patient)
+                  return (
                 <Link key={apt.id} href={`/dashboard/appointments/${apt.id}`}>
                   <Card className="hover:border-primary transition-colors">
                     <CardHeader>
                       <div className="flex items-start justify-between">
                         <div>
                           <CardTitle className="text-lg">
-                            {apt.patient?.first_name} {apt.patient?.last_name}
+                            {patient?.first_name} {patient?.last_name}
                           </CardTitle>
                           <CardDescription>
                             {new Date(apt.appointment_date).toLocaleDateString()} at {apt.appointment_time}
@@ -234,6 +317,8 @@ export default async function GlobalSearchPage({
                     </CardHeader>
                   </Card>
                 </Link>
+                  )
+                })()
               ))}
             </div>
           ) : (
@@ -246,9 +331,12 @@ export default async function GlobalSearchPage({
         </TabsContent>
 
         <TabsContent value="prescriptions">
-          {prescriptions && prescriptions.length > 0 ? (
+          {prescriptionsSlice.length > 0 ? (
             <div className="space-y-3">
-              {prescriptions.map((rx) => (
+              {prescriptionsSlice.map((rx) => (
+                (() => {
+                  const patient = normalizeRelatedPatient(rx.patient)
+                  return (
                 <Link key={rx.id} href={`/dashboard/prescriptions/${rx.id}`}>
                   <Card className="hover:border-primary transition-colors">
                     <CardHeader>
@@ -256,7 +344,7 @@ export default async function GlobalSearchPage({
                         <div>
                           <CardTitle className="text-lg">{rx.prescription_number}</CardTitle>
                           <CardDescription>
-                            {rx.patient?.first_name} {rx.patient?.last_name}
+                            {patient?.first_name} {patient?.last_name}
                           </CardDescription>
                         </div>
                         <Badge>{rx.status}</Badge>
@@ -264,6 +352,8 @@ export default async function GlobalSearchPage({
                     </CardHeader>
                   </Card>
                 </Link>
+                  )
+                })()
               ))}
             </div>
           ) : (
@@ -276,9 +366,12 @@ export default async function GlobalSearchPage({
         </TabsContent>
 
         <TabsContent value="invoices">
-          {invoices && invoices.length > 0 ? (
+          {invoicesSlice.length > 0 ? (
             <div className="space-y-3">
-              {invoices.map((invoice) => (
+              {invoicesSlice.map((invoice) => (
+                (() => {
+                  const patient = normalizeRelatedPatient(invoice.patient)
+                  return (
                 <Link key={invoice.id} href={`/dashboard/billing/${invoice.id}`}>
                   <Card className="hover:border-primary transition-colors">
                     <CardHeader>
@@ -286,7 +379,7 @@ export default async function GlobalSearchPage({
                         <div>
                           <CardTitle className="text-lg">{invoice.invoice_number}</CardTitle>
                           <CardDescription>
-                            {invoice.patient?.first_name} {invoice.patient?.last_name}
+                            {patient?.first_name} {patient?.last_name}
                           </CardDescription>
                         </div>
                         <Badge>{invoice.status}</Badge>
@@ -294,6 +387,8 @@ export default async function GlobalSearchPage({
                     </CardHeader>
                   </Card>
                 </Link>
+                  )
+                })()
               ))}
             </div>
           ) : (

@@ -3,6 +3,8 @@ import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middlewar
 import { enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
+const EXPORT_ROW_LIMIT = 5_000
+
 export async function GET(request: NextRequest) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "api_export_prescriptions",
@@ -14,64 +16,74 @@ export async function GET(request: NextRequest) {
   try {
     const { supabase } = await requirePermission(request, "admin.export")
 
-  const { data: prescriptions, error } = await supabase
-    .from("prescriptions")
-    .select(`
-      *,
-      patient:patients(patient_number, first_name, last_name),
-      doctor:profiles!prescriptions_doctor_id_fkey(first_name, last_name)
-    `)
-    .order("created_at", { ascending: false })
+    const { data: fetchedPrescriptions, error } = await supabase
+      .from("prescriptions")
+      .select(`
+        prescription_number,
+        medications,
+        status,
+        dispensed_at,
+        created_at,
+        patient:patients(patient_number, first_name, last_name),
+        doctor:profiles!prescriptions_doctor_id_fkey(first_name, last_name)
+      `)
+      .order("created_at", { ascending: false })
+      .limit(EXPORT_ROW_LIMIT + 1)
 
-  if (error) {
-    return new NextResponse("Error fetching data", { status: 500 })
-  }
+    if (error) {
+      return new NextResponse("Error fetching data", { status: 500 })
+    }
 
-  const headers = [
-    "Prescription Number",
-    "Patient Number",
-    "Patient Name",
-    "Doctor",
-    "Medications",
-    "Status",
-    "Dispensed At",
-    "Created At",
-  ]
+    const isTruncated = (fetchedPrescriptions || []).length > EXPORT_ROW_LIMIT
+    const prescriptions = (fetchedPrescriptions || []).slice(0, EXPORT_ROW_LIMIT)
 
-  const csvRows = [headers.join(",")]
-
-  interface PrescriptionMedication {
-    name?: string | null
-    dosage?: string | null
-    frequency?: string | null
-    duration?: string | null
-  }
-
-  for (const rx of prescriptions) {
-    const medications =
-      (rx.medications as PrescriptionMedication[] | null | undefined)
-        ?.map((m) => `${m.name} (${m.dosage} ${m.frequency} for ${m.duration})`)
-        .join("; ") || ""
-
-    const row = [
-      rx.prescription_number,
-      rx.patient?.patient_number || "",
-      `${rx.patient?.first_name || ""} ${rx.patient?.last_name || ""}`,
-      `${rx.doctor?.first_name || ""} ${rx.doctor?.last_name || ""}`,
-      `"${medications}"`,
-      rx.status,
-      rx.dispensed_at || "",
-      new Date(rx.created_at).toISOString(),
+    const headers = [
+      "Prescription Number",
+      "Patient Number",
+      "Patient Name",
+      "Doctor",
+      "Medications",
+      "Status",
+      "Dispensed At",
+      "Created At",
     ]
-    csvRows.push(row.join(","))
-  }
 
-  const csv = csvRows.join("\n")
+    const csvRows = [headers.join(",")]
+
+    interface PrescriptionMedication {
+      name?: string | null
+      dosage?: string | null
+      frequency?: string | null
+      duration?: string | null
+    }
+
+    for (const rx of prescriptions) {
+      const medications =
+        (rx.medications as PrescriptionMedication[] | null | undefined)
+          ?.map((m) => `${m.name} (${m.dosage} ${m.frequency} for ${m.duration})`)
+          .join("; ") || ""
+
+      const row = [
+        rx.prescription_number,
+        rx.patient?.patient_number || "",
+        `${rx.patient?.first_name || ""} ${rx.patient?.last_name || ""}`,
+        `${rx.doctor?.first_name || ""} ${rx.doctor?.last_name || ""}`,
+        `"${medications}"`,
+        rx.status,
+        rx.dispensed_at || "",
+        new Date(rx.created_at).toISOString(),
+      ]
+      csvRows.push(row.join(","))
+    }
+
+    const csv = csvRows.join("\n")
 
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv",
         "Content-Disposition": `attachment; filename=prescriptions_export_${new Date().toISOString()}.csv`,
+        "X-Export-Truncated": String(isTruncated),
+        "X-Export-Row-Limit": String(EXPORT_ROW_LIMIT),
         ...NO_STORE_DOWNLOAD_HEADERS,
       },
     })

@@ -8,6 +8,75 @@ interface ApiLogContext {
   startedAtMs: number
 }
 
+const NON_SENSITIVE_ID_KEYS = new Set(["request_id", "route"])
+
+function maskEmail(value: string): string {
+  const [localPart, domainPart] = value.split("@")
+  if (!localPart || !domainPart) return "***"
+  const local = localPart.length <= 2 ? `${localPart[0] ?? "*"}*` : `${localPart.slice(0, 2)}***`
+  const domainSegments = domainPart.split(".")
+  if (domainSegments.length < 2) return `${local}@***`
+  const domainName = domainSegments[0]
+  const tld = domainSegments.slice(1).join(".")
+  const maskedDomain = domainName.length <= 2 ? `${domainName[0] ?? "*"}*` : `${domainName.slice(0, 2)}***`
+  return `${local}@${maskedDomain}.${tld}`
+}
+
+function maskPhone(value: string): string {
+  const digits = value.replace(/\D/g, "")
+  if (digits.length <= 4) return "***"
+  const tail = digits.slice(-4)
+  return `***${tail}`
+}
+
+function maskIdentifier(value: string): string {
+  if (value.length <= 4) return "***"
+  return `${value.slice(0, 2)}***${value.slice(-2)}`
+}
+
+function isEmailKey(key: string): boolean {
+  return /(^|_)(email)(_|$)/i.test(key)
+}
+
+function isPhoneKey(key: string): boolean {
+  return /(phone|mobile|tel|contact_number|whatsapp)/i.test(key)
+}
+
+function isSensitiveIdKey(key: string): boolean {
+  if (NON_SENSITIVE_ID_KEYS.has(key)) return false
+  return /(national_id|passport|license|ssn|id_number|patient_id|employee_id|transaction_id|user_id)/i.test(key)
+}
+
+function redactPrimitiveByKey(key: string, value: unknown): unknown {
+  if (typeof value !== "string") return value
+  if (isEmailKey(key)) return maskEmail(value)
+  if (isPhoneKey(key)) return maskPhone(value)
+  if (isSensitiveIdKey(key)) return maskIdentifier(value)
+  return value
+}
+
+export function redactLogData(input: Record<string, unknown>, depth = 0): Record<string, unknown> {
+  if (depth > 3) return input
+  const output: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (Array.isArray(value)) {
+      output[key] = value.map((item) => {
+        if (item && typeof item === "object" && !Array.isArray(item)) {
+          return redactLogData(item as Record<string, unknown>, depth + 1)
+        }
+        return redactPrimitiveByKey(key, item)
+      })
+      continue
+    }
+    if (value && typeof value === "object") {
+      output[key] = redactLogData(value as Record<string, unknown>, depth + 1)
+      continue
+    }
+    output[key] = redactPrimitiveByKey(key, value)
+  }
+  return output
+}
+
 function getClientIp(request: NextRequest): string {
   const forwardedFor = request.headers.get("x-forwarded-for")
   if (forwardedFor) {
@@ -32,7 +101,7 @@ function toErrorMetadata(error: unknown): Record<string, unknown> {
 }
 
 function log(level: LogLevel, event: string, data: Record<string, unknown>) {
-  const payload = { event, ...data }
+  const payload = redactLogData({ event, ...data })
   if (level === "error") {
     console.error("[api]", payload)
     return

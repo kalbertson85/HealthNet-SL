@@ -1,17 +1,31 @@
 import { describe, expect, it } from "vitest"
-import { readFileSync } from "node:fs"
-import { execSync } from "node:child_process"
+import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 
 function getPermissionProtectedRoutes(): string[] {
-  const output = execSync(
-    "rg \"requirePermission\\(\" app/api app/dashboard -g \"**/route.ts\" -l | sort",
-    { cwd: process.cwd(), encoding: "utf8" },
-  )
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
+  const roots = ["app/api", "app/dashboard"]
+  const routeFiles: string[] = []
+
+  function walk(dir: string) {
+    for (const entry of readdirSync(dir)) {
+      const fullPath = join(dir, entry)
+      const stats = statSync(fullPath)
+      if (stats.isDirectory()) {
+        walk(fullPath)
+      } else if (entry === "route.ts") {
+        routeFiles.push(fullPath)
+      }
+    }
+  }
+
+  for (const root of roots) {
+    walk(join(process.cwd(), root))
+  }
+
+  return routeFiles
+    .filter((absPath) => readFileSync(absPath, "utf8").includes("requirePermission("))
+    .map((absPath) => absPath.replace(`${process.cwd()}/`, ""))
+    .sort()
 }
 
 describe("permission route auth error mapping", () => {

@@ -134,6 +134,7 @@ export default async function QueuePage(props: {
   const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
   const statusFilter = resolvedSearchParams?.status || "all"
   const errorCode = resolvedSearchParams?.error
+  const hasActiveStatusFilter = statusFilter === "waiting" || statusFilter === "in_progress"
 
   // Fetch queue statistics, including visit FHC/facility context where available
   const { data: queues } = await supabase
@@ -252,8 +253,11 @@ export default async function QueuePage(props: {
                 </div>
               )}
 
-              <Link href={`/dashboard/queue/${dept.id}`}>
-                <button className="w-full mt-2 px-3 py-2 text-sm border rounded-md hover:bg-accent">View Queue</button>
+              <Link
+                href={`/dashboard/queue/${dept.id}`}
+                className="mt-2 inline-flex w-full items-center justify-center rounded-md border px-3 py-2 text-sm hover:bg-accent"
+              >
+                View Queue
               </Link>
             </CardContent>
           </Card>
@@ -286,6 +290,14 @@ export default async function QueuePage(props: {
             >
               Apply
             </button>
+            {hasActiveStatusFilter ? (
+              <Link
+                href="/dashboard/queue"
+                className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
+              >
+                Reset
+              </Link>
+            ) : null}
           </form>
           <div className="space-y-3">
             {filteredQueues && filteredQueues.length > 0 ? (
@@ -357,7 +369,18 @@ export default async function QueuePage(props: {
                 </div>
               )})
             ) : (
-              <div className="text-center py-8 text-muted-foreground">No patients in queue</div>
+              <div className="text-center py-8 text-muted-foreground">
+                No patients in queue.
+                {hasActiveStatusFilter ? (
+                  <>
+                    {" "}
+                    <Link href="/dashboard/queue" className="text-blue-600 hover:underline">
+                      Clear filter
+                    </Link>
+                    .
+                  </>
+                ) : null}
+              </div>
             )}
           </div>
         </CardContent>

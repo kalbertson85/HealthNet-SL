@@ -1,5 +1,6 @@
 import { createServerClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
+import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -94,6 +95,13 @@ export default async function FreeHealthCareReportPage(props: {
   const statusFilter = (resolvedSearchParams?.status || "all").trim().toLowerCase()
   const facilityFilter = (resolvedSearchParams?.facility || "all").trim()
   const serviceType = (resolvedSearchParams?.service_type || "").trim()
+  const hasActiveFilters =
+    Boolean(fromParam) ||
+    Boolean(toParam) ||
+    categoryFilter !== "all" ||
+    statusFilter !== "all" ||
+    facilityFilter !== "all" ||
+    Boolean(serviceType)
 
   const toDate = toParam ? new Date(toParam) : new Date()
   const fromDate = fromParam ? new Date(fromParam) : (() => {
@@ -361,6 +369,14 @@ export default async function FreeHealthCareReportPage(props: {
               </select>
             </div>
             <div className="mt-2 flex gap-2 md:col-span-4">
+              {hasActiveFilters ? (
+                <Link
+                  href="/dashboard/reports/free-health-care"
+                  className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
+                >
+                  Reset filters
+                </Link>
+              ) : null}
               <button
                 type="submit"
                 className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
@@ -395,7 +411,18 @@ export default async function FreeHealthCareReportPage(props: {
         </CardHeader>
         <CardContent>
           {facilitySummary.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No FHC visits in this period.</p>
+            <p className="text-sm text-muted-foreground">
+              No FHC visits in this period.
+              {hasActiveFilters ? (
+                <>
+                  {" "}
+                  <Link href="/dashboard/reports/free-health-care" className="text-blue-600 hover:underline">
+                    Clear filters
+                  </Link>
+                  .
+                </>
+              ) : null}
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

@@ -61,6 +61,8 @@ export default async function SystemActivityPage({
   const fromFilter = (sp.from || "").trim() || null
   const toFilter = (sp.to || "").trim() || null
   const currentPage = Math.max(1, Number.parseInt((sp as { page?: string }).page || "1", 10) || 1)
+  const hasActiveFilters =
+    moduleFilter !== "all" || Boolean(actorFilter) || Boolean(patientFilter) || Boolean(actionFilter) || Boolean(fromFilter) || Boolean(toFilter)
 
   const shouldInclude = (module: UnifiedActivityRow["module"]) => {
     if (moduleFilter === "all" || !moduleFilter) return true
@@ -526,7 +528,12 @@ export default async function SystemActivityPage({
               <Label htmlFor="to">To</Label>
               <Input id="to" type="datetime-local" name="to" defaultValue={toFilter || ""} />
             </div>
-            <div className="flex items-end justify-end">
+            <div className="flex items-end gap-2 justify-end">
+              {hasActiveFilters ? (
+                <Button asChild type="button" variant="outline" className="w-full md:w-auto">
+                  <Link href="/dashboard/admin/system-activity">Reset</Link>
+                </Button>
+              ) : null}
               <Button type="submit" className="w-full md:w-auto">
                 Apply filters
               </Button>
@@ -574,6 +581,15 @@ export default async function SystemActivityPage({
                   <TableRow>
                     <TableCell colSpan={7} className="py-6 text-center text-muted-foreground">
                       No system activity found for the selected filters.
+                      {hasActiveFilters ? (
+                        <>
+                          {" "}
+                          <Link href="/dashboard/admin/system-activity" className="text-blue-600 hover:underline">
+                            Clear filters
+                          </Link>
+                          .
+                        </>
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 ) : (

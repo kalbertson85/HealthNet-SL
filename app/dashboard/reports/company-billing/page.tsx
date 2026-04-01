@@ -64,6 +64,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   const statusFilter = (sp.status || "all").toLowerCase().trim()
   const fromParam = (sp.from || "").trim()
   const toParam = (sp.to || "").trim()
+  const hasActiveFilters = Boolean(selectedCompanyId) || statusFilter !== "all" || Boolean(fromParam) || Boolean(toParam)
 
   const today = new Date()
   const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
@@ -287,9 +288,16 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           </select>
         </div>
 
-        <Button type="submit" size="sm" className="mt-4">
-          Apply filters
-        </Button>
+        <div className="mt-4 flex items-center gap-2">
+          {hasActiveFilters ? (
+            <Button asChild type="button" size="sm" variant="outline">
+              <Link href="/dashboard/reports/company-billing">Reset</Link>
+            </Button>
+          ) : null}
+          <Button type="submit" size="sm">
+            Apply filters
+          </Button>
+        </div>
       </form>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -333,7 +341,18 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         </CardHeader>
         <CardContent>
           {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No company invoices match the selected filters.</p>
+            <p className="text-sm text-muted-foreground">
+              No company invoices match the selected filters.
+              {hasActiveFilters ? (
+                <>
+                  {" "}
+                  <Link href="/dashboard/reports/company-billing" className="text-blue-600 hover:underline">
+                    Clear filters
+                  </Link>
+                  .
+                </>
+              ) : null}
+            </p>
           ) : (
             <div className="overflow-x-auto text-sm">
               <table className="min-w-full border divide-y divide-border text-xs">

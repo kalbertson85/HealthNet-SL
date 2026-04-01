@@ -16,26 +16,28 @@ export default async function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-teal-50">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-blue-50 via-white to-teal-50">
       <div className="container mx-auto px-4 py-16">
         {/* Header */}
         <div className="text-center mb-16">
           <div className="flex justify-center mb-6">
             <Activity className="h-16 w-16 text-blue-600" />
           </div>
-          <h1 className="text-5xl font-bold text-gray-900 mb-4 text-balance">Smarter Health Management for Stronger Care</h1>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto text-pretty">
+          <h1 className="mb-4 text-balance text-3xl font-bold text-gray-900 sm:text-4xl md:text-5xl">
+            Smarter Health Management for Stronger Care
+          </h1>
+          <p className="mx-auto max-w-2xl text-base text-gray-700 sm:text-xl">
             HealthNet-SL HMS empowers hospitals in Sierra Leone with real-time digital records, analytics, and
             automation.
           </p>
-          <div className="flex gap-4 justify-center mt-8">
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4">
             <Link href="/auth/login">
-              <Button size="lg" className="bg-primary hover:bg-primary/90">
+              <Button size="lg" className="min-w-36 bg-primary hover:bg-primary/90">
                 Get Started
               </Button>
             </Link>
             <Link href="/auth/sign-up">
-              <Button size="lg" variant="outline">
+              <Button size="lg" variant="outline" className="min-w-36">
                 Request Demo
               </Button>
             </Link>
@@ -178,7 +180,7 @@ export default async function HomePage() {
         <section className="mt-16">
           <div className="text-center mb-8">
             <h2 className="text-3xl font-bold text-gray-900">Subscription Plans</h2>
-            <p className="text-gray-600 max-w-2xl mx-auto text-sm md:text-base">
+            <p className="text-gray-700 max-w-2xl mx-auto text-sm md:text-base">
               Choose a plan tailored to the size and needs of your facility. All plans include secure hosting, updates,
               and support.
             </p>
@@ -244,7 +246,7 @@ export default async function HomePage() {
         <section className="mt-16">
           <div className="text-center mb-8">
             <h2 className="text-3xl font-bold text-gray-900">What hospitals are saying</h2>
-            <p className="text-gray-600 max-w-2xl mx-auto text-sm md:text-base">
+            <p className="text-gray-700 max-w-2xl mx-auto text-sm md:text-base">
               HealthNet-SL HMS is designed together with clinicians, administrators, and pharmacists in Sierra Leone.
             </p>
           </div>
@@ -289,7 +291,7 @@ export default async function HomePage() {
         </section>
 
         {/* Footer */}
-        <footer className="mt-20 border-t border-border pt-8 text-sm text-gray-600">
+        <footer className="mt-20 border-t border-border pt-8 text-sm text-gray-700">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div className="space-y-1">
               <p className="font-semibold text-gray-800">HealthNet-SL HMS</p>
@@ -297,33 +299,45 @@ export default async function HomePage() {
                 Smarter health management for stronger care in Sierra Leone&apos;s hospitals.
               </p>
             </div>
-            <nav className="flex flex-wrap gap-4 text-xs md:text-sm">
-              <Link href="#" className="hover:text-primary">
+            <nav className="flex flex-wrap gap-2 text-xs md:text-sm">
+              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 About
               </Link>
-              <Link href="#" className="hover:text-primary">
+              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 Privacy
               </Link>
-              <Link href="#" className="hover:text-primary">
+              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 Terms
               </Link>
-              <Link href="#" className="hover:text-primary">
+              <Link href="#" className="inline-flex min-h-11 items-center px-2 hover:text-primary">
                 Contact
               </Link>
             </nav>
             <div className="flex items-center gap-3 text-gray-500">
-              <Link href="#" aria-label="HealthNet-SL on Facebook" className="hover:text-primary">
+              <Link
+                href="#"
+                aria-label="HealthNet-SL on Facebook"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-md hover:text-primary"
+              >
                 <Facebook className="h-4 w-4" />
               </Link>
-              <Link href="#" aria-label="HealthNet-SL on LinkedIn" className="hover:text-primary">
+              <Link
+                href="#"
+                aria-label="HealthNet-SL on LinkedIn"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-md hover:text-primary"
+              >
                 <Linkedin className="h-4 w-4" />
               </Link>
-              <Link href="#" aria-label="HealthNet-SL on Twitter" className="hover:text-primary">
+              <Link
+                href="#"
+                aria-label="HealthNet-SL on Twitter"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-md hover:text-primary"
+              >
                 <Twitter className="h-4 w-4" />
               </Link>
             </div>
           </div>
-          <p className="mt-4 text-xs text-gray-500">&copy; {new Date().getFullYear()} HealthNet-SL HMS. All rights reserved.</p>
+          <p className="mt-4 text-xs text-gray-600">&copy; {new Date().getFullYear()} HealthNet-SL HMS. All rights reserved.</p>
         </footer>
       </div>
     </div>

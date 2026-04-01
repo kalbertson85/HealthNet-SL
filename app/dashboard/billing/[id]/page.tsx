@@ -31,6 +31,11 @@ interface InsuranceClaimRow {
   approved_amount: number | null
 }
 
+function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
+  if (!relation) return null
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
 export default async function InvoiceDetailPage(props: { params: Promise<{ id: string }> }) {
   const supabase = await createServerClient()
   const { id } = await props.params
@@ -43,12 +48,13 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
     supabase
       .from("invoices")
       .select(`
-        *,
+        id, invoice_number, status, total_amount, paid_amount, created_at, payment_date, payment_method,
+        payer_type, visit_id, notes,
         patients(full_name, patient_number, phone_number)
       `)
       .eq("id", id)
       .single(),
-    supabase.from("invoice_items").select("*").eq("invoice_id", id),
+    supabase.from("invoice_items").select("id, description, quantity, unit_price, amount").eq("invoice_id", id),
     supabase
       .from("billing_audit_logs")
       .select("id, created_at, action, old_status, new_status, amount, actor_user_id")
@@ -64,14 +70,22 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
   if (!invoice) {
     notFound()
   }
+  const invoiceRecord = invoice
+  const invoicePatient = normalizeSingle(
+    invoiceRecord.patients as { full_name?: string | null; patient_number?: string | null; phone_number?: string | null } | Array<{
+      full_name?: string | null
+      patient_number?: string | null
+      phone_number?: string | null
+    }> | null,
+  )
 
   // If this invoice is linked to a visit, look up an active admission for that visit
   let admissionForVisit: { id: string; status: string } | null = null
-  if (invoice.visit_id) {
+  if (invoiceRecord.visit_id) {
     const { data: admission } = await supabase
       .from("admissions")
       .select("id, status")
-      .eq("visit_id", invoice.visit_id as string)
+      .eq("visit_id", invoiceRecord.visit_id as string)
       .in("status", ["admitted"])
       .maybeSingle()
 
@@ -83,7 +97,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
     }
   }
 
-  const balance = Number(invoice.total_amount) - Number(invoice.paid_amount || 0)
+  const balance = Number(invoiceRecord.total_amount) - Number(invoiceRecord.paid_amount || 0)
 
   const rows = (auditRows || []) as BillingAuditRow[]
   const existingClaim = (claim || null) as InsuranceClaimRow | null
@@ -141,15 +155,16 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
     const paymentAmount = Number.parseFloat(formData.get("amount") as string)
     const paymentMethod = formData.get("payment_method") as string
 
-    const newPaidAmount = Number(invoice.paid_amount || 0) + paymentAmount
-    const newStatus = newPaidAmount >= Number(invoice.total_amount) ? "paid" : newPaidAmount > 0 ? "partial" : "pending"
+    const newPaidAmount = Number(invoiceRecord.paid_amount || 0) + paymentAmount
+    const newStatus =
+      newPaidAmount >= Number(invoiceRecord.total_amount) ? "paid" : newPaidAmount > 0 ? "partial" : "pending"
 
     await supabase
       .from("invoices")
       .update({
         paid_amount: newPaidAmount,
         status: newStatus,
-        payment_date: newStatus === "paid" ? new Date().toISOString() : invoice.payment_date,
+        payment_date: newStatus === "paid" ? new Date().toISOString() : invoiceRecord.payment_date,
         payment_method: paymentMethod,
       })
       .eq("id", id)
@@ -159,7 +174,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
         invoice_id: id,
         actor_user_id: user.id,
         action: "payment_recorded",
-        old_status: invoice.status,
+        old_status: invoiceRecord.status,
         new_status: newStatus,
         amount: paymentAmount,
         metadata: { payment_method: paymentMethod },
@@ -431,15 +446,15 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Name</p>
-              <p className="text-lg font-medium">{invoice.patients?.full_name}</p>
+              <p className="text-lg font-medium">{invoicePatient?.full_name}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Patient Number</p>
-              <p>{invoice.patients?.patient_number}</p>
+              <p>{invoicePatient?.patient_number}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Phone</p>
-              <p>{invoice.patients?.phone_number || "N/A"}</p>
+              <p>{invoicePatient?.phone_number || "N/A"}</p>
             </div>
           </CardContent>
         </Card>

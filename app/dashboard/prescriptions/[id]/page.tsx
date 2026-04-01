@@ -10,6 +10,11 @@ import { ArrowLeft } from "lucide-react"
 import { ensureCan } from "@/lib/utils"
 import { logAuditEvent } from "@/lib/audit"
 
+function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
+  if (!relation) return null
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
 export default async function PrescriptionDetailPage(props: {
   params: Promise<{ id: string }>
   searchParams?: Promise<{ error?: string }>
@@ -25,12 +30,15 @@ export default async function PrescriptionDetailPage(props: {
       supabase
         .from("prescriptions")
         .select(`
-          *,
+          id, prescription_number, patient_id, doctor_id, status, created_at, dispensed_at, notes, visit_id,
           patients(full_name, patient_number, phone_number)
         `)
         .eq("id", id)
         .maybeSingle(),
-      supabase.from("prescription_items").select("*").eq("prescription_id", id),
+      supabase
+        .from("prescription_items")
+        .select("id, prescription_id, medication_name, dosage, frequency, duration, quantity, instructions")
+        .eq("prescription_id", id),
       supabase
         .from("pharmacy_audit_logs")
         .select("id, created_at, action, old_status, new_status, notes, actor_user_id")
@@ -61,12 +69,19 @@ export default async function PrescriptionDetailPage(props: {
     console.warn("[v0] Prescription not found for id:", id)
     notFound()
   }
+  const prescriptionRecord = prescription
+  const prescriptionPatient = normalizeSingle(
+    prescriptionRecord.patients as
+      | { full_name?: string | null; patient_number?: string | null; phone_number?: string | null }
+      | Array<{ full_name?: string | null; patient_number?: string | null; phone_number?: string | null }>
+      | null,
+  )
 
   // Load prescribing doctor's profile separately to avoid ambiguous embedded relationships
   const { data: doctorProfile } = await supabase
     .from("profiles")
     .select("full_name")
-    .eq("id", prescription.doctor_id)
+    .eq("id", prescriptionRecord.doctor_id)
     .maybeSingle()
 
   const rows = (auditRows || []) as {
@@ -137,10 +152,10 @@ export default async function PrescriptionDetailPage(props: {
       "pharmacy.manage",
     )
 
-    if (prescription.status !== "pending") {
+    if (prescriptionRecord.status !== "pending") {
       console.error("[v0] Cannot mark in progress: prescription is not pending", {
         id,
-        status: prescription.status,
+        status: prescriptionRecord.status,
       })
       redirect(`/dashboard/prescriptions/${id}`)
     }
@@ -155,12 +170,12 @@ export default async function PrescriptionDetailPage(props: {
         prescription_id: id,
         actor_user_id: user.id,
         action: "status_updated",
-        old_status: prescription.status,
+        old_status: prescriptionRecord.status,
         new_status: "in_progress",
         notes: null,
         metadata: {
-          patient_id: prescription.patient_id,
-          prescription_number: prescription.prescription_number,
+          patient_id: prescriptionRecord.patient_id,
+          prescription_number: prescriptionRecord.prescription_number,
         },
       })
     } catch (auditError) {
@@ -172,9 +187,9 @@ export default async function PrescriptionDetailPage(props: {
       resourceType: "prescription",
       resourceId: id,
       metadata: {
-        prescription_number: prescription.prescription_number,
-        patient_id: prescription.patient_id,
-        old_status: prescription.status,
+        prescription_number: prescriptionRecord.prescription_number,
+        patient_id: prescriptionRecord.patient_id,
+        old_status: prescriptionRecord.status,
         new_status: "in_progress",
       },
     })
@@ -207,10 +222,10 @@ export default async function PrescriptionDetailPage(props: {
     )
 
     // Do not allow dispensing if prescription is not pending
-    if (prescription.status !== "pending") {
+    if (prescriptionRecord.status !== "pending") {
       console.error("[v0] Cannot dispense: prescription is not pending", {
         id,
-        status: prescription.status,
+        status: prescriptionRecord.status,
       })
       redirect(`/dashboard/prescriptions/${id}?error=not_pending`)
     }
@@ -218,7 +233,7 @@ export default async function PrescriptionDetailPage(props: {
     // Load prescription items
     const { data: items, error: itemsError } = await supabase
       .from("prescription_items")
-      .select("*")
+      .select("id, prescription_id, medication_name, quantity")
       .eq("prescription_id", id)
 
     if (itemsError || !items || items.length === 0) {
@@ -231,7 +246,7 @@ export default async function PrescriptionDetailPage(props: {
 
     const { data: medications, error: medsError } = await supabase
       .from("medications")
-      .select("*")
+      .select("id, name")
       .in("name", medicationNames)
 
     if (medsError || !medications) {
@@ -266,7 +281,7 @@ export default async function PrescriptionDetailPage(props: {
 
     const { data: stocks, error: stockError } = await supabase
       .from("medication_stock")
-      .select("*")
+      .select("id, medication_id, quantity_on_hand")
       .in("medication_id", medicationIds)
 
     if (stockError || !stocks) {
@@ -312,7 +327,7 @@ export default async function PrescriptionDetailPage(props: {
 
       await supabase.from("dispense_events").insert({
         prescription_id: id,
-        patient_id: prescription.patient_id,
+        patient_id: prescriptionRecord.patient_id,
         medication_id: med.id,
         source_stock_id: stock.id,
         quantity_dispensed: quantity,
@@ -334,12 +349,12 @@ export default async function PrescriptionDetailPage(props: {
         prescription_id: id,
         actor_user_id: user.id,
         action: "dispensed",
-        old_status: prescription.status,
+        old_status: prescriptionRecord.status,
         new_status: "dispensed",
         notes: null,
         metadata: {
-          patient_id: prescription.patient_id,
-          prescription_number: prescription.prescription_number,
+          patient_id: prescriptionRecord.patient_id,
+          prescription_number: prescriptionRecord.prescription_number,
         },
       })
     } catch (auditError) {
@@ -351,18 +366,18 @@ export default async function PrescriptionDetailPage(props: {
       resourceType: "prescription",
       resourceId: id,
       metadata: {
-        prescription_number: prescription.prescription_number,
-        patient_id: prescription.patient_id,
+        prescription_number: prescriptionRecord.prescription_number,
+        patient_id: prescriptionRecord.patient_id,
       },
     })
 
     // Mark any pharmacy-pending visits for this patient as completed
-    if (prescription.patient_id) {
+    if (prescriptionRecord.patient_id) {
       try {
         await supabase
           .from("visits")
           .update({ visit_status: "completed" })
-          .eq("patient_id", prescription.patient_id)
+          .eq("patient_id", prescriptionRecord.patient_id)
           .eq("visit_status", "pharmacy_pending")
       } catch (error) {
         console.error("[v0] Error marking visit completed after dispense:", error)
@@ -395,10 +410,10 @@ export default async function PrescriptionDetailPage(props: {
       "pharmacy.manage",
     )
 
-    if (prescription.status !== "pending") {
+    if (prescriptionRecord.status !== "pending") {
       console.error("[v0] Cannot cancel: prescription is not pending", {
         id,
-        status: prescription.status,
+        status: prescriptionRecord.status,
       })
       redirect(`/dashboard/prescriptions/${id}`)
     }
@@ -413,12 +428,12 @@ export default async function PrescriptionDetailPage(props: {
         prescription_id: id,
         actor_user_id: user.id,
         action: "cancelled",
-        old_status: prescription.status,
+        old_status: prescriptionRecord.status,
         new_status: "cancelled",
         notes: null,
         metadata: {
-          patient_id: prescription.patient_id,
-          prescription_number: prescription.prescription_number,
+          patient_id: prescriptionRecord.patient_id,
+          prescription_number: prescriptionRecord.prescription_number,
         },
       })
     } catch (auditError) {
@@ -430,8 +445,8 @@ export default async function PrescriptionDetailPage(props: {
       resourceType: "prescription",
       resourceId: id,
       metadata: {
-        prescription_number: prescription.prescription_number,
-        patient_id: prescription.patient_id,
+        prescription_number: prescriptionRecord.prescription_number,
+        patient_id: prescriptionRecord.patient_id,
       },
     })
 
@@ -509,15 +524,15 @@ export default async function PrescriptionDetailPage(props: {
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Name</p>
-              <p className="text-lg font-medium">{prescription.patients?.full_name}</p>
+              <p className="text-lg font-medium">{prescriptionPatient?.full_name}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Patient Number</p>
-              <p>{prescription.patients?.patient_number}</p>
+              <p>{prescriptionPatient?.patient_number}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Phone</p>
-              <p>{prescription.patients?.phone_number || "N/A"}</p>
+              <p>{prescriptionPatient?.phone_number || "N/A"}</p>
             </div>
           </CardContent>
         </Card>

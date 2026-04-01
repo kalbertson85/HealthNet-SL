@@ -41,6 +41,7 @@ interface TriageSummaryRow {
 }
 
 export const revalidate = 0
+const MAX_DOCTOR_WORKLIST_ROWS = 300
 
 export default async function DoctorPage(props: {
   searchParams?: Promise<{ error?: string }>
@@ -67,6 +68,7 @@ export default async function DoctorPage(props: {
     )
     .in("visit_status", ["doctor_pending", "doctor_review"])
     .order("created_at", { ascending: true })
+    .limit(MAX_DOCTOR_WORKLIST_ROWS)
 
   // Look for active OPD queue entries that are already linked to a visit via visit_id
   const { data: opdQueues } = await supabase
@@ -217,6 +219,7 @@ export default async function DoctorPage(props: {
 
   const pending = visits.filter((v) => v.visit_status === "doctor_pending")
   const review = visits.filter((v) => v.visit_status === "doctor_review")
+  const worklistTruncated = (visitsData || []).length >= MAX_DOCTOR_WORKLIST_ROWS
 
   const triagePriorityRank = (visitId: string): number => {
     const triage = triageByVisitId.get(visitId)
@@ -529,6 +532,12 @@ export default async function DoctorPage(props: {
       {errorMessage && (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {errorMessage}
+        </div>
+      )}
+      {worklistTruncated && (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          The doctor worklist is capped at {MAX_DOCTOR_WORKLIST_ROWS} visits for performance. Complete or filter queue
+          items to surface additional records.
         </div>
       )}
       <div className="flex items-center justify-between gap-4">

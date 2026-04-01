@@ -43,6 +43,10 @@ interface ApiKeyRow {
   created_at: string
 }
 
+const MAX_SETTINGS_PROFILES_ROWS = 500
+const MAX_ALLOWED_IP_ROWS = 200
+const MAX_API_KEY_ROWS = 200
+
 async function saveHospitalBranding(formData: FormData) {
   "use server"
 
@@ -379,6 +383,7 @@ export default async function HospitalSettingsPage({
     .from("profiles")
     .select("id, full_name, email, role")
     .order("full_name", { ascending: true })
+    .limit(MAX_SETTINGS_PROFILES_ROWS)
 
   const { data: systemSettings } = await supabase
     .from("system_settings")
@@ -391,6 +396,7 @@ export default async function HospitalSettingsPage({
     .from("security_allowed_ips")
     .select("id, ip_range, created_at")
     .order("created_at", { ascending: false })
+    .limit(MAX_ALLOWED_IP_ROWS)
 
   const { data: backups } = await supabase
     .from("system_backups")
@@ -402,6 +408,11 @@ export default async function HospitalSettingsPage({
     .from("api_keys")
     .select("id, label, created_at")
     .order("created_at", { ascending: false })
+    .limit(MAX_API_KEY_ROWS)
+
+  const profilesTruncated = (profiles || []).length >= MAX_SETTINGS_PROFILES_ROWS
+  const allowedIpsTruncated = (allowedIps || []).length >= MAX_ALLOWED_IP_ROWS
+  const apiKeysTruncated = (apiKeys || []).length >= MAX_API_KEY_ROWS
 
   return (
     <div className="space-y-6">
@@ -443,6 +454,21 @@ export default async function HospitalSettingsPage({
       {sp?.status === "api_key_created" && (
         <div className="rounded-md border border-emerald-400/40 bg-emerald-500/5 p-3 text-sm text-emerald-700">
           API key created. Remember to store the secret value securely.
+        </div>
+      )}
+      {profilesTruncated && (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 p-3 text-sm text-amber-900">
+          Staff role assignments are capped at {MAX_SETTINGS_PROFILES_ROWS} users for performance.
+        </div>
+      )}
+      {allowedIpsTruncated && (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 p-3 text-sm text-amber-900">
+          Allowed IPs are capped at {MAX_ALLOWED_IP_ROWS} entries in this view.
+        </div>
+      )}
+      {apiKeysTruncated && (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 p-3 text-sm text-amber-900">
+          API keys are capped at {MAX_API_KEY_ROWS} entries in this view.
         </div>
       )}
 

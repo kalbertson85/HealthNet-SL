@@ -3,11 +3,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { AlertCircle } from "lucide-react"
 
-export default function AuthErrorPage({
+export default async function AuthErrorPage({
   searchParams,
 }: {
-  searchParams: { message?: string }
+  searchParams: Promise<{ message?: string }>
 }) {
+  const params = await searchParams
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-teal-50 p-4">
       <Card className="w-full max-w-md">
@@ -21,7 +23,7 @@ export default function AuthErrorPage({
         <CardContent className="text-center space-y-4">
           <div className="bg-red-50 p-4 rounded-lg">
             <p className="text-sm text-gray-700">
-              {searchParams.message || "An error occurred during authentication. Please try again."}
+              {params.message || "An error occurred during authentication. Please try again."}
             </p>
           </div>
 

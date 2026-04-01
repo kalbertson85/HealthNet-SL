@@ -169,6 +169,19 @@ Run pre-deploy readiness checks (required env vars + tests + production build):
 npm run predeploy:check
 ```
 
+Run the full release gate (predeploy readiness, tests, build, then lint):
+
+```bash
+npm run release:check
+```
+
+Optional Sentry monitoring environment variables:
+
+- `SENTRY_DSN` (or `NEXT_PUBLIC_SENTRY_DSN`) – DSN used for error reporting.
+- `SENTRY_ENVIRONMENT` (or `NEXT_PUBLIC_SENTRY_ENVIRONMENT`) – environment tag (`development`, `staging`, `production`).
+- `SENTRY_RELEASE` (or `NEXT_PUBLIC_SENTRY_RELEASE`) – release/version tag.
+- `SENTRY_TRACES_SAMPLE_RATE` (or `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE`) – tracing sample rate (`0` to `1`).
+
 Current tests include:
 
 - `tests/billing.test.ts` – invoice total calculation and edge cases.

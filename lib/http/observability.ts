@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server"
+import * as Sentry from "@sentry/nextjs"
 import { resolveRequestId } from "./request-id"
 
 type LogLevel = "info" | "warn" | "error"
@@ -9,6 +10,11 @@ interface ApiLogContext {
 }
 
 const NON_SENSITIVE_ID_KEYS = new Set(["request_id", "route"])
+const CRITICAL_5XX_ROUTES = new Set([
+  "api.webhooks.mobile_money",
+  "api.sync.queue.enqueue",
+  "api.patients.photo.upload",
+])
 
 function maskEmail(value: string): string {
   const [localPart, domainPart] = value.split("@")
@@ -162,5 +168,26 @@ export function logApiRequestFailure(
     duration_ms: Math.max(0, Date.now() - ctx.startedAtMs),
     ...toErrorMetadata(error),
     ...extra,
+  })
+
+  const hasSentryDsn = Boolean(process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN)
+  if (!hasSentryDsn || status < 500 || !CRITICAL_5XX_ROUTES.has(route)) {
+    return
+  }
+
+  Sentry.withScope((scope) => {
+    scope.setTag("route", route)
+    scope.setTag("http.status_code", String(status))
+    scope.setTag("env", process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || "unknown")
+    scope.setTag("release", process.env.SENTRY_RELEASE || "unknown")
+    scope.setContext("api_request", {
+      request_id: ctx.requestId,
+      path: request.nextUrl.pathname,
+      method: request.method,
+      status,
+      duration_ms: Math.max(0, Date.now() - ctx.startedAtMs),
+    })
+    scope.setExtras(redactLogData(extra))
+    Sentry.captureException(error instanceof Error ? error : new Error("critical_api_request_failure"))
   })
 }

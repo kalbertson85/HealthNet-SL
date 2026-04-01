@@ -111,7 +111,12 @@ npm test -- --run
 
 echo
 echo "Running production build..."
-npm run build
+if ! npm run build; then
+  echo
+  echo "Build failed on first attempt. Retrying once in 3s..."
+  sleep 3
+  npm run build
+fi
 
 echo
 echo "Pre-deploy readiness check PASSED."

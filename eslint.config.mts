@@ -6,11 +6,17 @@ import { defineConfig } from "eslint/config";
 
 export default defineConfig([
   {
+    ignores: [".next/**", "node_modules/**", "out/**", "build/**", "qa-screenshots/**"],
+  },
+  {
     files: ["**/*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}"],
     plugins: { js },
     extends: [js.configs.recommended],
     languageOptions: {
-      globals: globals.browser,
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
     },
   },
   ...tseslint.configs.recommended,

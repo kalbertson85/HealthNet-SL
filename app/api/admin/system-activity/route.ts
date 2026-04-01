@@ -6,7 +6,7 @@ import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
 export const dynamic = "force-dynamic"
-export const SYSTEM_ACTIVITY_CSV_HEADER = [
+const SYSTEM_ACTIVITY_CSV_HEADER = [
   "module",
   "id",
   "created_at",

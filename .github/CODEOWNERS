@@ -1,0 +1,17 @@
+# Default owner for all files
+* @kalbertson85
+
+# CI / release governance
+.github/workflows/* @kalbertson85
+RELEASE_CHECKLIST.md @kalbertson85
+BRANCH_PROTECTION.md @kalbertson85
+
+# Security-sensitive application areas
+app/api/webhooks/* @kalbertson85
+app/api/sync/* @kalbertson85
+app/api/patients/photo/* @kalbertson85
+lib/http/* @kalbertson85
+lib/supabase/* @kalbertson85
+lib/storage.ts @kalbertson85
+lib/webhooks/* @kalbertson85
+scripts/* @kalbertson85

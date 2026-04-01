@@ -6,6 +6,7 @@ Date: 2026-03-31
 
 - Ensure branch protection is configured for `main` using `BRANCH_PROTECTION.md`.
 - Ensure CODEOWNERS is active and review from code owners is required.
+- Ensure `SECURITY.md` contact path is current and monitored.
 
 ## 1) Pre-Release Gate
 

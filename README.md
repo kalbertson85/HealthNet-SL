@@ -5,6 +5,8 @@ This project is a hospital management system (HMS) built with Next.js (App Route
 Hardening sign-off checklist: `HARDENING_STATUS.md`
 Release execution checklist: `RELEASE_CHECKLIST.md`
 Release notes draft: `RELEASE_NOTES_2026-03-31.md`
+Security policy: `SECURITY.md`
+Branch protection runbook: `BRANCH_PROTECTION.md`
 
 ## Visit & Billing Workflow
 

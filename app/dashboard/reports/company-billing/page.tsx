@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 
 interface CompanyBillingReportsPageProps {
-  searchParams: Promise<{ company_id?: string; from?: string; to?: string; status?: string }>
+  searchParams: Promise<{ company_id?: string; from?: string; to?: string; status?: string; page?: string }>
 }
 
 interface InvoiceRow {
@@ -44,6 +44,7 @@ interface DoctorProfileLite {
 }
 
 const MAX_COMPANY_BILLING_ROWS = 2000
+const COMPANY_BILLING_PAGE_SIZE = 100
 
 export default async function CompanyBillingReportsPage({ searchParams }: CompanyBillingReportsPageProps) {
   const supabase = await createServerClient()
@@ -64,6 +65,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   const statusFilter = (sp.status || "all").toLowerCase().trim()
   const fromParam = (sp.from || "").trim()
   const toParam = (sp.to || "").trim()
+  const currentPage = Math.max(1, Number.parseInt((sp.page || "1").trim(), 10) || 1)
   const hasActiveFilters = Boolean(selectedCompanyId) || statusFilter !== "all" || Boolean(fromParam) || Boolean(toParam)
 
   const today = new Date()
@@ -177,6 +179,22 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   const totalAmount = rows.reduce((sum, r) => sum + r.total, 0)
   const totalPaid = rows.reduce((sum, r) => sum + r.paid, 0)
   const totalBalance = rows.reduce((sum, r) => sum + r.balance, 0)
+  const totalRows = rows.length
+  const pageStart = (currentPage - 1) * COMPANY_BILLING_PAGE_SIZE
+  const pageEnd = pageStart + COMPANY_BILLING_PAGE_SIZE
+  const pageRows = rows.slice(pageStart, pageEnd)
+  const hasNextPage = pageEnd < totalRows
+
+  const buildReportQuery = (page: number) => {
+    const params = new URLSearchParams()
+    if (selectedCompanyId) params.set("company_id", selectedCompanyId)
+    if (fromParam) params.set("from", fromParam)
+    if (toParam) params.set("to", toParam)
+    if (statusFilter && statusFilter !== "all") params.set("status", statusFilter)
+    if (page > 1) params.set("page", String(page))
+    const query = params.toString()
+    return query ? `?${query}` : ""
+  }
 
   const formatDate = (value: string | null) => {
     if (!value) return ""
@@ -304,7 +322,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         <Card>
           <CardHeader>
             <CardTitle>Total billed</CardTitle>
-            <CardDescription>Sum of {rows.length} matching invoice(s) in this period.</CardDescription>
+            <CardDescription>Sum of {totalRows} matching invoice(s) in this period.</CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">Le {totalAmount.toLocaleString()}</p>
@@ -340,7 +358,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           <CardDescription>One line per visit, showing both staff member and doctor.</CardDescription>
         </CardHeader>
         <CardContent>
-          {rows.length === 0 ? (
+          {totalRows === 0 ? (
             <p className="text-sm text-muted-foreground">
               No company invoices match the selected filters.
               {hasActiveFilters ? (
@@ -372,7 +390,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
+                  {pageRows.map((row) => (
                     <tr key={row.id} className="border-b last:border-0">
                       <td className="px-3 py-2 whitespace-nowrap">{formatDate(row.createdAt)}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.companyName}</td>
@@ -391,6 +409,33 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
               </table>
             </div>
           )}
+          {totalRows > 0 ? (
+            <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                Page {currentPage} · Showing {pageRows.length} of {totalRows} invoice{totalRows === 1 ? "" : "s"}
+              </span>
+              <div className="flex items-center gap-2">
+                {currentPage > 1 ? (
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/dashboard/reports/company-billing${buildReportQuery(currentPage - 1)}`}>Previous</Link>
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" disabled>
+                    Previous
+                  </Button>
+                )}
+                {hasNextPage ? (
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/dashboard/reports/company-billing${buildReportQuery(currentPage + 1)}`}>Next</Link>
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" disabled>
+                    Next
+                  </Button>
+                )}
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>

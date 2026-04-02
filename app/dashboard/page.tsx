@@ -168,7 +168,11 @@ export default async function DashboardPage() {
   const supabase = await createServerClient()
   const queryTimings: QueryTimingRow[] = []
 
-  const runTimedQuery = async <T,>(label: string, run: () => Promise<T>, getRows?: (value: T) => number | undefined): Promise<T> => {
+  const runTimedQuery = async <T,>(
+    label: string,
+    run: () => PromiseLike<T>,
+    getRows?: (value: T) => number | undefined,
+  ): Promise<T> => {
     const startedAt = Date.now()
     const result = await run()
     const durationMs = Math.max(0, Date.now() - startedAt)

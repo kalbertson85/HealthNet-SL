@@ -71,9 +71,10 @@ function categoryLabel(cat: string): string {
 }
 
 export const revalidate = 0
+const FHC_RECENT_VISITS_PAGE_SIZE = 50
 
 export default async function FreeHealthCareReportPage(props: {
-  searchParams?: Promise<{ from?: string; to?: string; category?: string; status?: string; facility?: string; service_type?: string }>
+  searchParams?: Promise<{ from?: string; to?: string; category?: string; status?: string; facility?: string; service_type?: string; page?: string }>
 }) {
   const supabase = await createServerClient()
   const { user, profile } = await getSessionUserAndProfile()
@@ -95,6 +96,7 @@ export default async function FreeHealthCareReportPage(props: {
   const statusFilter = (resolvedSearchParams?.status || "all").trim().toLowerCase()
   const facilityFilter = (resolvedSearchParams?.facility || "all").trim()
   const serviceType = (resolvedSearchParams?.service_type || "").trim()
+  const currentPage = Math.max(1, Number.parseInt((resolvedSearchParams?.page || "1").trim(), 10) || 1)
   const hasActiveFilters =
     Boolean(fromParam) ||
     Boolean(toParam) ||
@@ -248,6 +250,25 @@ export default async function FreeHealthCareReportPage(props: {
 
   const facilitySummary = Array.from(facilitySummaryMap.values())
   const visitsTruncated = (data || []).length >= MAX_FHC_VISITS_ROWS
+  const totalRecentRows = rows.length
+  const pageSliceStart = (currentPage - 1) * FHC_RECENT_VISITS_PAGE_SIZE
+  const pageSliceEnd = pageSliceStart + FHC_RECENT_VISITS_PAGE_SIZE
+  const recentPageRows = rows.slice(pageSliceStart, pageSliceEnd)
+  const hasNextPage = pageSliceEnd < totalRecentRows
+
+  const buildReportQuery = (page: number) => {
+    const params = new URLSearchParams()
+    if (fromParam) params.set("from", fromParam)
+    if (toParam) params.set("to", toParam)
+    if (categoryFilter && categoryFilter !== "all") params.set("category", categoryFilter)
+    if (statusFilter && statusFilter !== "all") params.set("status", statusFilter)
+    if (facilityFilter && facilityFilter !== "all") params.set("facility", facilityFilter)
+    if (serviceType && serviceType !== "all") params.set("service_type", serviceType)
+    if (page > 1) params.set("page", String(page))
+    const query = params.toString()
+    return query ? `?${query}` : ""
+  }
+
   const facilityOptions = Array.from(
     new Map(
       mappedRows
@@ -490,14 +511,16 @@ export default async function FreeHealthCareReportPage(props: {
       <Card>
         <CardHeader>
           <CardTitle>Recent FHC visits</CardTitle>
-          <CardDescription>Most recent Free Health Care visits with category, age band, and current status.</CardDescription>
+          <CardDescription>
+            Most recent Free Health Care visits with category, age band, and current status.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          {rows.length === 0 ? (
+          {totalRecentRows === 0 ? (
             <p className="text-sm text-muted-foreground">No Free Health Care visits to show.</p>
           ) : (
             <div className="space-y-2 text-sm">
-              {rows.slice(0, 50).map((row) => {
+              {recentPageRows.map((row) => {
                 const age = ageFromDob(row.date_of_birth)
                 const band = ageBand(age)
                 return (
@@ -520,6 +543,37 @@ export default async function FreeHealthCareReportPage(props: {
                   </div>
                 )
               })}
+              <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  Page {currentPage} · Showing {recentPageRows.length} of {totalRecentRows} visit{totalRecentRows === 1 ? "" : "s"}
+                </span>
+                <div className="flex items-center gap-2">
+                  {currentPage > 1 ? (
+                    <Link
+                      href={`/dashboard/reports/free-health-care${buildReportQuery(currentPage - 1)}`}
+                      className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
+                    >
+                      Previous
+                    </Link>
+                  ) : (
+                    <span className="inline-flex h-8 items-center rounded-md border border-input bg-muted px-3 text-xs text-muted-foreground">
+                      Previous
+                    </span>
+                  )}
+                  {hasNextPage ? (
+                    <Link
+                      href={`/dashboard/reports/free-health-care${buildReportQuery(currentPage + 1)}`}
+                      className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
+                    >
+                      Next
+                    </Link>
+                  ) : (
+                    <span className="inline-flex h-8 items-center rounded-md border border-input bg-muted px-3 text-xs text-muted-foreground">
+                      Next
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </CardContent>

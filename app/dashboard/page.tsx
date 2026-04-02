@@ -31,6 +31,12 @@ interface QueryTimingRow {
   rows?: number
 }
 
+interface RevenueResult {
+  revenue: number
+  revenueTruncated: boolean
+  source: "rpc" | "fallback"
+}
+
 const MAX_REVENUE_INVOICE_SCAN = 1500
 const SLOW_QUERY_WARN_MS = 500
 
@@ -194,7 +200,42 @@ export default async function DashboardPage() {
     const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
     const todayIsoDate = new Date().toISOString().split("T")[0]
 
-    const [patientsCount, appointmentsToday, pendingPrescriptions, totalRevenue, activeAdmissions, pendingLabTests] =
+    const fetchRevenueTotal = async (): Promise<RevenueResult> => {
+      const rpcResult = await runTimedQuery("invoices.revenue_total.rpc", () => supabase.rpc("dashboard_total_paid_revenue"))
+      const rpcData = (rpcResult as { data?: unknown; error?: { message?: string } | null }).data
+      const rpcError = (rpcResult as { error?: { message?: string } | null }).error
+      const rpcValue = Number(rpcData ?? 0)
+      if (!rpcError && Number.isFinite(rpcValue)) {
+        return { revenue: rpcValue, revenueTruncated: false, source: "rpc" }
+      }
+
+      if (rpcError) {
+        console.warn("[dashboard.revenue] RPC unavailable, using fallback scan", rpcError.message || rpcError)
+      }
+
+      const fallbackResult = await runTimedQuery(
+        "invoices.revenue_window.fallback",
+        () =>
+          supabase
+            .from("invoices")
+            .select("paid_amount")
+            .not("payment_date", "is", null)
+            .gt("paid_amount", 0)
+            .order("payment_date", { ascending: false })
+            .limit(MAX_REVENUE_INVOICE_SCAN),
+        (result) => (result as { data?: unknown[] | null }).data?.length
+      )
+
+      const rows = (fallbackResult as { data?: { paid_amount?: number | null }[] | null }).data || []
+      return {
+        revenue: rows.reduce((sum, invoice) => sum + Number(invoice.paid_amount || 0), 0),
+        revenueTruncated: rows.length >= MAX_REVENUE_INVOICE_SCAN,
+        source: "fallback",
+      }
+    }
+
+    const revenuePromise = fetchRevenueTotal()
+    const [patientsCount, appointmentsToday, pendingPrescriptions, activeAdmissions, pendingLabTests, revenueResult] =
       await Promise.all([
         runTimedQuery("patients.count", () => supabase.from("patients").select("id", { count: "exact", head: true })),
         runTimedQuery("appointments.today.count", () =>
@@ -207,35 +248,21 @@ export default async function DashboardPage() {
         runTimedQuery("prescriptions.pending.count", () =>
           supabase.from("prescriptions").select("id", { count: "exact", head: true }).eq("status", "pending")
         ),
-        runTimedQuery(
-          "invoices.revenue_window",
-          () =>
-            supabase
-              .from("invoices")
-              .select("paid_amount")
-              .not("payment_date", "is", null)
-              .gt("paid_amount", 0)
-              .order("payment_date", { ascending: false })
-              .limit(MAX_REVENUE_INVOICE_SCAN),
-          (result) => (result as { data?: unknown[] | null }).data?.length
-        ),
         runTimedQuery("admissions.active.count", () =>
           supabase.from("admissions").select("id", { count: "exact", head: true }).eq("status", "active")
         ),
         runTimedQuery("lab_tests.pending.count", () =>
           supabase.from("lab_tests").select("id", { count: "exact", head: true }).eq("status", "pending")
         ),
+        revenuePromise,
       ])
-
-    const revenue = totalRevenue.data?.reduce((sum, invoice) => sum + Number(invoice.paid_amount || 0), 0) || 0
-    const revenueTruncated = (totalRevenue.data?.length || 0) >= MAX_REVENUE_INVOICE_SCAN
 
     const stats = {
       patients: patientsCount.count || 0,
       appointments: appointmentsToday.count || 0,
       prescriptions: pendingPrescriptions.count || 0,
-      revenue,
-      revenueTruncated,
+      revenue: revenueResult.revenue,
+      revenueTruncated: revenueResult.revenueTruncated,
       admissions: activeAdmissions.count || 0,
       labTests: pendingLabTests.count || 0,
     }
@@ -259,6 +286,7 @@ export default async function DashboardPage() {
       slowest_query: slowest?.label || null,
       slowest_query_ms: slowest?.durationMs ?? 0,
       revenue_truncated: stats.revenueTruncated,
+      revenue_source: revenueResult.source,
     })
 
     return (
@@ -268,7 +296,8 @@ export default async function DashboardPage() {
       >
         {stats.revenueTruncated ? (
           <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            Revenue is computed from the latest {MAX_REVENUE_INVOICE_SCAN.toLocaleString()} paid invoices for performance.
+            Revenue is computed from the latest {MAX_REVENUE_INVOICE_SCAN.toLocaleString()} paid invoices while
+            aggregate RPC is unavailable.
           </div>
         ) : null}
 

@@ -39,12 +39,27 @@ export async function updateSession(request: NextRequest, requestHeaders?: Heade
     },
   )
 
-  // IMPORTANT: Do not run code between createServerClient and supabase.auth.getUser()
-  // A simple mistake could make it very hard to debug issues with users being randomly logged out.
+  const isProtectedPath =
+    request.nextUrl.pathname.startsWith("/dashboard") ||
+    (request.nextUrl.pathname.startsWith("/api") && !request.nextUrl.pathname.startsWith("/api/webhooks/mobile-money"))
 
+  const hasSupabaseAuthCookie = request.cookies
+    .getAll()
+    .some((cookie) => cookie.name.includes("-auth-token"))
+
+  // Fast-path redirect for protected routes with no auth cookie.
+  if (isProtectedPath && !hasSupabaseAuthCookie) {
+    const url = request.nextUrl.clone()
+    url.pathname = "/auth/login"
+    return NextResponse.redirect(url)
+  }
+
+  // In proxy we only need session presence for routing decisions.
+  // Strict user validation still happens in page/API handlers.
   const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    data: { session },
+  } = await supabase.auth.getSession()
+  const user = session?.user ?? null
 
   // Redirect unauthenticated users to login page
   if (

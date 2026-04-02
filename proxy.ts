@@ -3,13 +3,20 @@ import { REQUEST_ID_HEADER, resolveRequestId } from "@/lib/http/request-id"
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
+const PUBLIC_PATH_PREFIXES = ["/auth", "/about", "/contact", "/privacy", "/terms"]
+const PUBLIC_PATH_EXACT = new Set(["/"])
+
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname
   const requestId = resolveRequestId(request)
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set(REQUEST_ID_HEADER, requestId)
 
-  const response = pathname.startsWith("/api/webhooks/mobile-money")
+  const isPublicRoute =
+    PUBLIC_PATH_EXACT.has(pathname) || PUBLIC_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+  const isWebhookRoute = pathname.startsWith("/api/webhooks/mobile-money")
+
+  const response = isWebhookRoute || isPublicRoute
     ? NextResponse.next({
         request: {
           headers: requestHeaders,

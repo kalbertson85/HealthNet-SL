@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "next build --webpack",
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "lint": "eslint .",
     "predeploy:check": "bash scripts/predeploy-readiness.sh",
     "release:check": "bash scripts/release-check.sh",

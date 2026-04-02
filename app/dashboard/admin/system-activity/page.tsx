@@ -16,6 +16,7 @@ interface SystemActivitySearchParams {
   action?: string
   from?: string
   to?: string
+  page?: string
 }
 
 interface UnifiedActivityRow {
@@ -34,6 +35,7 @@ interface UnifiedActivityRow {
 export const revalidate = 0
 const PAGE_LIMIT = 250
 const PAGE_SIZE = 100
+const TOTAL_MERGED_LIMIT = 1000
 
 export default async function SystemActivityPage({
   searchParams,
@@ -60,7 +62,7 @@ export default async function SystemActivityPage({
   const actionFilter = (sp.action || "").trim() || null
   const fromFilter = (sp.from || "").trim() || null
   const toFilter = (sp.to || "").trim() || null
-  const currentPage = Math.max(1, Number.parseInt((sp as { page?: string }).page || "1", 10) || 1)
+  const currentPage = Math.max(1, Number.parseInt(sp.page || "1", 10) || 1)
   const hasActiveFilters =
     moduleFilter !== "all" || Boolean(actorFilter) || Boolean(patientFilter) || Boolean(actionFilter) || Boolean(fromFilter) || Boolean(toFilter)
 
@@ -349,12 +351,14 @@ export default async function SystemActivityPage({
 
   // Sort all rows by created_at descending
   filteredRows.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))
+  const mergedRowsTruncated = filteredRows.length > TOTAL_MERGED_LIMIT
+  const mergedRows = filteredRows.slice(0, TOTAL_MERGED_LIMIT)
 
-  const totalRows = filteredRows.length
+  const totalRows = mergedRows.length
   const hasNextPage = totalRows > currentPage * PAGE_SIZE
   const pageSliceStart = (currentPage - 1) * PAGE_SIZE
   const pageSliceEnd = pageSliceStart + PAGE_SIZE
-  const pageRows = filteredRows.slice(pageSliceStart, pageSliceEnd)
+  const pageRows = mergedRows.slice(pageSliceStart, pageSliceEnd)
 
   const actorIds = Array.from(new Set(pageRows.map((r) => r.actor_user_id).filter(Boolean))) as string[]
 
@@ -545,6 +549,11 @@ export default async function SystemActivityPage({
       {truncatedModules.length > 0 ? (
         <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           Results were capped at {PAGE_LIMIT} rows for: {truncatedModules.join(", ")}. Narrow filters or export CSV for fuller coverage.
+        </div>
+      ) : null}
+      {mergedRowsTruncated ? (
+        <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Merged results were capped at {TOTAL_MERGED_LIMIT} rows for on-page rendering performance. Use filters or export CSV for fuller coverage.
         </div>
       ) : null}
 

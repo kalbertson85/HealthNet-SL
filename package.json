@@ -10,6 +10,7 @@
     "release:check": "bash scripts/release-check.sh",
     "start": "next start",
     "test": "vitest",
+    "perf:smoke": "bash scripts/perf-smoke.sh",
     "webhook:test:local": "bash scripts/test-mobile-money-mutation-local.sh",
     "repo:check": "bash scripts/repo-hygiene-check.sh",
     "repo:secrets": "bash scripts/repo-secret-scan.sh"

@@ -5,6 +5,7 @@ import type { SessionUserLike } from "@/lib/utils"
 import { normalizeRole } from "@/lib/utils"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
+import { cache } from "react"
 
 export interface DashboardSessionUser extends SessionUserLike {
   email?: string | null
@@ -18,10 +19,10 @@ export interface DashboardSessionProfile {
   status?: string | null
 }
 
-export async function getSessionUserAndProfile(): Promise<{
+const getSessionUserAndProfileCached = cache(async (): Promise<{
   user: DashboardSessionUser | null
   profile: DashboardSessionProfile | null
-}> {
+}> => {
   const supabase = await createServerClient()
 
   const {
@@ -64,6 +65,13 @@ export async function getSessionUserAndProfile(): Promise<{
         }
       : null,
   }
+})
+
+export async function getSessionUserAndProfile(): Promise<{
+  user: DashboardSessionUser | null
+  profile: DashboardSessionProfile | null
+}> {
+  return getSessionUserAndProfileCached()
 }
 
 export async function signOut() {

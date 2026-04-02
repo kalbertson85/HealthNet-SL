@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { redirect } from "next/navigation"
+import { startPageRenderTimer } from "@/lib/observability/page-performance"
 
 interface VisitRow {
   id: string
@@ -33,9 +34,19 @@ interface NursingNoteRow {
 }
 
 export const revalidate = 0
+const MAX_ACTIVE_VISITS = 200
+const MAX_NOTES_SCAN = 1500
 
-export default async function NursingPage() {
+interface NursingPageProps {
+  searchParams?: Promise<{ notes_table?: string }>
+}
+
+export default async function NursingPage({ searchParams }: NursingPageProps) {
+  const pagePerf = startPageRenderTimer("dashboard.nursing")
   const supabase = await createServerClient()
+  try {
+    const sp = (await searchParams) ?? {}
+    const notesTableMissingFromAction = sp.notes_table === "missing"
 
   const { data: visitsData, error: visitsError } = await supabase
     .from("visits")
@@ -45,7 +56,8 @@ export default async function NursingPage() {
        facilities(name, code)`
     )
     .in("visit_status", ["doctor_pending", "doctor_review", "lab_pending", "billing_pending"])
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false })
+    .limit(MAX_ACTIVE_VISITS)
 
   if (visitsError) {
     console.error("[nursing] Error loading visits for nursing notes:", visitsError.message || visitsError)
@@ -86,22 +98,34 @@ export default async function NursingPage() {
         : null,
     }
   })
-  const visitIds = visits.map((v) => v.id)
+    const visitsTruncated = (visitsData?.length || 0) >= MAX_ACTIVE_VISITS
+    const visitIds = visits.map((v) => v.id)
 
-  const notesByVisitId = new Map<string, NursingNoteRow[]>()
+    const notesByVisitId = new Map<string, NursingNoteRow[]>()
+    let notesTableMissing = notesTableMissingFromAction
+    let notesTruncated = false
 
-  if (visitIds.length > 0) {
+    if (visitIds.length > 0) {
     const { data: notesData, error: notesError } = await supabase
       .from("visit_nursing_notes")
       .select("id, visit_id, note_type, note, procedure_type, performed_at")
       .in("visit_id", visitIds)
       .order("performed_at", { ascending: false })
+      .limit(MAX_NOTES_SCAN)
 
     if (notesError) {
-      console.error("[nursing] Error loading visit nursing notes:", notesError.message || notesError)
+      const msg = notesError.message || ""
+      const missingTable =
+        msg.includes("Could not find the table 'public.visit_nursing_notes'") ||
+        msg.includes("relation \"public.visit_nursing_notes\" does not exist")
+      if (missingTable) {
+        notesTableMissing = true
+      } else {
+        console.error("[nursing] Error loading visit nursing notes:", notesError.message || notesError)
+      }
     }
 
-    for (const row of notesData || []) {
+      for (const row of notesData || []) {
       const visitId = (row.visit_id as string | null) ?? null
       if (!visitId) continue
       const arr = notesByVisitId.get(visitId) ?? []
@@ -112,11 +136,12 @@ export default async function NursingPage() {
         procedure_type: (row.procedure_type as string | null) ?? null,
         performed_at: row.performed_at as string,
       })
-      notesByVisitId.set(visitId, arr)
+        notesByVisitId.set(visitId, arr)
+      }
+      notesTruncated = (notesData?.length || 0) >= MAX_NOTES_SCAN
     }
-  }
 
-  async function addNursingNote(formData: FormData) {
+    async function addNursingNote(formData: FormData) {
     "use server"
 
     const supabase = await createServerClient()
@@ -139,7 +164,7 @@ export default async function NursingPage() {
       redirect("/auth/login")
     }
 
-    await supabase.from("visit_nursing_notes").insert({
+    const { error } = await supabase.from("visit_nursing_notes").insert({
       visit_id: visitId,
       recorded_by: user.id,
       note_type: noteType || null,
@@ -148,18 +173,38 @@ export default async function NursingPage() {
       performed_at: new Date().toISOString(),
     })
 
-    redirect("/dashboard/nursing")
-  }
-
-  const formatTime = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    } catch {
-      return "-"
+    if (error) {
+      const msg = error.message || ""
+      const missingTable =
+        msg.includes("Could not find the table 'public.visit_nursing_notes'") ||
+        msg.includes("relation \"public.visit_nursing_notes\" does not exist")
+      if (missingTable) {
+        redirect("/dashboard/nursing?notes_table=missing")
+      }
+      console.error("[nursing] Error adding visit nursing note:", error.message || error)
     }
-  }
 
-  return (
+      redirect("/dashboard/nursing")
+    }
+
+    const formatTime = (iso: string) => {
+      try {
+        return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      } catch {
+        return "-"
+      }
+    }
+
+    pagePerf.done({
+      query_count: 2,
+      visit_rows: visits.length,
+      note_rows: Array.from(notesByVisitId.values()).reduce((sum, rows) => sum + rows.length, 0),
+      notes_table_missing: notesTableMissing,
+      visits_truncated: visitsTruncated,
+      notes_truncated: notesTruncated,
+    })
+
+    return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4">
         <div>
@@ -187,6 +232,25 @@ export default async function NursingPage() {
           <CardDescription>Choose a visit and add nursing notes and procedures.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {visitsTruncated ? (
+            <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Showing the most recent {MAX_ACTIVE_VISITS} active visits for performance.
+            </div>
+          ) : null}
+          {notesTableMissing ? (
+            <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Nursing notes table is not available in this database yet. Apply migration
+              {" "}
+              <code>034_nursing_visit_notes_and_procedures.sql</code>
+              {" "}
+              to enable note history and saving.
+            </div>
+          ) : null}
+          {notesTruncated ? (
+            <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Showing the latest {MAX_NOTES_SCAN} nursing note entries across active visits for performance.
+            </div>
+          ) : null}
           {visits.length === 0 ? (
             <p className="text-sm text-muted-foreground">No active visits found.</p>
           ) : (
@@ -285,5 +349,9 @@ export default async function NursingPage() {
         </CardContent>
       </Card>
     </div>
-  )
+    )
+  } catch (error) {
+    pagePerf.fail(error, { query_count: 2 })
+    throw error
+  }
 }

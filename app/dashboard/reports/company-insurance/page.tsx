@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button"
 import Link from "next/link"
 
 interface CompanyInsuranceReportsPageProps {
-  searchParams: Promise<{ company_id?: string; status?: string }>
+  searchParams: Promise<{ company_id?: string; status?: string; page?: string }>
 }
+
+const COMPANY_INSURANCE_PAGE_SIZE = 50
 
 export default async function CompanyInsuranceReportsPage({ searchParams }: CompanyInsuranceReportsPageProps) {
   const supabase = await createServerClient()
@@ -25,6 +27,8 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
   const sp = await searchParams
   const selectedCompanyId = (sp.company_id || "").trim() || null
   const statusFilter = (sp.status || "all").toLowerCase().trim()
+  const currentPage = Math.max(1, Number.parseInt((sp.page || "1").trim(), 10) || 1)
+  const hasActiveFilters = Boolean(selectedCompanyId) || statusFilter !== "all"
 
   const exportSearch = new URLSearchParams()
   if (selectedCompanyId) exportSearch.set("company_id", selectedCompanyId)
@@ -119,6 +123,21 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
       return true
     })
 
+  const totalRows = rows.length
+  const pageStart = (currentPage - 1) * COMPANY_INSURANCE_PAGE_SIZE
+  const pageEnd = pageStart + COMPANY_INSURANCE_PAGE_SIZE
+  const pageRows = rows.slice(pageStart, pageEnd)
+  const hasNextPage = pageEnd < totalRows
+
+  const buildReportQuery = (page: number) => {
+    const params = new URLSearchParams()
+    if (selectedCompanyId) params.set("company_id", selectedCompanyId)
+    if (statusFilter && statusFilter !== "all") params.set("status", statusFilter)
+    if (page > 1) params.set("page", String(page))
+    const query = params.toString()
+    return query ? `?${query}` : ""
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -176,9 +195,16 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
             <option value="missing">No cards</option>
           </select>
         </div>
-        <Button type="submit" size="sm" className="mt-4">
-          Apply filters
-        </Button>
+        <div className="mt-4 flex items-center gap-2">
+          {hasActiveFilters ? (
+            <Button asChild type="button" size="sm" variant="outline">
+              <Link href="/dashboard/reports/company-insurance">Reset</Link>
+            </Button>
+          ) : null}
+          <Button type="submit" size="sm">
+            Apply filters
+          </Button>
+        </div>
       </form>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -188,7 +214,7 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
             <CardDescription>With at least one employee or dependent.</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{rows.length}</p>
+            <p className="text-2xl font-bold">{totalRows}</p>
           </CardContent>
         </Card>
         <Card>
@@ -219,8 +245,19 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
           <CardDescription>Employee and dependent coverage by company.</CardDescription>
         </CardHeader>
         <CardContent>
-          {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No companies match the selected filters.</p>
+          {totalRows === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No companies match the selected filters.
+              {hasActiveFilters ? (
+                <>
+                  {" "}
+                  <Link href="/dashboard/reports/company-insurance" className="text-blue-600 hover:underline">
+                    Clear filters
+                  </Link>
+                  .
+                </>
+              ) : null}
+            </p>
           ) : (
             <div className="overflow-x-auto text-sm">
               <table className="min-w-full border divide-y divide-border text-xs">
@@ -236,7 +273,7 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(([id, entry]) => (
+                  {pageRows.map(([id, entry]) => (
                     <tr key={id} className="border-b last:border-0">
                       <td className="px-3 py-2 whitespace-nowrap">{entry.name}</td>
                       <td className="px-3 py-2">{entry.employees}</td>
@@ -260,6 +297,33 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
               </table>
             </div>
           )}
+          {totalRows > 0 ? (
+            <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                Page {currentPage} · Showing {pageRows.length} of {totalRows} compan{totalRows === 1 ? "y" : "ies"}
+              </span>
+              <div className="flex items-center gap-2">
+                {currentPage > 1 ? (
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/dashboard/reports/company-insurance${buildReportQuery(currentPage - 1)}`}>Previous</Link>
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" disabled>
+                    Previous
+                  </Button>
+                )}
+                {hasNextPage ? (
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/dashboard/reports/company-insurance${buildReportQuery(currentPage + 1)}`}>Next</Link>
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" disabled>
+                    Next
+                  </Button>
+                )}
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>

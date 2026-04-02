@@ -177,6 +177,30 @@ Run the full release gate (predeploy readiness, tests, build, then lint):
 npm run release:check
 ```
 
+Run a local performance smoke check (p50/p95/max) for critical dashboard routes:
+
+```bash
+npm run perf:smoke
+```
+
+Use a larger sample for more stable p95:
+
+```bash
+ITERATIONS=10 npm run perf:smoke
+```
+
+For authenticated dashboard timing, pass your session cookies:
+
+```bash
+COOKIE_HEADER='sb-access-token=...; sb-refresh-token=...' ITERATIONS=10 npm run perf:smoke
+```
+
+For stricter benchmarking (warmup + fail if any response is not HTTP 200):
+
+```bash
+REQUIRE_ALL_200=true WARMUP_ITERATIONS=2 ITERATIONS=10 npm run perf:smoke
+```
+
 Optional Sentry monitoring environment variables:
 
 - `SENTRY_DSN` (or `NEXT_PUBLIC_SENTRY_DSN`) – DSN used for error reporting.

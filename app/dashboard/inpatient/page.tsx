@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TableCard } from "@/components/table-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { buildFollowUpAppointmentHref } from "@/lib/patient-flow"
 
 const PAGE_SIZE = 25
 const PAGE_SCAN_LIMIT = 250
@@ -304,7 +305,15 @@ export default async function InpatientPage(props: { searchParams?: Promise<{ pa
                         </Button>
                         {can(rbacUser, "appointments.manage") ? (
                           <Button asChild size="sm" variant="outline">
-                            <Link href={`/dashboard/appointments/new?patient_id=${admission.patient_id}`}>
+                            <Link
+                              href={buildFollowUpAppointmentHref({
+                                patientId: admission.patient_id,
+                                source: "extended_care",
+                                reason: "Post-admission follow-up",
+                                visitId: admission.visit_id ?? null,
+                                admissionId: admission.id,
+                              })}
+                            >
                               Appointment
                             </Link>
                           </Button>

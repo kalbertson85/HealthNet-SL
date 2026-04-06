@@ -9,6 +9,7 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 
 export const revalidate = 0
+const WARD_REQUEST_LIST_LIMIT = 100
 
 interface WardRequestRow {
   id: string
@@ -65,7 +66,7 @@ export default async function WardRequestsPage() {
        patients(full_name, patient_number)`,
     )
     .order("created_at", { ascending: false })
-    .limit(100)
+    .limit(WARD_REQUEST_LIST_LIMIT)
 
   const requests = (requestsData || []) as WardRequestRow[]
   const requestIds = requests.map((r) => r.id)
@@ -233,6 +234,13 @@ export default async function WardRequestsPage() {
           <Link href="/dashboard/pharmacy">Back to Pharmacy</Link>
         </Button>
       </div>
+
+      {(requestsData?.length || 0) >= WARD_REQUEST_LIST_LIMIT ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Showing the latest {WARD_REQUEST_LIST_LIMIT} ward requests. Complete approvals and dispensing here, then use
+          patient or ward records for older history.
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>

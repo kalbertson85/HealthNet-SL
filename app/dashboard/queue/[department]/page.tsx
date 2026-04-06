@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { assertQueueTransition, type QueueStatus } from "@/lib/queues"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { ensureActiveVisitForPatient } from "@/lib/visit-flow"
 
 const DEPARTMENT_QUEUE_LIMIT = 200
 
@@ -264,49 +266,11 @@ async function startOrContinueVisitFromQueue(queueId: string) {
         visitId = existingVisit.id as string
       } else {
         // Pull Free Health Care and company assignment from patient so billing can default correctly later
-        const { data: patient } = await supabase
-          .from("patients")
-          .select("id, company_id, free_health_category")
-          .eq("id", patientId)
-          .maybeSingle()
-
-        const fhcAwarePatient = (patient || null) as
-          | { company_id?: string | null; free_health_category?: string | null; id?: string | null }
-          | null
-
-        const assignedCompanyId = (fhcAwarePatient?.company_id as string | null) ?? null
-        const freeHealthCategory = (fhcAwarePatient?.free_health_category as string | null) ?? "none"
-        const isFreeHealthCare = freeHealthCategory !== "none"
-        const payerCategory = isFreeHealthCare ? "fhc" : assignedCompanyId ? "company" : "self_pay"
-
-        // Try to tag this visit with the OPD facility if one has been configured
-        const { data: opdFacility } = await supabase
-          .from("facilities")
-          .select("id, code")
-          .eq("code", "opd")
-          .maybeSingle()
-
-        const facilityId = (opdFacility?.id as string | null) ?? null
-
-        const { data: inserted, error: visitError } = await supabase
-          .from("visits")
-          .insert({
-            patient_id: patientId,
-            visit_status: "doctor_pending",
-            assigned_company_id: assignedCompanyId,
-            is_free_health_care: isFreeHealthCare,
-            payer_category: payerCategory,
-            facility_id: facilityId,
-          })
-          .select("id")
-          .maybeSingle()
-
-        if (visitError || !inserted) {
-          console.error("[v0] Error creating visit from OPD queue:", visitError || "no inserted row")
+        visitId = await ensureActiveVisitForPatient(supabase, patientId, { facilityCode: "opd" })
+        if (!visitId) {
+          console.error("[v0] Error creating visit from OPD queue: no inserted row")
           redirect("/dashboard/queue?error=queue_action_invalid")
         }
-
-        visitId = inserted.id as string
       }
 
       // Persist the link back to this queue row
@@ -320,8 +284,7 @@ async function startOrContinueVisitFromQueue(queueId: string) {
     redirect("/dashboard/queue?error=queue_action_invalid")
   }
 
-  // After ensuring a visit exists and is linked, send user to the doctor workflow
-  redirect("/dashboard/doctor")
+  redirect(`/dashboard/records/visit/${visitId}`)
 }
 
 export default async function DepartmentQueuePage(props: {
@@ -403,6 +366,19 @@ export default async function DepartmentQueuePage(props: {
         </form>
       </div>
 
+      <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+        Work this queue from top to bottom: call the next patient, complete active work when finished, and cancel only
+        when the patient is no longer proceeding. OPD queues can start or continue a linked visit directly from here.
+      </div>
+
+      {department === "opd" ? (
+        <PatientWorkflowPanel
+          currentStage="queue"
+          title="Queue workflow"
+          description="The queue is the handoff point between triage and consultation. Use the linked visit to keep the patient journey connected."
+        />
+      ) : null}
+
       <form method="GET" className="mb-2 flex flex-wrap items-center gap-2 text-xs">
         <label className="text-muted-foreground" htmlFor="status">
           Status filter
@@ -481,7 +457,10 @@ export default async function DepartmentQueuePage(props: {
                 </div>
               )})
             ) : (
-              <p className="text-center text-muted-foreground py-8">No patients in progress</p>
+              <p className="py-8 text-center text-muted-foreground">
+                No patients are currently in progress. Use <span className="font-medium">Call Next Patient</span> when
+                someone is waiting, or switch the filter back to view active work.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -562,7 +541,10 @@ export default async function DepartmentQueuePage(props: {
                 </div>
               )})
             ) : (
-              <p className="text-center text-muted-foreground py-8">No patients waiting</p>
+              <p className="py-8 text-center text-muted-foreground">
+                No patients are currently waiting in this department. Add a new queue entry or check back after the next
+                registration or triage handoff.
+              </p>
             )}
           </CardContent>
         </Card>

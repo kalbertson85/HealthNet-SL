@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Edit, User, Calendar, Clock, ArrowLeft } from "lucide-react"
 import Link from "next/link"
+import { ensureActiveVisitForPatient, ensureQueueEntryForVisit } from "@/lib/visit-flow"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 
 interface AppointmentAuditRow {
   id: string
@@ -39,6 +41,7 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
   let patient: { full_name?: string | null; patient_number?: string | null; phone_number?: string | null } | null =
     null
   let doctor: { full_name?: string | null; phone_number?: string | null } | null = null
+  let linkedVisitId: string | null = null
 
   if (appointment) {
     const [{ data: patientData }, { data: doctorData }] = await Promise.all([
@@ -56,6 +59,22 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
 
     patient = patientData || null
     doctor = doctorData || null
+
+    if (appointment.status === "completed" && appointment.patient_id) {
+      const startOfDay = new Date()
+      startOfDay.setHours(0, 0, 0, 0)
+
+      const { data: visitData } = await supabase
+        .from("visits")
+        .select("id")
+        .eq("patient_id", appointment.patient_id)
+        .gte("created_at", startOfDay.toISOString())
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      linkedVisitId = (visitData?.id as string | null) ?? null
+    }
   }
 
   let auditRows: AppointmentAuditRow[] = []
@@ -139,55 +158,15 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
       try {
         const patientId = updatedAppointment.patient_id as string | null
         if (patientId) {
-          // Check if there is already a visit for this patient created today
-          const startOfDay = new Date()
-          startOfDay.setHours(0, 0, 0, 0)
-          const { data: existingVisit } = await supabase
-            .from("visits")
-            .select("id")
-            .eq("patient_id", patientId)
-            .gte("created_at", startOfDay.toISOString())
-            .order("created_at", { ascending: true })
-            .limit(1)
-            .maybeSingle()
-
-          if (!existingVisit) {
-            // Pull Free Health Care and company assignment from patient so billing can default correctly
-            const { data: patient } = await supabase
-              .from("patients")
-              .select("id, company_id, free_health_category")
-              .eq("id", patientId)
-              .maybeSingle()
-
-            const fhcAwarePatient = (patient || null) as
-              | { company_id?: string | null; free_health_category?: string | null; id?: string | null }
-              | null
-
-            const assignedCompanyId = (fhcAwarePatient?.company_id as string | null) ?? null
-            const freeHealthCategory = (fhcAwarePatient?.free_health_category as string | null) ?? "none"
-            const isFreeHealthCare = freeHealthCategory !== "none"
-            const payerCategory = isFreeHealthCare ? "fhc" : assignedCompanyId ? "company" : "self_pay"
-
-            const { data: opdFacility } = await supabase
-              .from("facilities")
-              .select("id, code")
-              .eq("code", "opd")
-              .maybeSingle()
-
-            const facilityId = (opdFacility?.id as string | null) ?? null
-
-            const { error: visitError } = await supabase.from("visits").insert({
-              patient_id: patientId,
-              visit_status: "doctor_pending",
-              assigned_company_id: assignedCompanyId,
-              is_free_health_care: isFreeHealthCare,
-              payer_category: payerCategory,
-              facility_id: facilityId,
+          const visitId = await ensureActiveVisitForPatient(supabase, patientId, { facilityCode: "opd" })
+          if (visitId) {
+            await ensureQueueEntryForVisit(supabase, {
+              patientId,
+              visitId,
+              department: "opd",
+              priority: "normal",
+              notes: `Appointment completed on ${updatedAppointment.appointment_date}`,
             })
-
-            if (visitError) {
-              console.error("[v0] Error creating visit from completed appointment:", visitError.message || visitError)
-            }
           }
         }
       } catch (visitCreateError) {
@@ -287,8 +266,10 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
                 adjustments, schedule a new appointment for this patient.
               </p>
               <Button asChild size="sm" variant="outline">
-                <Link href={`/dashboard/appointments/new?patient_id=${appointment.patient_id}`}>
-                  Schedule new appointment
+                <Link
+                  href={`/dashboard/appointments/new?patient_id=${appointment.patient_id}&source=appointment_review&reason=${encodeURIComponent("Follow-up review")}&notes=${encodeURIComponent(`Previous appointment ID: ${appointment.id}`)}`}
+                >
+                  Schedule follow-up
                 </Link>
               </Button>
             </div>
@@ -313,6 +294,16 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
           )}
         </CardContent>
       </Card>
+
+      {appointment.status === "completed" ? (
+        <PatientWorkflowPanel
+          currentStage="triage"
+          patientId={appointment.patient_id}
+          visitId={linkedVisitId}
+          title="Post-appointment workflow"
+          description="Completed appointments should feed into the active visit workflow through triage and the OPD queue."
+        />
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -451,20 +442,20 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
             <CardTitle>Quick Actions</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
+            {linkedVisitId ? (
+              <Button asChild variant="outline">
+                <Link href={`/dashboard/records/visit/${linkedVisitId}`}>Open visit handoff</Link>
+              </Button>
+            ) : null}
+            <Button asChild variant="outline">
+              <Link href="/dashboard/queue/opd">Open OPD queue</Link>
+            </Button>
             <Button asChild variant="outline">
               <Link
-                href={`/dashboard/prescriptions/new?patient_id=${appointment.patient_id}&appointment_id=${appointment.id}`}
+                href={`/dashboard/appointments/new?patient_id=${appointment.patient_id}&source=appointment_review&reason=${encodeURIComponent("Follow-up review")}&notes=${encodeURIComponent(`Previous appointment ID: ${appointment.id}`)}`}
               >
-                Create Prescription
+                Schedule follow-up
               </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href={`/dashboard/lab/new?patient_id=${appointment.patient_id}&appointment_id=${appointment.id}`}>
-                Order Lab Test
-              </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href={`/dashboard/billing/new?patient_id=${appointment.patient_id}`}>Create Invoice</Link>
             </Button>
           </CardContent>
         </Card>

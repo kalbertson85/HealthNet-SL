@@ -1,15 +1,10 @@
 import { createServerClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
 import { assertVisitTransition, type VisitStatus } from "@/lib/visits"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
+import { InpatientAdmissionForm } from "@/components/inpatient-admission-form"
 
 export default async function NewAdmissionPage(props: { searchParams: Promise<{ patient_id?: string; visit_id?: string }> }) {
   const supabase = await createServerClient()
@@ -131,115 +126,15 @@ export default async function NewAdmissionPage(props: { searchParams: Promise<{ 
         </div>
       </div>
 
-      <form action={createAdmission}>
-        <input type="hidden" name="visit_id" value={defaultVisitId} />
-        <Card>
-          <CardHeader>
-            <CardTitle>Admission Details</CardTitle>
-            <CardDescription>Patient and clinical information</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Patient *</Label>
-                <Select name="patient_id" required defaultValue={defaultPatientId || undefined}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select patient" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {patients?.map((patient) => (
-                      <SelectItem key={patient.id} value={patient.id}>
-                        {patient.full_name} ({patient.patient_number})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Admitting Doctor *</Label>
-                <Select name="doctor_id" required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select doctor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {doctors?.map((doctor) => (
-                      <SelectItem key={doctor.id} value={doctor.id}>
-                        Dr. {doctor.full_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Bed Assignment *</Label>
-                <Select name="bed_id" required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select bed" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {beds?.map((bed) => {
-                      const ward = wards?.find((w) => w.id === bed.ward_id)
-                      return (
-                        <SelectItem key={bed.id} value={bed.id}>
-                          {ward?.name} - Bed {bed.bed_number} ({bed.bed_type})
-                        </SelectItem>
-                      )
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="admission_date">Admission Date *</Label>
-                <Input
-                  id="admission_date"
-                  name="admission_date"
-                  type="datetime-local"
-                  defaultValue={new Date().toISOString().slice(0, 16)}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <Checkbox id="emergency_admission" name="emergency_admission" />
-              <Label htmlFor="emergency_admission" className="text-sm font-normal">
-                Emergency Admission
-              </Label>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="admission_reason">Reason for Admission *</Label>
-              <Textarea
-                id="admission_reason"
-                name="admission_reason"
-                placeholder="Brief reason for admission..."
-                rows={2}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="diagnosis">Provisional Diagnosis</Label>
-              <Textarea id="diagnosis" name="diagnosis" placeholder="Provisional or confirmed diagnosis..." rows={2} />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="treatment_plan">Treatment Plan</Label>
-              <Textarea id="treatment_plan" name="treatment_plan" placeholder="Initial treatment plan..." rows={3} />
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="mt-6 flex justify-end gap-4">
-          <Button type="button" variant="outline" asChild>
-            <Link href="/dashboard/inpatient">Cancel</Link>
-          </Button>
-          <Button type="submit">Admit Patient</Button>
-        </div>
-      </form>
+      <InpatientAdmissionForm
+        patients={patients || []}
+        doctors={doctors || []}
+        wards={wards || []}
+        beds={beds || []}
+        defaultPatientId={defaultPatientId}
+        defaultVisitId={defaultVisitId}
+        action={createAdmission}
+      />
     </div>
   )
 }

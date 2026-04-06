@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { createServerClient } from "@/lib/supabase/server"
@@ -5,6 +6,8 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { ReportFilterSummary } from "@/components/report-filter-summary"
+import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
 
 interface CompanyBillingReportsPageProps {
   searchParams: Promise<{ company_id?: string; from?: string; to?: string; status?: string; page?: string }>
@@ -32,19 +35,29 @@ interface PatientLite {
   id: string
   full_name: string | null
   patient_number: string | null
+  phone_number?: string | null
+  company_id?: string | null
+  insurance_type?: string | null
+  insurance_card_number?: string | null
+  insurance_expiry_date?: string | null
+  employee_id?: string | null
 }
-interface PrescriptionLite {
-  id: string
-  visit_id: string | null
-  doctor_id: string | null
-}
-interface DoctorProfileLite {
+
+interface EmployeeRosterLite {
   id: string
   full_name: string | null
+  insurance_card_number?: string | null
+  status?: string | null
 }
 
 const MAX_COMPANY_BILLING_ROWS = 2000
 const COMPANY_BILLING_PAGE_SIZE = 100
+
+function parseReportDate(value: string | null, fallback: Date) {
+  if (!value) return fallback
+  const parsed = new Date(`${value}T00:00:00`)
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed
+}
 
 export default async function CompanyBillingReportsPage({ searchParams }: CompanyBillingReportsPageProps) {
   const supabase = await createServerClient()
@@ -72,13 +85,138 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
   const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0)
 
-  const fromDate = fromParam ? new Date(fromParam) : startOfMonth
-  const toDate = toParam ? new Date(toParam) : endOfMonth
+  const fromDate = parseReportDate(fromParam || null, startOfMonth)
+  const toDate = parseReportDate(toParam || null, endOfMonth)
+  const fromDateValue = fromDate.toISOString().split("T")[0]
+  const toDateValue = toDate.toISOString().split("T")[0]
 
   const fromIso = fromDate.toISOString()
   const toIso = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59, 999).toISOString()
 
-  const [{ data: companies }, { data: invoices }] = await Promise.all([
+  async function backfillCompanyCoverage(formData: FormData) {
+    "use server"
+
+    const supabase = await createServerClient()
+    const { user, profile } = await getSessionUserAndProfile()
+
+    const rbacUser = { id: user?.id ?? "", role: (profile as { role?: string | null } | null)?.role ?? user?.role ?? null }
+    if (!user) {
+      redirect("/auth/login")
+    }
+    if (!can(rbacUser, "admin.settings.manage") && !can(rbacUser, "admin.export")) {
+      redirect("/dashboard")
+    }
+
+    const companyId = ((formData.get("company_id") as string | null) || "").trim()
+    const patientId = ((formData.get("patient_id") as string | null) || "").trim()
+    const linkageType = ((formData.get("linkage_type") as string | null) || "").trim()
+    const principalEmployeeId = ((formData.get("principal_employee_id") as string | null) || "").trim() || null
+    const dependentRelationship = ((formData.get("dependent_relationship") as string | null) || "").trim() || null
+    const from = ((formData.get("from") as string | null) || "").trim()
+    const to = ((formData.get("to") as string | null) || "").trim()
+    const status = ((formData.get("status") as string | null) || "").trim()
+
+    if (!companyId || !patientId || !["employee", "dependent"].includes(linkageType)) {
+      redirect("/dashboard/reports/company-billing")
+    }
+
+    const { data: patient } = await supabase
+      .from("patients")
+      .select("id, full_name, phone_number, insurance_card_number, insurance_expiry_date, insurance_card_serial, insurance_mobile")
+      .eq("id", patientId)
+      .maybeSingle()
+
+    if (!patient?.id) {
+      redirect("/dashboard/reports/company-billing")
+    }
+
+    const statusValue = patient.insurance_expiry_date
+      ? new Date(patient.insurance_expiry_date).getTime() >= new Date(new Date().setHours(0, 0, 0, 0)).getTime()
+        ? "active"
+        : "expired"
+      : "missing"
+
+    await supabase.from("employee_dependents").delete().eq("patient_id", patientId)
+
+    if (linkageType === "employee") {
+      const { data: employeeRow } = await supabase
+        .from("company_employees")
+        .upsert(
+          {
+            company_id: companyId,
+            patient_id: patientId,
+            full_name: patient.full_name || "Unknown patient",
+            phone: patient.phone_number || null,
+            insurance_card_number: patient.insurance_card_number || null,
+            insurance_expiry_date: patient.insurance_expiry_date || new Date().toISOString().slice(0, 10),
+            status: statusValue,
+          },
+          { onConflict: "patient_id" },
+        )
+        .select("id")
+        .maybeSingle()
+
+      await supabase
+        .from("patients")
+        .update({
+          company_id: companyId,
+          insurance_type: "employee",
+          employee_id: employeeRow?.id ?? null,
+        })
+        .eq("id", patientId)
+    } else {
+      if (!principalEmployeeId) {
+        redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+      }
+
+      const { data: principalEmployee } = await supabase
+        .from("company_employees")
+        .select("id")
+        .eq("id", principalEmployeeId)
+        .eq("company_id", companyId)
+        .maybeSingle()
+
+      if (!principalEmployee?.id) {
+        redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+      }
+
+      await supabase.from("company_employees").delete().eq("patient_id", patientId)
+
+      await supabase
+        .from("employee_dependents")
+        .upsert(
+          {
+            employee_id: principalEmployee.id,
+            patient_id: patientId,
+            full_name: patient.full_name || "Unknown patient",
+            relationship: dependentRelationship || "Dependent",
+            insurance_card_number: patient.insurance_card_number || null,
+            insurance_expiry_date: patient.insurance_expiry_date || new Date().toISOString().slice(0, 10),
+            status: statusValue,
+          },
+          { onConflict: "patient_id" },
+        )
+
+      await supabase
+        .from("patients")
+        .update({
+          company_id: companyId,
+          insurance_type: "dependent",
+          employee_id: principalEmployee.id,
+        })
+        .eq("id", patientId)
+    }
+
+    revalidatePath("/dashboard/reports/company-billing")
+    const redirectParams = new URLSearchParams()
+    redirectParams.set("company_id", companyId)
+    if (from) redirectParams.set("from", from)
+    if (to) redirectParams.set("to", to)
+    if (status && status !== "all") redirectParams.set("status", status)
+    redirect(`/dashboard/reports/company-billing?${redirectParams.toString()}#linkage-audit`)
+  }
+
+  const [{ data: companies }, { data: invoices }, { data: employeeRosterRaw }] = await Promise.all([
     supabase.from("companies").select("id, name").order("name"),
     supabase
       .from("invoices")
@@ -90,6 +228,13 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
       .gte("created_at", fromIso)
       .lte("created_at", toIso)
       .limit(MAX_COMPANY_BILLING_ROWS),
+    selectedCompanyId
+      ? supabase
+          .from("company_employees")
+          .select("id, full_name, insurance_card_number, status")
+          .eq("company_id", selectedCompanyId)
+          .order("full_name")
+      : Promise.resolve({ data: [] as EmployeeRosterLite[] }),
   ])
 
   let filteredInvoices = ((invoices || []) as unknown) as InvoiceRow[]
@@ -106,27 +251,17 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   const patientIds = Array.from(
     new Set(filteredInvoices.map((inv) => inv.patient_id).filter((id): id is string => Boolean(id)))
   )
-  const visitIds = Array.from(new Set(filteredInvoices.map((inv) => inv.visit_id).filter((id): id is string => Boolean(id))))
 
-  const [{ data: patients }, { data: prescriptions }] = await Promise.all([
+  const { data: patients } = await (
     patientIds.length
-      ? supabase.from("patients").select("id, full_name, patient_number").in("id", patientIds)
-      : Promise.resolve({ data: [] as PatientLite[] }),
-    visitIds.length
-      ? supabase.from("prescriptions").select("id, visit_id, doctor_id").in("visit_id", visitIds)
-      : Promise.resolve({ data: [] as PrescriptionLite[] }),
-  ])
-
-  const doctorIds = Array.from(
-    new Set(
-      ((prescriptions || []) as PrescriptionLite[])
-        .map((rx) => rx.doctor_id || null)
-        .filter((id): id is string => Boolean(id)),
-    ),
+      ? supabase
+          .from("patients")
+          .select("id, full_name, patient_number, phone_number, company_id, insurance_type, insurance_card_number, insurance_expiry_date, employee_id")
+          .in("id", patientIds)
+      : Promise.resolve({ data: [] as PatientLite[] })
   )
-  const { data: doctorProfiles } = doctorIds.length
-    ? await supabase.from("profiles").select("id, full_name").in("id", doctorIds)
-    : { data: [] as DoctorProfileLite[] }
+
+  const coverageMap = selectedCompanyId ? await fetchCompanyCoverageMap(supabase, selectedCompanyId, patientIds) : new Map()
 
   const patientById = new Map<string, { full_name?: string | null; patient_number?: string | null }>()
   for (const p of (patients || []) as PatientLite[]) {
@@ -136,25 +271,9 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     })
   }
 
-  const doctorIdByVisitId = new Map<string, string>()
-  for (const rx of (prescriptions || []) as PrescriptionLite[]) {
-    const vId = rx.visit_id ?? null
-    const dId = rx.doctor_id ?? null
-    if (!vId || !dId) continue
-    if (!doctorIdByVisitId.has(vId)) {
-      doctorIdByVisitId.set(vId, dId)
-    }
-  }
-
-  const doctorNameById = new Map<string, string | null>()
-  for (const doc of (doctorProfiles || []) as DoctorProfileLite[]) {
-    doctorNameById.set(doc.id, doc.full_name ?? null)
-  }
-
   const rows = filteredInvoices.map((inv) => {
     const patient = inv.patient_id ? patientById.get(inv.patient_id) : null
-    const visitDoctorId = inv.visit_id ? doctorIdByVisitId.get(inv.visit_id) : null
-    const doctorName = visitDoctorId ? doctorNameById.get(visitDoctorId) : null
+    const coverage = inv.patient_id ? coverageMap.get(inv.patient_id) : null
 
     const total = Number(inv.total_amount ?? 0)
     const paid = Number(inv.paid_amount ?? 0)
@@ -166,7 +285,8 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
       companyName: inv.companies?.name || "Unknown company",
       staffName: patient?.full_name || "Unknown",
       staffNumber: patient?.patient_number || "-",
-      doctorName: doctorName || "Unknown",
+      relationship: coverage?.relationshipLabel || "Unlinked",
+      principalEmployee: coverage?.principalEmployeeName || "Not linked",
       visitId: inv.visit_id,
       createdAt: inv.created_at,
       total,
@@ -205,18 +325,42 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     }
   }
 
+  const employeeRoster = (employeeRosterRaw || []) as EmployeeRosterLite[]
+  const unlinkedRows = selectedCompanyId
+    ? rows
+        .filter((row) => row.relationship === "Unlinked")
+        .map((row) => {
+          const patient = filteredInvoices.find((invoice) => invoice.id === row.id)?.patient_id
+            ? patientById.get(filteredInvoices.find((invoice) => invoice.id === row.id)?.patient_id as string)
+            : null
+          const patientId = filteredInvoices.find((invoice) => invoice.id === row.id)?.patient_id || null
+          const patientRecord = patientId ? ((patients || []) as PatientLite[]).find((candidate) => candidate.id === patientId) || null : null
+          return {
+            ...row,
+            patientId,
+            patientRecord,
+            patientName: patient?.full_name || row.staffName,
+            patientNumber: patient?.patient_number || row.staffNumber,
+          }
+        })
+        .filter((row, index, array) => row.patientId && array.findIndex((candidate) => candidate.patientId === row.patientId) === index)
+    : []
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1">
-          <h1 className="text-3xl font-bold tracking-tight">Company billing by staff & doctor</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Company billing statement</h1>
           <p className="text-sm text-muted-foreground">
-            View company-paid invoices grouped per visit, including both the staff member (patient) and prescribing doctor.
+            View company-paid visits for the selected period, including beneficiary relationship and principal employee.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button asChild size="sm" variant="outline">
             <Link href="/dashboard/reports">Back to Reports</Link>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <Link href="/dashboard/billing/insurance">Open insurance billing</Link>
           </Button>
           <Button
             asChild
@@ -236,6 +380,21 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
               Export CSV
             </Link>
           </Button>
+          {selectedCompanyId ? (
+            <Button asChild size="sm" variant="outline">
+              <Link
+                href={`/dashboard/reports/company-billing/statement?${new URLSearchParams({
+                  company_id: selectedCompanyId,
+                  from: fromDateValue,
+                  to: toDateValue,
+                }).toString()}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Monthly statement PDF
+              </Link>
+            </Button>
+          ) : null}
           <Button asChild size="sm" variant="ghost">
             <Link href="/dashboard">Back to Dashboard</Link>
           </Button>
@@ -270,7 +429,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             id="from"
             name="from"
             type="date"
-            defaultValue={fromParam || startOfMonth.toISOString().split("T")[0]}
+            defaultValue={fromDateValue}
             className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           />
         </div>
@@ -283,7 +442,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             id="to"
             name="to"
             type="date"
-            defaultValue={toParam || endOfMonth.toISOString().split("T")[0]}
+            defaultValue={toDateValue}
             className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           />
         </div>
@@ -307,6 +466,9 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         </div>
 
         <div className="mt-4 flex items-center gap-2">
+          <Button asChild type="button" size="sm" variant="ghost">
+            <Link href="/dashboard/reports/company-billing">This month</Link>
+          </Button>
           {hasActiveFilters ? (
             <Button asChild type="button" size="sm" variant="outline">
               <Link href="/dashboard/reports/company-billing">Reset</Link>
@@ -317,6 +479,15 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           </Button>
         </div>
       </form>
+
+      <ReportFilterSummary
+        items={[
+          { label: "Company", value: ((companies || []) as CompanyLite[]).find((company) => company.id === selectedCompanyId)?.name || selectedCompanyId },
+          { label: "From", value: fromDateValue || null },
+          { label: "To", value: toDateValue || null },
+          { label: "Status", value: statusFilter !== "all" ? statusFilter : null },
+        ]}
+      />
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
@@ -352,10 +523,125 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         </div>
       ) : null}
 
+      {selectedCompanyId ? (
+        <Card id="linkage-audit">
+          <CardHeader>
+            <CardTitle>Roster linkage audit</CardTitle>
+            <CardDescription>
+              Review company-billed patients who are not yet linked to the employee or dependent roster. Link them here so monthly statements can identify employee, spouse, or child correctly.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-md border px-3 py-3">
+                <p className="text-xs text-muted-foreground">Unlinked beneficiaries</p>
+                <p className="text-2xl font-bold">{unlinkedRows.length}</p>
+              </div>
+              <div className="rounded-md border px-3 py-3">
+                <p className="text-xs text-muted-foreground">Roster employees available</p>
+                <p className="text-2xl font-bold">{employeeRoster.length}</p>
+              </div>
+              <div className="rounded-md border px-3 py-3">
+                <p className="text-xs text-muted-foreground">Audit scope</p>
+                <p className="text-sm font-medium">{fromDateValue} to {toDateValue}</p>
+              </div>
+            </div>
+
+            {unlinkedRows.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                All company-billed patients in the selected period are already linked to the employee/dependent roster.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {unlinkedRows.map((row) => (
+                  <form key={row.patientId} action={backfillCompanyCoverage} className="rounded-md border px-4 py-3 space-y-3">
+                    <input type="hidden" name="company_id" value={selectedCompanyId} />
+                    <input type="hidden" name="patient_id" value={row.patientId || ""} />
+                    <input type="hidden" name="from" value={fromDateValue} />
+                    <input type="hidden" name="to" value={toDateValue} />
+                    <input type="hidden" name="status" value={statusFilter} />
+                    <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold">{row.patientName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Patient #: {row.patientNumber} · Invoice: {row.invoiceNumber} · Visit: {row.visitId || "-"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Patient insurance type: {row.patientRecord?.insurance_type || "not set"} · Card: {row.patientRecord?.insurance_card_number || "not set"}
+                        </p>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        <p>Total billed: Le {row.total.toLocaleString()}</p>
+                        <p>Status: {row.status}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground" htmlFor={`linkage-type-${row.patientId}`}>
+                          Link as
+                        </label>
+                        <select
+                          id={`linkage-type-${row.patientId}`}
+                          name="linkage_type"
+                          defaultValue="employee"
+                          className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm"
+                        >
+                          <option value="employee">Employee</option>
+                          <option value="dependent">Dependent</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground" htmlFor={`principal-employee-${row.patientId}`}>
+                          Principal employee
+                        </label>
+                        <select
+                          id={`principal-employee-${row.patientId}`}
+                          name="principal_employee_id"
+                          defaultValue=""
+                          className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm"
+                        >
+                          <option value="">Select employee</option>
+                          {employeeRoster.map((employee) => (
+                            <option key={employee.id} value={employee.id}>
+                              {employee.full_name || "Unnamed employee"}{employee.insurance_card_number ? ` · ${employee.insurance_card_number}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[11px] text-muted-foreground">Required only when linking as dependent.</p>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground" htmlFor={`dependent-relationship-${row.patientId}`}>
+                          Relationship
+                        </label>
+                        <input
+                          id={`dependent-relationship-${row.patientId}`}
+                          name="dependent_relationship"
+                          defaultValue="Spouse"
+                          className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm"
+                          placeholder="Spouse, Child, Parent"
+                        />
+                        <p className="text-[11px] text-muted-foreground">Used only for dependent linkage.</p>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end">
+                      <Button type="submit" size="sm" variant="outline">
+                        Save roster linkage
+                      </Button>
+                    </div>
+                  </form>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Company invoices by visit</CardTitle>
-          <CardDescription>One line per visit, showing both staff member and doctor.</CardDescription>
+          <CardDescription>One line per visit, with beneficiary relationship and principal employee where linked.</CardDescription>
         </CardHeader>
         <CardContent>
           {totalRows === 0 ? (
@@ -378,9 +664,10 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">Date</th>
                     <th className="px-3 py-2 text-left font-medium">Company</th>
-                    <th className="px-3 py-2 text-left font-medium">Staff (patient)</th>
-                    <th className="px-3 py-2 text-left font-medium">Staff #</th>
-                    <th className="px-3 py-2 text-left font-medium">Doctor</th>
+                    <th className="px-3 py-2 text-left font-medium">Beneficiary</th>
+                    <th className="px-3 py-2 text-left font-medium">Patient #</th>
+                    <th className="px-3 py-2 text-left font-medium">Relationship</th>
+                    <th className="px-3 py-2 text-left font-medium">Principal employee</th>
                     <th className="px-3 py-2 text-left font-medium">Visit ID</th>
                     <th className="px-3 py-2 text-left font-medium">Invoice #</th>
                     <th className="px-3 py-2 text-right font-medium">Total (Le)</th>
@@ -396,7 +683,8 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                       <td className="px-3 py-2 whitespace-nowrap">{row.companyName}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.staffName}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.staffNumber}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{row.doctorName || "Unknown"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{row.relationship}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{row.principalEmployee}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.visitId || "-"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.invoiceNumber}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">{row.total.toLocaleString()}</td>

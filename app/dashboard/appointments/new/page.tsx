@@ -1,22 +1,42 @@
 import { createServerClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { shouldSendSms, sendSms } from "@/lib/notifications/sms"
+import { AppointmentForm } from "@/components/appointment-form"
 
 export default async function NewAppointmentPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ patient_id?: string; error?: string }>
+  searchParams?: Promise<{
+    patient_id?: string
+    error?: string
+    reason?: string
+    notes?: string
+    source?: string
+    visit_id?: string
+    admission_id?: string
+  }>
 }) {
   const supabase = await createServerClient()
   const sp = searchParams ? await searchParams : {}
+  const defaultReason = ((sp.reason as string | undefined) || "").trim()
+  const source = ((sp.source as string | undefined) || "").trim()
+  const visitId = ((sp.visit_id as string | undefined) || "").trim()
+  const admissionId = ((sp.admission_id as string | undefined) || "").trim()
+  const contextualNotes = ((sp.notes as string | undefined) || "").trim()
+
+  const defaultNotes = (() => {
+    const lines = [contextualNotes]
+    if (source === "inpatient_discharge") lines.push("Follow-up after inpatient discharge.")
+    if (source === "surgery") lines.push("Post-surgery review.")
+    if (source === "nursing") lines.push("Follow-up requested from nursing workflow.")
+    if (source === "appointment_review") lines.push("Scheduled as a follow-up review appointment.")
+    if (admissionId) lines.push(`Admission ID: ${admissionId}`)
+    if (visitId) lines.push(`Visit ID: ${visitId}`)
+    return lines.filter(Boolean).join("\n")
+  })()
 
   // Fetch patients and doctors
   const [{ data: patients }, { data: doctors }] = await Promise.all([
@@ -123,11 +143,44 @@ export default async function NewAppointmentPage({
     }
   })()
 
+  const contextMessage = (() => {
+    switch (source) {
+      case "inpatient_discharge":
+        return "This appointment is being booked as discharge follow-up. Keep the review reason and visit references so the next team can continue care cleanly."
+      case "surgery":
+        return "This appointment is being booked as post-surgery follow-up. Confirm the review timing and keep the visit reference in the notes."
+      case "nursing":
+        return "This appointment was started from nursing workflow. Use it when ward or bedside care needs a planned outpatient review."
+      case "billing":
+        return "This appointment is being booked after billing completion. Keep the visit reference so the next team can trace the earlier encounter."
+      case "pharmacy":
+        return "This appointment is being booked after dispensing. Use it for medication review, response checks, or further clinical follow-up."
+      case "extended_care":
+        return "This appointment continues care after inpatient, surgical, or ward treatment. Keep the admission and visit references intact."
+      case "follow_up":
+        return "This appointment continues a completed visit. Keep the linked references so future teams can trace the original encounter."
+      case "appointment_review":
+        return "This appointment is being scheduled as a follow-up to a completed appointment."
+      default:
+        return null
+    }
+  })()
+
+  const pageTitle = source ? "Schedule Follow-up Appointment" : "Schedule New Appointment"
+  const pageDescription = source
+    ? "Book the next planned review while preserving the earlier visit or admission context."
+    : "Book a new appointment for a patient"
+
   return (
     <div className="space-y-8">
       {errorMessage && (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {errorMessage}
+        </div>
+      )}
+      {contextMessage && (
+        <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          {contextMessage}
         </div>
       )}
       <div className="flex items-center justify-between gap-4">
@@ -139,88 +192,20 @@ export default async function NewAppointmentPage({
             </Link>
           </Button>
           <div>
-            <h1 className="text-balance text-3xl font-bold tracking-tight">Schedule New Appointment</h1>
-            <p className="text-pretty text-muted-foreground">Book a new appointment for a patient</p>
+            <h1 className="text-balance text-3xl font-bold tracking-tight">{pageTitle}</h1>
+            <p className="text-pretty text-muted-foreground">{pageDescription}</p>
           </div>
         </div>
       </div>
 
-      <form action={createAppointment}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Appointment Details</CardTitle>
-            <CardDescription>Select patient, doctor, and appointment time</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Patient *</Label>
-                <Select name="patient_id" defaultValue={sp.patient_id} required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select patient" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {patients?.map((patient) => (
-                      <SelectItem key={patient.id} value={patient.id}>
-                        {patient.full_name} ({patient.patient_number})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Doctor *</Label>
-                <Select name="doctor_id" required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select doctor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {doctors?.map((doctor) => (
-                      <SelectItem key={doctor.id} value={doctor.id}>
-                        Dr. {doctor.full_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="appointment_date">Appointment Date *</Label>
-                <Input
-                  id="appointment_date"
-                  name="appointment_date"
-                  type="date"
-                  min={new Date().toISOString().split("T")[0]}
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="appointment_time">Appointment Time *</Label>
-                <Input id="appointment_time" name="appointment_time" type="time" required />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="reason">Reason for Visit</Label>
-              <Input id="reason" name="reason" placeholder="e.g., General checkup, Follow-up, etc." />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="notes">Additional Notes</Label>
-              <Textarea id="notes" name="notes" placeholder="Any additional information..." rows={3} />
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="mt-6 flex justify-end gap-4">
-          <Button type="button" variant="outline" asChild>
-            <Link href="/dashboard/appointments">Cancel</Link>
-          </Button>
-          <Button type="submit">Schedule Appointment</Button>
-        </div>
-      </form>
+      <AppointmentForm
+        patients={patients || []}
+        doctors={doctors || []}
+        defaultPatientId={sp.patient_id}
+        defaultReason={defaultReason}
+        defaultNotes={defaultNotes}
+        action={createAppointment}
+      />
     </div>
   )
 }

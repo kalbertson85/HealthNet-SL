@@ -9,6 +9,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TableCard } from "@/components/table-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { ReportFilterSummary } from "@/components/report-filter-summary"
+import { ExportPreviewCard } from "@/components/export-preview-card"
+
+const BILLING_INVOICE_LIMIT = 50
 
 interface BillingVisitRow {
   id: string
@@ -45,6 +49,15 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
   const query = (searchParams.q || "").toLowerCase().trim()
   const statusFilter = (searchParams.status || "all").toLowerCase().trim()
   const companyFilterId = ((searchParams.company_id as string | undefined) || "").trim() || null
+  const hasInvoiceFilters = Boolean(query) || statusFilter !== "all" || Boolean(companyFilterId)
+  const canExport = can(user, "admin.export")
+  const exportQuery = new URLSearchParams()
+  if (query) exportQuery.set("q", query)
+  if (statusFilter !== "all") exportQuery.set("status", statusFilter)
+  if (companyFilterId) exportQuery.set("company_id", companyFilterId)
+  const exportHref = exportQuery.toString()
+    ? `/api/export/invoices?${exportQuery.toString()}`
+    : "/api/export/invoices"
 
   const [{ data: invoices }, { data: billingVisits, error: visitsError }] = await Promise.all([
     supabase
@@ -55,7 +68,7 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
         companies(name)
       `)
       .order("created_at", { ascending: false })
-      .limit(50),
+      .limit(BILLING_INVOICE_LIMIT),
     supabase
       .from("visits")
       .select(
@@ -139,12 +152,17 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
           <h1 className="text-balance text-3xl font-bold tracking-tight">Billing & Invoicing</h1>
           <p className="text-pretty text-muted-foreground">Manage patient invoices and payments</p>
         </div>
-        <Button asChild>
-          <Link href="/dashboard/billing/new">
-            <Plus className="mr-2 h-4 w-4" />
-            New Invoice
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline">
+            <Link href="/dashboard/billing/insurance">Insurance billing</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/dashboard/billing/new">
+              <Plus className="mr-2 h-4 w-4" />
+              New Invoice
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -164,10 +182,18 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
             <Button type="submit" size="sm" variant="outline">
               Search
             </Button>
+            {query ? (
+              <Button type="button" size="sm" variant="ghost" asChild>
+                <Link href="/dashboard/billing">Reset</Link>
+              </Button>
+            ) : null}
           </form>
+          <ReportFilterSummary items={[{ label: "Search", value: query || null }]} />
 
           {filteredVisits.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No visits currently waiting for billing.</p>
+            <p className="text-sm text-muted-foreground">
+              {query ? "No visits awaiting billing match the current search." : "No visits currently waiting for billing."}
+            </p>
           ) : (
             <div className="space-y-2">
               {filteredVisits.map((visit) => (
@@ -195,6 +221,12 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
           <CardDescription>Recent invoices and payment status</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {(invoices?.length || 0) >= BILLING_INVOICE_LIMIT ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Showing the latest {BILLING_INVOICE_LIMIT} invoices. Apply search or invoice filters before using this
+              list for follow-up.
+            </div>
+          ) : null}
           <form method="GET" className="flex flex-wrap items-center gap-2 text-xs">
             <input
               type="text"
@@ -219,7 +251,30 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
             <Button type="submit" size="sm" variant="outline">
               Apply
             </Button>
+            {hasInvoiceFilters ? (
+              <Button type="button" size="sm" variant="ghost" asChild>
+                <Link href="/dashboard/billing">Reset</Link>
+              </Button>
+            ) : null}
           </form>
+
+          <ReportFilterSummary
+            items={[
+              { label: "Search", value: query || null },
+              { label: "Status", value: statusFilter !== "all" ? statusFilter : null },
+              { label: "Company ID", value: companyFilterId || null },
+            ]}
+          />
+          {canExport ? (
+            <ExportPreviewCard
+              title="Export current invoice view"
+              description="Review the filtered invoice preview, then export that same invoice slice as CSV."
+              href={exportHref}
+              previewCount={filteredInvoices.length}
+              previewLabel="invoices match the current filters"
+              limitNote="Exports honor invoice search, status, and company filters and return up to 5,000 rows."
+            />
+          ) : null}
 
           <div className="grid gap-4 md:grid-cols-3">
             <div>
@@ -296,7 +351,7 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
                 ) : (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center text-muted-foreground">
-                      No invoices found
+                      {hasInvoiceFilters ? "No invoices match the selected filters." : "No invoices found."}
                     </TableCell>
                   </TableRow>
                 )}

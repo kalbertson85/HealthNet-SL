@@ -115,9 +115,9 @@ export async function getAuthContext(request: NextRequest): Promise<AuthContext>
     .eq("id", user.id)
     .maybeSingle()
 
-  // Derive a normalized role for RBAC.
-  // Keep unknown/missing roles as null so permission checks fail closed.
-  const role = normalizeRole(profile?.role ?? null)
+  const authMetadata = (user as { app_metadata?: { role?: string | null }; user_metadata?: { role?: string | null } }).app_metadata
+  const userMetadata = (user as { user_metadata?: { role?: string | null } }).user_metadata
+  const role = normalizeRole(profile?.role ?? authMetadata?.role ?? userMetadata?.role ?? user.role ?? null)
 
   return {
     supabase,

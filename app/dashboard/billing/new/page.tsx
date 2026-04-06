@@ -11,6 +11,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Plus, Trash2, ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
+import { FormDraftStatus } from "@/components/form-draft-status"
+import { FormHelpTip } from "@/components/form-help-tip"
+import { useLocalDraft } from "@/lib/use-local-draft"
 
 interface InvoiceItem {
   description: string
@@ -19,27 +22,36 @@ interface InvoiceItem {
   amount: number
 }
 
+interface InvoiceDraft {
+  patientId: string
+  notes: string
+  items: InvoiceItem[]
+}
+
 export default function NewInvoicePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
   const supabase = useMemo(() => createClient(), [])
 
-  const [patientId, setPatientId] = useState(searchParams.get("patient_id") || "")
-  const [notes, setNotes] = useState("")
-  const [items, setItems] = useState<InvoiceItem[]>([{ description: "", quantity: 1, unit_price: 0, amount: 0 }])
+  const initialDraft: InvoiceDraft = {
+    patientId: searchParams.get("patient_id") || "",
+    notes: "",
+    items: [{ description: "", quantity: 1, unit_price: 0, amount: 0 }],
+  }
+  const { value: draft, setValue: setDraft, lastSavedAt, resetDraft } = useLocalDraft("draft:billing:new", initialDraft)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const addItem = () => {
-    setItems([...items, { description: "", quantity: 1, unit_price: 0, amount: 0 }])
+    setDraft({ ...draft, items: [...draft.items, { description: "", quantity: 1, unit_price: 0, amount: 0 }] })
   }
 
   const removeItem = (index: number) => {
-    setItems(items.filter((_, i) => i !== index))
+    setDraft({ ...draft, items: draft.items.filter((_, i) => i !== index) })
   }
 
   const updateItem = (index: number, field: keyof InvoiceItem, value: string | number) => {
-    const updated = [...items]
+    const updated = [...draft.items]
     updated[index] = { ...updated[index], [field]: value }
 
     // Calculate amount if quantity or unit_price changes
@@ -47,10 +59,10 @@ export default function NewInvoicePage() {
       updated[index].amount = updated[index].quantity * updated[index].unit_price
     }
 
-    setItems(updated)
+    setDraft({ ...draft, items: updated })
   }
 
-  const totalAmount = items.reduce((sum, item) => sum + item.amount, 0)
+  const totalAmount = draft.items.reduce((sum, item) => sum + item.amount, 0)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -72,7 +84,7 @@ export default function NewInvoicePage() {
       const { data: patient, error: patientError } = await supabase
         .from("patients")
         .select("id, patient_number")
-        .eq("patient_number", patientId)
+        .eq("patient_number", draft.patientId)
         .maybeSingle()
 
       if (patientError) {
@@ -91,7 +103,7 @@ export default function NewInvoicePage() {
           patient_id: patient.id,
           total_amount: totalAmount,
           paid_amount: 0,
-          notes,
+          notes: draft.notes,
           status: "pending",
           created_by: user.id,
         })
@@ -101,7 +113,7 @@ export default function NewInvoicePage() {
       if (invoiceError) throw invoiceError
 
       // Create invoice items
-      const invoiceItems = items.map((item) => ({
+      const invoiceItems = draft.items.map((item) => ({
         invoice_id: invoice.id,
         ...item,
       }))
@@ -123,6 +135,7 @@ export default function NewInvoicePage() {
         console.error("[v0] Error logging invoice creation:", auditError)
       }
 
+      resetDraft()
       router.push(`/dashboard/billing/${invoice.id}`)
     } catch (error) {
       console.error(
@@ -152,6 +165,8 @@ export default function NewInvoicePage() {
         </div>
       </div>
 
+      <FormDraftStatus lastSavedAt={lastSavedAt} onClear={resetDraft} />
+
       <form onSubmit={handleSubmit} className="space-y-6">
         <Card>
           <CardHeader>
@@ -160,22 +175,28 @@ export default function NewInvoicePage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="patient_id">Patient Number *</Label>
+              <div className="flex items-center gap-1">
+                <Label htmlFor="patient_id">Patient Number *</Label>
+                <FormHelpTip text="Enter the PT- patient number exactly as shown on the patient record." />
+              </div>
               <Input
                 id="patient_id"
-                value={patientId}
-                onChange={(e) => setPatientId(e.target.value)}
+                value={draft.patientId}
+                onChange={(e) => setDraft({ ...draft, patientId: e.target.value })}
                 placeholder="Enter patient number (e.g., PT-000123)"
                 required
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="notes">Notes</Label>
+              <div className="flex items-center gap-1">
+                <Label htmlFor="notes">Notes</Label>
+                <FormHelpTip text="Use notes for billing context such as ward, referral source, or payment guidance." />
+              </div>
               <Textarea
                 id="notes"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
+                value={draft.notes}
+                onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
                 placeholder="Additional notes..."
                 rows={2}
               />
@@ -197,11 +218,11 @@ export default function NewInvoicePage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
-            {items.map((item, index) => (
+            {draft.items.map((item, index) => (
               <div key={index} className="space-y-4 rounded-lg border p-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-medium">Item {index + 1}</h3>
-                  {items.length > 1 && (
+                  {draft.items.length > 1 && (
                     <Button type="button" onClick={() => removeItem(index)} variant="ghost" size="sm">
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -210,7 +231,10 @@ export default function NewInvoicePage() {
 
                 <div className="grid gap-4 md:grid-cols-4">
                   <div className="space-y-2 md:col-span-2">
-                    <Label>Description *</Label>
+                    <div className="flex items-center gap-1">
+                      <Label>Description *</Label>
+                      <FormHelpTip text="Describe the billed service clearly, for example consultation fee, lab panel, or admission deposit." />
+                    </div>
                     <Input
                       value={item.description}
                       onChange={(e) => updateItem(index, "description", e.target.value)}
@@ -220,7 +244,10 @@ export default function NewInvoicePage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Quantity *</Label>
+                    <div className="flex items-center gap-1">
+                      <Label>Quantity *</Label>
+                      <FormHelpTip text="Use whole numbers for repeat units of the same billable item." />
+                    </div>
                     <Input
                       type="number"
                       value={item.quantity}
@@ -231,7 +258,10 @@ export default function NewInvoicePage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Unit Price (Le) *</Label>
+                    <div className="flex items-center gap-1">
+                      <Label>Unit Price (Le) *</Label>
+                      <FormHelpTip text="Enter the price per unit in Leone. Total amount is calculated automatically." />
+                    </div>
                     <Input
                       type="number"
                       value={item.unit_price}

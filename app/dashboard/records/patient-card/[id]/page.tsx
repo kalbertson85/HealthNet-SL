@@ -46,6 +46,10 @@ export default async function PatientCardPage({
         </Button>
         <PrintButton />
       </div>
+      <div className="mb-4 w-full max-w-md rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+        Print this card only after confirming the patient number and demographics are correct. If details are outdated,
+        update the patient record first so the printed card matches the master file.
+      </div>
       <Card className="w-full max-w-md bg-white print:shadow-none print:border print:border-slate-300">
         <CardContent className="space-y-2 p-4 text-sm">
           <div className="flex items-baseline justify-between border-b pb-2">

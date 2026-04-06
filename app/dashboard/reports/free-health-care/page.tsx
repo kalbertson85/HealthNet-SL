@@ -5,6 +5,8 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { ReportFilterSummary } from "@/components/report-filter-summary"
+import { ExportPreviewCard } from "@/components/export-preview-card"
 
 interface FhcRow {
   id: string
@@ -35,6 +37,12 @@ interface VisitReportRow {
 }
 
 const MAX_FHC_VISITS_ROWS = 3000
+
+function parseReportDate(value: string | null, fallback: Date) {
+  if (!value) return fallback
+  const parsed = new Date(`${value}T00:00:00`)
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed
+}
 
 function ageFromDob(dob: string | null): number | null {
   if (!dob) return null
@@ -105,13 +113,15 @@ export default async function FreeHealthCareReportPage(props: {
     facilityFilter !== "all" ||
     Boolean(serviceType)
 
-  const toDate = toParam ? new Date(toParam) : new Date()
-  const fromDate = fromParam ? new Date(fromParam) : (() => {
+  const toDate = parseReportDate(toParam || null, new Date())
+  const fromDate = fromParam ? parseReportDate(fromParam, toDate) : (() => {
     const d = new Date(toDate)
     d.setDate(d.getDate() - 30)
     d.setHours(0, 0, 0, 0)
     return d
   })()
+  const fromDateValue = fromDate.toISOString().split("T")[0]
+  const toDateValue = toDate.toISOString().split("T")[0]
 
   const fromIso = fromDate.toISOString()
   const toIso = new Date(
@@ -308,7 +318,7 @@ export default async function FreeHealthCareReportPage(props: {
                 id="from"
                 name="from"
                 type="date"
-                defaultValue={fromParam || fromIso.split("T")[0]}
+                defaultValue={fromDateValue}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
               />
             </div>
@@ -320,7 +330,7 @@ export default async function FreeHealthCareReportPage(props: {
                 id="to"
                 name="to"
                 type="date"
-                defaultValue={toParam || toIso.split("T")[0]}
+                defaultValue={toDateValue}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
               />
             </div>
@@ -398,26 +408,49 @@ export default async function FreeHealthCareReportPage(props: {
                   Reset filters
                 </Link>
               ) : null}
+              <Link
+                href="/dashboard/reports/free-health-care"
+                className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
+              >
+                Last 30 days
+              </Link>
               <button
                 type="submit"
                 className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
               >
                 Apply filters
               </button>
-              <a
-                href={`/dashboard/reports/free-health-care/export?from=${encodeURIComponent(
-                  fromIso,
-                )}&to=${encodeURIComponent(toIso)}&category=${encodeURIComponent(
-                  categoryFilter,
-                )}&status=${encodeURIComponent(statusFilter)}&facility=${encodeURIComponent(facilityFilter)}&service_type=${encodeURIComponent(serviceType)}`}
-                className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
-              >
-                Export CSV
-              </a>
             </div>
           </form>
         </CardContent>
       </Card>
+
+      <ReportFilterSummary
+        items={[
+          { label: "From", value: fromDateValue || null },
+          { label: "To", value: toDateValue || null },
+          { label: "Category", value: categoryFilter !== "all" ? categoryLabel(categoryFilter) : null },
+          { label: "Status", value: statusFilter !== "all" ? statusFilter : null },
+          { label: "Facility", value: facilityFilter !== "all" ? facilityOptions.find((facility) => facility.code === facilityFilter)?.name || facilityFilter : null },
+          { label: "Service", value: serviceType && serviceType !== "all" ? serviceType.replaceAll("_", " ") : null },
+        ]}
+      />
+      {can(rbacUser, "admin.export") ? (
+        <ExportPreviewCard
+          title="Export current FHC report view"
+          description="Apply the report filters, review the current FHC preview, then export that same report slice as CSV."
+          href={`/dashboard/reports/free-health-care/export?from=${encodeURIComponent(
+            fromIso,
+          )}&to=${encodeURIComponent(toIso)}&category=${encodeURIComponent(
+            categoryFilter,
+          )}&status=${encodeURIComponent(statusFilter)}&facility=${encodeURIComponent(
+            facilityFilter,
+          )}&service_type=${encodeURIComponent(serviceType)}`}
+          previewCount={rows.length}
+          previewLabel="FHC visits match the current report filters"
+          limitNote="Exports honor the same date, category, status, facility, and service filters shown above."
+        />
+      ) : null}
 
       {visitsTruncated ? (
         <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -471,12 +504,12 @@ export default async function FreeHealthCareReportPage(props: {
         <CardHeader>
           <CardTitle>Summary by category and age band</CardTitle>
           <CardDescription>
-            Counts of FHC visits in the last 30 days by Free Health Care category, age band, and current visit outcome.
+            Counts of FHC visits in the selected period by Free Health Care category, age band, and current visit outcome.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {summaryRows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No Free Health Care visits recorded in the last 30 days.</p>
+            <p className="text-sm text-muted-foreground">No Free Health Care visits recorded in the selected period.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

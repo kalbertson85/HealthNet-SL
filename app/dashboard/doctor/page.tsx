@@ -720,6 +720,16 @@ export default async function DoctorPage(props: {
                       Next step: if you select an investigation, this visit moves to lab. Otherwise it moves directly to
                       billing.
                     </p>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button asChild type="button" size="sm" variant="outline">
+                        <Link href={`/dashboard/prescriptions/new?patient_id=${visit.patients?.id}&visit_id=${visit.id}`}>
+                          Open structured prescription
+                        </Link>
+                      </Button>
+                      <Button asChild type="button" size="sm" variant="outline">
+                        <Link href={`/dashboard/billing/visit/${visit.id}`}>Open billing</Link>
+                      </Button>
+                    </div>
                   </form>
                 </div>
               ))
@@ -865,6 +875,16 @@ export default async function DoctorPage(props: {
                     <p className="text-[11px] text-muted-foreground">
                       Next step: this visit will be handed over to billing to create and manage the invoice.
                     </p>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button asChild type="button" size="sm" variant="outline">
+                        <Link href={`/dashboard/prescriptions/new?patient_id=${visit.patients?.id}&visit_id=${visit.id}`}>
+                          Open structured prescription
+                        </Link>
+                      </Button>
+                      <Button asChild type="button" size="sm" variant="outline">
+                        <Link href={`/dashboard/billing/visit/${visit.id}`}>Open billing</Link>
+                      </Button>
+                    </div>
                   </form>
                 </div>
               ))

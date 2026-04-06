@@ -46,7 +46,9 @@ const getSessionUserAndProfileCached = cache(async (): Promise<{
     redirect("/auth/login?blocked=1")
   }
 
-  const normalizedRole = normalizeRole(profile?.role ?? null)
+  const authMetadata = (user as { app_metadata?: { role?: string | null }; user_metadata?: { role?: string | null } }).app_metadata
+  const userMetadata = (user as { user_metadata?: { role?: string | null } }).user_metadata
+  const normalizedRole = normalizeRole(profile?.role ?? authMetadata?.role ?? userMetadata?.role ?? user.role ?? null)
 
   return {
     user: {

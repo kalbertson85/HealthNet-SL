@@ -9,6 +9,7 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { ensureCan } from "@/lib/utils"
 import { logAuditEvent } from "@/lib/audit"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 
 function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
   if (!relation) return null
@@ -371,13 +372,13 @@ export default async function PrescriptionDetailPage(props: {
       },
     })
 
-    // Mark any pharmacy-pending visits for this patient as completed
-    if (prescriptionRecord.patient_id) {
+    // Complete only the linked visit for this prescription.
+    if (prescriptionRecord.visit_id) {
       try {
         await supabase
           .from("visits")
           .update({ visit_status: "completed" })
-          .eq("patient_id", prescriptionRecord.patient_id)
+          .eq("id", prescriptionRecord.visit_id)
           .eq("visit_status", "pharmacy_pending")
       } catch (error) {
         console.error("[v0] Error marking visit completed after dispense:", error)
@@ -516,6 +517,14 @@ export default async function PrescriptionDetailPage(props: {
         )}
       </div>
 
+      <PatientWorkflowPanel
+        currentStage="prescriptions"
+        patientId={(prescriptionRecord.patient_id as string | null) ?? null}
+        visitId={(prescriptionRecord.visit_id as string | null) ?? null}
+        title="Prescription workflow"
+        description="Structured prescriptions should stay linked to the same visit so pharmacy dispensing and visit completion only affect the correct encounter."
+      />
+
       <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -550,6 +559,14 @@ export default async function PrescriptionDetailPage(props: {
               <p className="text-sm font-medium text-muted-foreground">Date Prescribed</p>
               <p>{new Date(prescription.created_at).toLocaleDateString()}</p>
             </div>
+            {prescription.visit_id && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Linked Visit</p>
+                <Link href={`/dashboard/records/visit/${prescription.visit_id}`} className="text-sm text-primary underline-offset-2 hover:underline">
+                  {prescription.visit_id}
+                </Link>
+              </div>
+            )}
             <div>
               <p className="text-sm font-medium text-muted-foreground">Status</p>
               <Badge variant={prescription.status === "dispensed" ? "secondary" : "default"}>

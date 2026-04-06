@@ -15,10 +15,11 @@ export async function GET(request: NextRequest) {
 
   try {
     const { supabase } = await requirePermission(request, "admin.export")
+    const { searchParams } = new URL(request.url)
+    const statusFilter = (searchParams.get("status") || "").trim().toLowerCase()
+    const priorityFilter = (searchParams.get("priority") || "").trim().toLowerCase()
 
-    const { data: fetchedLabTests, error } = await supabase
-      .from("lab_tests")
-      .select(`
+    let query = supabase.from("lab_tests").select(`
         id,
         test_type,
         test_name,
@@ -32,7 +33,15 @@ export async function GET(request: NextRequest) {
         ordered_by:profiles!lab_tests_ordered_by_fkey(first_name, last_name)
       `)
       .order("created_at", { ascending: false })
-      .limit(EXPORT_ROW_LIMIT + 1)
+
+    if (statusFilter && statusFilter !== "all") {
+      query = query.eq("status", statusFilter)
+    }
+    if (priorityFilter && priorityFilter !== "all") {
+      query = query.eq("priority", priorityFilter)
+    }
+
+    const { data: fetchedLabTests, error } = await query.limit(EXPORT_ROW_LIMIT + 1)
 
     if (error) {
       return new NextResponse("Error fetching data", { status: 500 })

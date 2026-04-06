@@ -1,19 +1,29 @@
 import Link from "next/link"
 import { createServerClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { ArrowLeft } from "lucide-react"
+import { PatientRegistrationProgress } from "@/components/patient-registration-progress"
+import { PatientRegistrationForm } from "@/components/patient-registration-form"
 
-export default async function NewPatientPage() {
+export default async function NewPatientPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>
+}) {
   const supabaseForPage = await createServerClient()
+  const { error: errorParam } = await searchParams
   const { data: companies } = await supabaseForPage
     .from("companies")
     .select("id, name")
     .order("name")
+
+  const errorMessage =
+    errorParam === "insurance_missing"
+      ? "Insurance type requires company, insurance card number, and expiry date."
+      : errorParam === "missing_required"
+        ? "Please complete all required patient fields before submitting."
+        : null
 
   async function createPatient(formData: FormData) {
     "use server"
@@ -29,6 +39,8 @@ export default async function NewPatientPage() {
 
     const fullName = (formData.get("full_name") as string) || ""
     const phoneNumber = (formData.get("phone_number") as string) || ""
+    const dateOfBirth = (formData.get("date_of_birth") as string) || ""
+    const gender = (formData.get("gender") as string) || ""
     const nationalId = (formData.get("national_id") as string) || null
 
     const nextOfKinName = (formData.get("next_of_kin_name") as string) || null
@@ -49,6 +61,10 @@ export default async function NewPatientPage() {
     const insuranceMobile = ((formData.get("insurance_mobile") as string | null) || "").trim() || null
     const employeeInsuranceId = ((formData.get("employee_insurance_id") as string | null) || "").trim() || null
 
+    if (!fullName.trim() || !phoneNumber.trim() || !dateOfBirth || !gender) {
+      redirect("/dashboard/patients/new?error=missing_required")
+    }
+
     // Basic validation for insured patients
     if (insuranceType === "employee" || insuranceType === "dependent") {
       if (!companyId || !insuranceCardNumber || !insuranceExpiryRaw) {
@@ -64,8 +80,8 @@ export default async function NewPatientPage() {
       // Name components kept for potential future use, but table currently only stores full_name
       patient_number: generatedPatientNumber,
       national_id: nationalId,
-      date_of_birth: formData.get("date_of_birth") as string,
-      gender: formData.get("gender") as string,
+      date_of_birth: dateOfBirth,
+      gender,
       phone_number: phoneNumber,
       email: (formData.get("email") as string) || null,
       address: (formData.get("address") as string) || null,
@@ -226,251 +242,31 @@ export default async function NewPatientPage() {
         </div>
       </div>
 
-      <form action={createPatient}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Patient Information</CardTitle>
-            <CardDescription>Basic demographic and contact information</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="full_name">Full Name *</Label>
-                <Input id="full_name" name="full_name" required />
-              </div>
+      {errorMessage ? (
+        <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</div>
+      ) : null}
 
-              <div className="space-y-2">
-                <Label htmlFor="date_of_birth">Date of Birth *</Label>
-                <Input id="date_of_birth" name="date_of_birth" type="date" required />
-              </div>
+      <PatientRegistrationProgress
+        formId="patient-registration-form"
+        labelsByFieldId={{
+          full_name: "Full Name",
+          date_of_birth: "Date of Birth",
+          gender: "Gender",
+          phone_number: "Phone Number",
+        }}
+        sections={[
+          { id: "patient-demographics", label: "Demographics", requiredFields: ["full_name", "date_of_birth", "gender"] },
+          { id: "patient-contact", label: "Contact", requiredFields: ["phone_number"] },
+          { id: "patient-insurance", label: "Insurance", requiredFields: [] },
+        ]}
+      />
 
-              <div className="space-y-2">
-                <Label htmlFor="gender">Gender *</Label>
-                <select
-                  id="gender"
-                  name="gender"
-                  required
-                  aria-label="Gender"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  defaultValue=""
-               >
-                  <option value="" disabled>
-                    Select gender
-                  </option>
-                  <option value="male">Male</option>
-                  <option value="female">Female</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
+      <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+        Complete the form from top to bottom. Required fields create the patient record first, while insurance and next
+        of kin details improve reporting and follow-up later.
+      </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="blood_group">Blood Group</Label>
-                <select
-                  id="blood_group"
-                  name="blood_group"
-                  aria-label="Blood group"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  defaultValue=""
-                >
-                  <option value="">Select blood group</option>
-                  <option value="A+">A+</option>
-                  <option value="A-">A-</option>
-                  <option value="B+">B+</option>
-                  <option value="B-">B-</option>
-                  <option value="AB+">AB+</option>
-                  <option value="AB-">AB-</option>
-                  <option value="O+">O+</option>
-                  <option value="O-">O-</option>
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="phone_number">Phone Number *</Label>
-                <Input id="phone_number" name="phone_number" type="tel" required />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" name="email" type="email" />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="national_id">National ID</Label>
-                <Input id="national_id" name="national_id" placeholder="e.g. NIN or national ID number" />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="free_health_category">Free Health Care category</Label>
-                <select
-                  id="free_health_category"
-                  name="free_health_category"
-                  aria-label="Free Health Care category"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  defaultValue="none"
-                >
-                  <option value="none">Not Free Health Care</option>
-                  <option value="u5">Under 5 years</option>
-                  <option value="pregnant">Pregnant woman</option>
-                  <option value="lactating">Lactating mother</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="address">Address</Label>
-              <Textarea id="address" name="address" rows={2} />
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="emergency_contact_name">Emergency Contact Name</Label>
-                <Input id="emergency_contact_name" name="emergency_contact_name" />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="emergency_contact_phone">Emergency Contact Phone</Label>
-                <Input id="emergency_contact_phone" name="emergency_contact_phone" type="tel" />
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="next_of_kin_name">Next of Kin Name</Label>
-                  <Input id="next_of_kin_name" name="next_of_kin_name" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="next_of_kin_relationship">Relationship</Label>
-                  <Input id="next_of_kin_relationship" name="next_of_kin_relationship" placeholder="e.g. Spouse, Parent" />
-                </div>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="next_of_kin_phone">Next of Kin Phone</Label>
-                  <Input id="next_of_kin_phone" name="next_of_kin_phone" type="tel" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="next_of_kin_address">Next of Kin Address</Label>
-                  <Textarea id="next_of_kin_address" name="next_of_kin_address" rows={2} />
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="allergies">Allergies</Label>
-              <Textarea id="allergies" name="allergies" placeholder="List any known allergies..." rows={2} />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="medical_history">Medical History</Label>
-              <Textarea
-                id="medical_history"
-                name="medical_history"
-                placeholder="Previous medical conditions, surgeries, etc..."
-                rows={3}
-              />
-            </div>
-
-            <div className="space-y-4 border-t pt-4">
-              <div>
-                <h2 className="text-base font-semibold">Insurance & Company</h2>
-                <p className="text-xs text-muted-foreground">
-                  Capture company insurance details for employees and dependents.
-                </p>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="insurance_type">Insurance type</Label>
-                  <select
-                    id="insurance_type"
-                    name="insurance_type"
-                    aria-label="Insurance type"
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    defaultValue=""
-                  >
-                    <option value="">None</option>
-                    <option value="employee">Employee</option>
-                    <option value="dependent">Dependent</option>
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="company_id">Company</Label>
-                  <select
-                    id="company_id"
-                    name="company_id"
-                    aria-label="Company"
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    defaultValue=""
-                  >
-                    <option value="">Select company</option>
-                    {companies?.map((company) => (
-                      <option key={company.id} value={company.id}>
-                        {company.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="insurance_card_number">Insurance card number</Label>
-                  <Input
-                    id="insurance_card_number"
-                    name="insurance_card_number"
-                    placeholder="Card number on insurance card"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="insurance_card_serial">Card serial</Label>
-                  <Input
-                    id="insurance_card_serial"
-                    name="insurance_card_serial"
-                    placeholder="Serial printed on card (optional)"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="insurance_expiry_date">Insurance expiry date</Label>
-                  <Input id="insurance_expiry_date" name="insurance_expiry_date" type="date" />
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="insurance_mobile">Insurance contact mobile</Label>
-                  <Input
-                    id="insurance_mobile"
-                    name="insurance_mobile"
-                    type="tel"
-                    placeholder="Mobile number used for insurance verification"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="employee_insurance_id">Employee insurance ID (for dependents)</Label>
-                  <Input
-                    id="employee_insurance_id"
-                    name="employee_insurance_id"
-                    placeholder="Employee's insurance ID for this dependent"
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    For dependents, enter the employee&apos;s insurance ID so this dependent can be linked to the correct
-                    employee.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="mt-6 flex justify-end gap-4">
-          <Button type="button" variant="outline" asChild>
-            <Link href="/dashboard/patients">Cancel</Link>
-          </Button>
-          <Button type="submit">Register Patient</Button>
-        </div>
-      </form>
+      <PatientRegistrationForm companies={companies || []} action={createPatient} />
     </div>
   )
 }

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { fetchLatestLabAuditActivity } from "@/lib/admin/activity"
 
 interface LabActivitySearchParams {
   q?: string
@@ -31,6 +32,7 @@ interface LabTestRow {
 }
 
 export const revalidate = 0
+const RECENT_LAB_ACTIVITY_LIMIT = 200
 
 export default async function LabActivityPage({
   searchParams,
@@ -66,7 +68,7 @@ export default async function LabActivityPage({
        profiles(full_name)`,
     )
     .order("created_at", { ascending: false })
-    .limit(200)
+    .limit(RECENT_LAB_ACTIVITY_LIMIT)
 
   if (statusFilter) {
     query = query.eq("status", statusFilter)
@@ -97,13 +99,8 @@ export default async function LabActivityPage({
   >()
 
   if (testIds.length > 0) {
-    const { data: auditRows } = await supabase
-      .from("lab_audit_logs")
-      .select("lab_test_id, action, created_at")
-      .in("lab_test_id", testIds)
-      .order("created_at", { ascending: false })
-
-    for (const row of auditRows || []) {
+    const auditRows = await fetchLatestLabAuditActivity(supabase, testIds)
+    for (const row of auditRows) {
       const labTestId = row.lab_test_id as string
       if (!lastActivityByTestId.has(labTestId)) {
         lastActivityByTestId.set(labTestId, {
@@ -195,7 +192,10 @@ export default async function LabActivityPage({
       <Card>
         <CardHeader>
           <CardTitle>Filters</CardTitle>
-          <CardDescription>Filter lab tests by search, status, priority, and date range.</CardDescription>
+          <CardDescription>
+            Filter lab tests by search, status, priority, and date range. Results are limited to the latest{" "}
+            {RECENT_LAB_ACTIVITY_LIMIT} lab tests before audit activity is matched.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 max-w-4xl">
@@ -279,7 +279,7 @@ export default async function LabActivityPage({
           <div className="flex items-center justify-between gap-4">
             <div>
               <CardTitle>Recent lab tests</CardTitle>
-              <CardDescription>Showing up to 200 matching entries.</CardDescription>
+              <CardDescription>Showing up to {RECENT_LAB_ACTIVITY_LIMIT} matching entries.</CardDescription>
             </div>
           </div>
         </CardHeader>

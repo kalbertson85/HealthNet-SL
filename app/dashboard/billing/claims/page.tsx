@@ -9,6 +9,7 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 
 export const revalidate = 0
+const CLAIMS_LIST_LIMIT = 100
 
 interface ClaimRow {
   id: string
@@ -57,7 +58,7 @@ export default async function ClaimsPage(props: { searchParams: Promise<ClaimsPa
        companies(name)`,
     )
     .order("created_at", { ascending: false })
-    .limit(100)
+    .limit(CLAIMS_LIST_LIMIT)
 
   let claims = (claimsData || []) as ClaimRow[]
 
@@ -101,9 +102,15 @@ export default async function ClaimsPage(props: { searchParams: Promise<ClaimsPa
       <Card>
         <CardHeader>
           <CardTitle>Recent claims</CardTitle>
-          <CardDescription>Last 100 insurance claims by created date.</CardDescription>
+          <CardDescription>Last {CLAIMS_LIST_LIMIT} insurance claims by created date.</CardDescription>
         </CardHeader>
         <CardContent>
+          {(claimsData?.length || 0) >= CLAIMS_LIST_LIMIT ? (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Showing the latest {CLAIMS_LIST_LIMIT} claims only. Narrow by company or status before auditing a large
+              claim set.
+            </div>
+          ) : null}
           {claims.length === 0 ? (
             <p className="text-sm text-muted-foreground">No insurance claims have been recorded yet.</p>
           ) : (

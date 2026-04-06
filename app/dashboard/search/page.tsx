@@ -257,7 +257,10 @@ export default async function GlobalSearchPage({
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
                 <Search className="h-12 w-12 text-muted-foreground mb-4" />
-                <p className="text-muted-foreground">No results found for “{query}”</p>
+                <p className="text-center text-muted-foreground">
+                  No results found for “{query}”. Try a patient number, phone number, invoice number, or a shorter
+                  name fragment.
+                </p>
               </CardContent>
             </Card>
           )}
@@ -287,7 +290,10 @@ export default async function GlobalSearchPage({
           ) : (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
-                <p className="text-muted-foreground">No patients found</p>
+                <p className="text-center text-muted-foreground">
+                  No patients matched this search. Try a patient number or open patient registration if this is a new
+                  person.
+                </p>
               </CardContent>
             </Card>
           )}
@@ -324,7 +330,10 @@ export default async function GlobalSearchPage({
           ) : (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
-                <p className="text-muted-foreground">No appointments found</p>
+                <p className="text-center text-muted-foreground">
+                  No appointments matched this search. Try a patient name, then book a new appointment if follow-up is
+                  still needed.
+                </p>
               </CardContent>
             </Card>
           )}
@@ -359,7 +368,10 @@ export default async function GlobalSearchPage({
           ) : (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
-                <p className="text-muted-foreground">No prescriptions found</p>
+                <p className="text-center text-muted-foreground">
+                  No prescriptions matched this search. Try the patient name or prescription number, then create a new
+                  prescription if treatment is still pending.
+                </p>
               </CardContent>
             </Card>
           )}
@@ -394,7 +406,10 @@ export default async function GlobalSearchPage({
           ) : (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
-                <p className="text-muted-foreground">No invoices found</p>
+                <p className="text-center text-muted-foreground">
+                  No invoices matched this search. Try an invoice number or patient name, then open billing if a new
+                  invoice still needs to be raised.
+                </p>
               </CardContent>
             </Card>
           )}

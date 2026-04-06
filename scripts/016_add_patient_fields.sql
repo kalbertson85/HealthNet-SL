@@ -33,12 +33,12 @@ BEGIN
     CREATE OR REPLACE FUNCTION public.set_updated_at_patients()
     RETURNS trigger
     LANGUAGE plpgsql
-    AS $$
+    AS $fn$
     BEGIN
       NEW.updated_at := NOW();
       RETURN NEW;
     END;
-    $$;
+    $fn$;
   END IF;
 END;
 $$;

@@ -28,6 +28,7 @@ interface TriageAuditRow {
 }
 
 export const revalidate = 0
+const RECENT_EMERGENCY_AUDIT_LIMIT = 200
 
 export default async function EmergencyActivityPage({
   searchParams,
@@ -58,7 +59,7 @@ export default async function EmergencyActivityPage({
     .from("triage_audit_logs")
     .select("id, created_at, action, old_status, new_status, actor_user_id, triage_id")
     .order("created_at", { ascending: false })
-    .limit(200)
+    .limit(RECENT_EMERGENCY_AUDIT_LIMIT)
 
   if (actorFilter) {
     query = query.eq("actor_user_id", actorFilter)
@@ -181,7 +182,10 @@ export default async function EmergencyActivityPage({
       <Card>
         <CardHeader>
           <CardTitle>Filters</CardTitle>
-          <CardDescription>Filter emergency events by actor, patient, action, and date range.</CardDescription>
+          <CardDescription>
+            Filter emergency events by actor, patient, action, and date range. Results are limited to the latest{" "}
+            {RECENT_EMERGENCY_AUDIT_LIMIT} audit rows before related patient details are resolved.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 max-w-4xl">
@@ -230,7 +234,7 @@ export default async function EmergencyActivityPage({
           <div className="flex items-center justify-between gap-4">
             <div>
               <CardTitle>Recent emergency activity</CardTitle>
-              <CardDescription>Showing up to 200 matching entries.</CardDescription>
+              <CardDescription>Showing up to {RECENT_EMERGENCY_AUDIT_LIMIT} matching entries.</CardDescription>
             </div>
           </div>
         </CardHeader>

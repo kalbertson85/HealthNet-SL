@@ -288,6 +288,11 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
               </Link>
             </Button>
           )}
+          {invoice.payer_type === "company" && (
+            <Button asChild variant="outline" size="sm">
+              <Link href="/dashboard/billing/insurance">Insurance billing</Link>
+            </Button>
+          )}
           <div>
             <h1 className="text-balance text-3xl font-bold tracking-tight">Invoice Details</h1>
             <p className="text-pretty text-muted-foreground">Invoice #{invoice.invoice_number}</p>

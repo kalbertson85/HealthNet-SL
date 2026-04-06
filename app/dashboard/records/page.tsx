@@ -6,21 +6,14 @@ import { Label } from "@/components/ui/label"
 import Link from "next/link"
 import { redirect } from "next/navigation"
 import { ArrowLeft, Search } from "lucide-react"
-
-interface PatientRow {
-  id: string
-  full_name: string | null
-  patient_number: string | null
-  date_of_birth: string | null
-  company_id?: string | null
-}
-
-interface VisitRow {
-  id: string
-  patient_id: string
-  visit_status: string
-  created_at: string
-}
+import { ReportFilterSummary } from "@/components/report-filter-summary"
+import {
+  ensureTodayVisitForRecords,
+  fetchTodaysVisitsByPatientIds,
+  searchRecordsPatients,
+  type PatientRow,
+  type VisitRow,
+} from "@/lib/records/queries"
 
 const PAGE_SIZE = 20
 const MAX_SEARCH_LENGTH = 80
@@ -54,52 +47,21 @@ export default async function RecordsPage(props: {
   const isSearchTooShort = hasSearchQuery && !isLikelyId && searchQuery.length < 2
 
   if (hasSearchQuery && !isSearchTooShort) {
-    const from = (currentPage - 1) * PAGE_SIZE
-    const to = from + PAGE_SIZE
-
-    const { data, error } = await supabase
-      .from("patients")
-      .select("id, full_name, patient_number, date_of_birth, company_id")
-      .or(
-        isLikelyId
-          ? `id.eq.${searchQuery}`
-          : `patient_number.ilike.%${searchQuery}%,full_name.ilike.%${searchQuery}%`
-      )
-      .order("created_at", { ascending: false })
-      .range(from, to)
-
-    if (error) {
-      console.error("[records] Error searching patients:", error.message || error)
-    } else if (data) {
-      const rows = data as PatientRow[]
-      hasNextPage = rows.length > PAGE_SIZE
-      patients = rows.slice(0, PAGE_SIZE)
-      totalMatched = from + patients.length + (hasNextPage ? 1 : 0)
-    }
+    const result = await searchRecordsPatients(supabase, searchQuery, currentPage, PAGE_SIZE, isLikelyId)
+    patients = result.patients
+    totalMatched = result.totalMatched
+    hasNextPage = result.hasNextPage
   }
 
   const todaysVisitsByPatientId = new Map<string, VisitRow>()
 
   if (patients.length > 0) {
-    const patientIds = patients.map((p) => p.id)
-    const startOfDay = new Date()
-    startOfDay.setHours(0, 0, 0, 0)
-
-    const { data: visits, error: visitsError } = await supabase
-      .from("visits")
-      .select("id, patient_id, visit_status, created_at")
-      .in("patient_id", patientIds)
-      .gte("created_at", startOfDay.toISOString())
-      .order("created_at", { ascending: true })
-
-    if (visitsError) {
-      console.error("[records] Error loading today visits for records:", visitsError.message || visitsError)
-    } else {
-      for (const v of (visits || []) as VisitRow[]) {
-        if (!todaysVisitsByPatientId.has(v.patient_id)) {
-          todaysVisitsByPatientId.set(v.patient_id, v)
-        }
-      }
+    const visitMap = await fetchTodaysVisitsByPatientIds(
+      supabase,
+      patients.map((patient) => patient.id),
+    )
+    for (const [patientId, visit] of visitMap.entries()) {
+      todaysVisitsByPatientId.set(patientId, visit as VisitRow)
     }
   }
 
@@ -121,62 +83,12 @@ export default async function RecordsPage(props: {
       redirect("/dashboard/records?error=missing_patient")
     }
 
-    const startOfDay = new Date()
-    startOfDay.setHours(0, 0, 0, 0)
-
-    const { data: existingVisit, error: existingError } = await supabase
-      .from("visits")
-      .select("id")
-      .eq("patient_id", patientId)
-      .gte("created_at", startOfDay.toISOString())
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle()
-
-    if (existingError && existingError.code !== "PGRST116") {
-      console.error("[records] Error checking existing visit from records:", existingError.message || existingError)
+    const result = await ensureTodayVisitForRecords(supabase, patientId)
+    if (!result.ok) {
       redirect("/dashboard/records")
     }
 
-    if (!existingVisit) {
-      const { data: patientRow } = await supabase
-        .from("patients")
-        .select("id, company_id, free_health_category")
-        .eq("id", patientId)
-        .maybeSingle()
-
-      const companyAwarePatient = (patientRow || null) as
-        | { company_id?: string | null; free_health_category?: string | null; id?: string | null }
-        | null
-
-      const companyId = (companyAwarePatient?.company_id as string | null) ?? null
-      const freeHealthCategory = (companyAwarePatient?.free_health_category as string | null) ?? "none"
-      const isFreeHealthCare = freeHealthCategory !== "none"
-      const payerCategory = isFreeHealthCare ? "fhc" : companyId ? "company" : "self_pay"
-
-      const { data: opdFacility } = await supabase
-        .from("facilities")
-        .select("id, code")
-        .eq("code", "opd")
-        .maybeSingle()
-
-      const facilityId = (opdFacility?.id as string | null) ?? null
-
-      const { error: insertError } = await supabase.from("visits").insert({
-        patient_id: patientId,
-        visit_status: "doctor_pending",
-        assigned_company_id: companyId,
-        is_free_health_care: isFreeHealthCare,
-        payer_category: payerCategory,
-        facility_id: facilityId,
-      })
-
-      if (insertError) {
-        console.error("[records] Error creating visit from records:", insertError.message || insertError)
-      }
-    }
-
-    redirect("/dashboard/doctor")
+    redirect(`/dashboard/records/visit/${result.visitId}`)
   }
 
   const formatAge = (dob?: string | null) => {
@@ -235,7 +147,15 @@ export default async function RecordsPage(props: {
                 </Button>
               </div>
             </div>
+            {searchQuery ? (
+              <Button type="button" variant="outline" asChild>
+                <Link href="/dashboard/records">Reset</Link>
+              </Button>
+            ) : null}
           </form>
+          <div className="mt-4">
+            <ReportFilterSummary items={[{ label: "Search", value: searchQuery || null }]} />
+          </div>
         </CardContent>
       </Card>
 
@@ -273,9 +193,8 @@ export default async function RecordsPage(props: {
                   <div className="flex flex-wrap items-center gap-2">
                     <form action={ensureVisit}>
                       <input type="hidden" name="patient_id" value={p.id} />
-                      {p.company_id && <input type="hidden" name="company_id" value={p.company_id} />}
                       <Button type="submit" size="sm">
-                        {todayVisit ? "Continue today's visit" : "Start today's visit"}
+                        {todayVisit ? "Open visit handoff" : "Start visit handoff"}
                       </Button>
                     </form>
                     <Button asChild size="sm" variant="outline">

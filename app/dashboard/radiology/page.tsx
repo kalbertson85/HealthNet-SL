@@ -8,6 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TableCard } from "@/components/table-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { ReportFilterSummary } from "@/components/report-filter-summary"
+
+const RADIOLOGY_LIST_LIMIT = 50
 
 interface RadiologyRequestRow {
   id: string
@@ -23,7 +26,9 @@ interface RadiologyRequestRow {
   } | null
 }
 
-export default async function RadiologyPage() {
+export default async function RadiologyPage(props: {
+  searchParams?: Promise<{ status?: string; priority?: string }>
+}) {
   const supabase = await createServerClient()
 
   const { user, profile } = await getSessionUserAndProfile()
@@ -37,6 +42,11 @@ export default async function RadiologyPage() {
     redirect("/dashboard")
   }
 
+  const searchParams = props.searchParams ? await props.searchParams : undefined
+  const statusFilter = (searchParams?.status || "all").trim().toLowerCase()
+  const priorityFilter = (searchParams?.priority || "all").trim().toLowerCase()
+  const hasActiveFilters = statusFilter !== "all" || priorityFilter !== "all"
+
   const { data: requests } = await supabase
     .from("radiology_requests")
     .select(
@@ -49,7 +59,7 @@ export default async function RadiologyPage() {
       `,
     )
     .order("created_at", { ascending: false })
-    .limit(50)
+    .limit(RADIOLOGY_LIST_LIMIT)
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -79,7 +89,17 @@ export default async function RadiologyPage() {
     }
   }
 
-  const rows = (requests || []) as RadiologyRequestRow[]
+  const rows = ((requests || []) as RadiologyRequestRow[]).filter((request) => {
+    if (statusFilter !== "all" && (request.status || "").toLowerCase() !== statusFilter) return false
+    if (priorityFilter !== "all" && (request.priority || "").toLowerCase() !== priorityFilter) return false
+    return true
+  })
+
+  const statusSummary = {
+    pending: rows.filter((request) => request.status === "pending").length,
+    scheduled: rows.filter((request) => request.status === "scheduled").length,
+    completed: rows.filter((request) => request.status === "completed").length,
+  }
 
   return (
     <div className="space-y-8">
@@ -90,12 +110,103 @@ export default async function RadiologyPage() {
         </div>
       </div>
 
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Pending</CardTitle>
+            <CardDescription>Requests awaiting scheduling or imaging.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{statusSummary.pending}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Scheduled</CardTitle>
+            <CardDescription>Requests booked but not yet completed.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{statusSummary.scheduled}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Completed</CardTitle>
+            <CardDescription>Requests with submitted reports.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{statusSummary.completed}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <form method="GET" className="flex flex-wrap items-end gap-3 text-sm">
+        <div className="space-y-1">
+          <label htmlFor="status" className="text-xs font-medium text-muted-foreground">
+            Status
+          </label>
+          <select
+            id="status"
+            name="status"
+            defaultValue={statusFilter}
+            className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
+            Priority
+          </label>
+          <select
+            id="priority"
+            name="priority"
+            defaultValue={priorityFilter}
+            className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <option value="all">All priorities</option>
+            <option value="routine">Routine</option>
+            <option value="urgent">Urgent</option>
+            <option value="stat">STAT</option>
+          </select>
+        </div>
+
+        <div className="mt-4 flex items-center gap-2">
+          {hasActiveFilters ? (
+            <Button asChild type="button" size="sm" variant="outline">
+              <Link href="/dashboard/radiology">Reset</Link>
+            </Button>
+          ) : null}
+          <Button type="submit" size="sm">
+            Apply filters
+          </Button>
+        </div>
+      </form>
+
+      <ReportFilterSummary
+        items={[
+          { label: "Status", value: statusFilter !== "all" ? statusFilter : null },
+          { label: "Priority", value: priorityFilter !== "all" ? priorityFilter : null },
+        ]}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Radiology Requests</CardTitle>
           <CardDescription>Recent imaging requests linked to visits</CardDescription>
         </CardHeader>
         <CardContent>
+          {(requests?.length || 0) >= RADIOLOGY_LIST_LIMIT ? (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Showing the latest {RADIOLOGY_LIST_LIMIT} radiology requests. Apply filters, then continue in the
+              detailed workflow for older items.
+            </div>
+          ) : null}
           <TableCard title="Radiology Requests" description="Recent imaging requests and results">
             <Table>
               <TableHeader>
@@ -153,8 +264,10 @@ export default async function RadiologyPage() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      No radiology requests found
+                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                      {hasActiveFilters
+                        ? "No radiology requests match the selected filters."
+                        : "No radiology requests found."}
                     </TableCell>
                   </TableRow>
                 )}

@@ -2,13 +2,10 @@ import { redirect } from "next/navigation"
 import { createServerClient } from "@/lib/supabase/server"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import { Label } from "@/components/ui/label"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
+import { SurgeryCreateForm } from "@/components/surgery-create-form"
 
 export default async function NewSurgeryPage(props: {
   searchParams: Promise<{ visit_id?: string; patient_id?: string }>
@@ -94,50 +91,7 @@ export default async function NewSurgeryPage(props: {
         </div>
       </div>
 
-      <form action={createSurgery} className="space-y-6">
-        <input type="hidden" name="visit_id" value={visitId} />
-        <input type="hidden" name="patient_id" value={patientId} />
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Procedure Details</CardTitle>
-            <CardDescription>Key information about this surgery.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="procedure_name">Procedure name *</Label>
-              <Input id="procedure_name" name="procedure_name" required placeholder="e.g. Appendectomy" />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="procedure_type">Procedure type (optional)</Label>
-              <Input id="procedure_type" name="procedure_type" placeholder="e.g. Emergency, Elective" />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="scheduled_at">Scheduled date &amp; time (optional)</Label>
-              <Input id="scheduled_at" name="scheduled_at" type="datetime-local" />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="notes">Notes (optional)</Label>
-              <Textarea
-                id="notes"
-                name="notes"
-                rows={4}
-                placeholder="Key operative notes or planning details..."
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="flex justify-end gap-4">
-          <Button type="button" variant="outline" asChild>
-            <Link href="/dashboard/surgery">Cancel</Link>
-          </Button>
-          <Button type="submit">Create Surgery</Button>
-        </div>
-      </form>
+      <SurgeryCreateForm visitId={visitId} patientId={patientId} action={createSurgery} />
     </div>
   )
 }

@@ -69,7 +69,7 @@ export default async function AdminPage() {
           <CardContent className="space-y-3 text-sm text-muted-foreground">
             <p>
               Audit logs are recorded for key clinical and billing actions such as lab result entry and pharmacy
-              dispensing. A dedicated audit viewer can be added here in a future update.
+              dispensing. Use the activity and audit links below to trace workflow changes across the system.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button asChild size="sm" variant="outline">
@@ -125,6 +125,12 @@ export default async function AdminPage() {
                 <span>Company billing</span>
                 <Button asChild size="sm" variant="outline">
                   <Link href="/dashboard/settings/companies">Open</Link>
+                </Button>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Insurance batch billing</span>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/dashboard/billing/insurance">Open</Link>
                 </Button>
               </div>
             </div>

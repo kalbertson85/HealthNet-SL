@@ -5,6 +5,21 @@ import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
 const EXPORT_ROW_LIMIT = 5_000
 
+interface InvoiceExportRow {
+  invoice_number: string
+  total_amount: number
+  paid_amount: number | null
+  status: string
+  due_date: string | null
+  created_at: string
+  company_id: string | null
+  patient?: {
+    patient_number?: string | null
+    first_name?: string | null
+    last_name?: string | null
+  } | null
+}
+
 export async function GET(request: NextRequest) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "api_export_invoices",
@@ -15,16 +30,21 @@ export async function GET(request: NextRequest) {
 
   try {
     const { supabase } = await requirePermission(request, "admin.export")
+    const { searchParams } = new URL(request.url)
+    const query = (searchParams.get("q") || "").trim().toLowerCase()
+    const statusFilter = (searchParams.get("status") || "").trim().toLowerCase()
+    const companyFilterId = (searchParams.get("company_id") || "").trim()
 
     const { data: fetchedInvoices, error } = await supabase
       .from("invoices")
       .select(`
         invoice_number,
         total_amount,
-        amount_paid,
+        paid_amount,
         status,
         due_date,
         created_at,
+        company_id,
         patient:patients(patient_number, first_name, last_name)
       `)
       .order("created_at", { ascending: false })
@@ -34,8 +54,31 @@ export async function GET(request: NextRequest) {
       return new NextResponse("Error fetching data", { status: 500 })
     }
 
-    const isTruncated = (fetchedInvoices || []).length > EXPORT_ROW_LIMIT
-    const invoices = (fetchedInvoices || []).slice(0, EXPORT_ROW_LIMIT)
+    const filteredRows = ((fetchedInvoices || []) as InvoiceExportRow[]).filter((invoice) => {
+      if (statusFilter && statusFilter !== "all" && (invoice.status || "").toLowerCase() !== statusFilter) {
+        return false
+      }
+      if (companyFilterId && (invoice.company_id || "") !== companyFilterId) {
+        return false
+      }
+      if (!query) return true
+
+      const haystack = [
+        invoice.invoice_number,
+        invoice.status,
+        invoice.patient?.patient_number,
+        invoice.patient?.first_name,
+        invoice.patient?.last_name,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+
+      return haystack.includes(query)
+    })
+
+    const isTruncated = filteredRows.length > EXPORT_ROW_LIMIT
+    const invoices = filteredRows.slice(0, EXPORT_ROW_LIMIT)
 
     const headers = [
       "Invoice Number",
@@ -60,8 +103,8 @@ export async function GET(request: NextRequest) {
         invoice.patient?.patient_number || "",
         `${invoice.patient?.first_name || ""} ${invoice.patient?.last_name || ""}`,
         invoice.total_amount,
-        invoice.amount_paid,
-        invoice.total_amount - invoice.amount_paid,
+        invoice.paid_amount,
+        Number(invoice.total_amount || 0) - Number(invoice.paid_amount || 0),
         invoice.status,
         invoice.due_date || "",
         `"${paymentMethods}"`,

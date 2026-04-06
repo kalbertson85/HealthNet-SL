@@ -81,7 +81,7 @@ export function DashboardSidebar({ userRole }: DashboardSidebarProps) {
   })
 
   return (
-    <aside className="w-64 border-r bg-gradient-to-b from-sky-950 via-slate-900 to-indigo-950 text-slate-100">
+    <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r bg-gradient-to-b from-sky-950 via-slate-900 to-indigo-950 text-slate-100">
       <div className="h-20 border-b bg-white px-0 py-0">
         <Link href="/dashboard" className="block h-full w-full">
           <div className="relative h-full w-full overflow-hidden">
@@ -95,7 +95,7 @@ export function DashboardSidebar({ userRole }: DashboardSidebarProps) {
           </div>
         </Link>
       </div>
-      <nav className="flex-1 space-y-1 p-4">
+      <nav className="flex-1 space-y-1 overflow-y-auto p-4">
         {navigation.map((item) => (
           <Link
             key={item.name}

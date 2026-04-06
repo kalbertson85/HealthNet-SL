@@ -26,6 +26,7 @@ interface PharmacyPrescriptionRow {
 }
 
 export const revalidate = 0
+const RECENT_PHARMACY_ACTIVITY_LIMIT = 200
 
 export default async function PharmacyActivityPage({
   searchParams,
@@ -59,7 +60,7 @@ export default async function PharmacyActivityPage({
        patients(full_name, patient_number)`,
     )
     .order("created_at", { ascending: false })
-    .limit(200)
+    .limit(RECENT_PHARMACY_ACTIVITY_LIMIT)
 
   if (statusFilter) {
     query = query.eq("status", statusFilter)
@@ -179,7 +180,10 @@ export default async function PharmacyActivityPage({
       <Card>
         <CardHeader>
           <CardTitle>Filters</CardTitle>
-          <CardDescription>Filter prescriptions by search, status, last action, and date range.</CardDescription>
+          <CardDescription>
+            Filter prescriptions by search, status, last action, and date range. Results are limited to the latest{" "}
+            {RECENT_PHARMACY_ACTIVITY_LIMIT} prescriptions before audit activity is matched.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 max-w-4xl">
@@ -245,7 +249,7 @@ export default async function PharmacyActivityPage({
           <div className="flex items-center justify-between gap-4">
             <div>
               <CardTitle>Recent prescriptions</CardTitle>
-              <CardDescription>Showing up to 200 matching entries.</CardDescription>
+              <CardDescription>Showing up to {RECENT_PHARMACY_ACTIVITY_LIMIT} matching entries.</CardDescription>
             </div>
           </div>
         </CardHeader>

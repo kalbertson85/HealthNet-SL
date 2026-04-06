@@ -1,11 +1,23 @@
 import { createServerClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
 import Link from "next/link"
-import { Bell, CheckCheck, Clock, AlertCircle, Calendar, FileText, Pill, CreditCard } from "lucide-react"
+import {
+  Bell,
+  CheckCheck,
+  Clock,
+  AlertCircle,
+  Calendar,
+  FileText,
+  Pill,
+  CreditCard,
+  TriangleAlert,
+} from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { getSessionUserAndProfile } from "@/app/actions/auth"
+import { can } from "@/lib/utils"
 
 const PAGE_SIZE = 40
 const PAGE_SCAN_LIMIT = 400
@@ -23,6 +35,15 @@ const priorityColors = {
   normal: "bg-blue-500",
   high: "bg-orange-500",
   urgent: "bg-red-500",
+}
+
+interface LiveAlertItem {
+  id: string
+  title: string
+  message: string
+  severity: "high" | "urgent"
+  href: string
+  label: string
 }
 
 async function markAsRead(notificationId: string) {
@@ -53,13 +74,12 @@ async function markAllAsRead() {
 
 export default async function NotificationsPage(props: { searchParams?: Promise<{ page?: string }> }) {
   const supabase = await createServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
     redirect("/auth/login")
   }
+  const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
   const sp = props.searchParams ? await props.searchParams : undefined
   const parsedPage = Number.parseInt(sp?.page || "1", 10)
   const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1
@@ -68,7 +88,99 @@ export default async function NotificationsPage(props: { searchParams?: Promise<
   const scanCapReached = to >= PAGE_SCAN_LIMIT
   const maxPage = Math.ceil(PAGE_SCAN_LIMIT / PAGE_SIZE)
 
-  const [{ data: notifications }, { count: totalCount }, { count: unreadCount }] = await Promise.all([
+  const liveAlertTasks: Array<PromiseLike<LiveAlertItem[]>> = []
+
+  if (can(rbacUser, "pharmacy.manage")) {
+    liveAlertTasks.push(
+      supabase
+        .from("medication_stock")
+        .select("id, quantity_on_hand, reorder_level, medications(name)")
+        .limit(5)
+        .then(({ data }) =>
+          ((data || []) as Array<{
+            id: string
+            quantity_on_hand: number | null
+            reorder_level: number | null
+            medications?: { name?: string | null } | null
+          }>)
+            .filter((row) => {
+              const quantity = Number(row.quantity_on_hand || 0)
+              const reorderLevel = Number(row.reorder_level || 0)
+              return reorderLevel > 0 && quantity <= reorderLevel
+            })
+            .map((row) => ({
+              id: `stock:${row.id}`,
+              title: "Low stock alert",
+              message: `${row.medications?.name || "Medication"} is at or below reorder level.`,
+              severity: "high" as const,
+              href: "/dashboard/pharmacy?stock_filter=low",
+              label: "Low stock",
+            })),
+        ),
+    )
+  }
+
+  if (can(rbacUser, "appointments.manage")) {
+    const todayIsoDate = new Date().toISOString().split("T")[0]
+    liveAlertTasks.push(
+      supabase
+        .from("appointments")
+        .select("id, appointment_date, appointment_time, patients(full_name)")
+        .lt("appointment_date", todayIsoDate)
+        .in("status", ["scheduled", "confirmed"])
+        .order("appointment_date", { ascending: true })
+        .limit(5)
+        .then(({ data }) =>
+          ((data || []) as Array<{
+            id: string
+            appointment_date: string
+            appointment_time: string | null
+            patients?: { full_name?: string | null } | { full_name?: string | null }[] | null
+          }>).map((row) => {
+            const patient = Array.isArray(row.patients) ? row.patients[0] : row.patients
+            return {
+              id: `appointment:${row.id}`,
+              title: "Missed appointment follow-up",
+              message: `${patient?.full_name || "Patient"} missed the ${row.appointment_date} appointment${row.appointment_time ? ` at ${row.appointment_time}` : ""}.`,
+              severity: "high" as const,
+              href: "/dashboard/appointments?status=scheduled",
+              label: "Missed appointment",
+            }
+          }),
+        ),
+    )
+  }
+
+  if (can(rbacUser, "emergency.manage")) {
+    liveAlertTasks.push(
+      supabase
+        .from("triage_assessments")
+        .select("id, chief_complaint, patient:patients(full_name)")
+        .eq("triage_level", "red")
+        .in("status", ["pending", "in_treatment"])
+        .order("arrival_time", { ascending: true })
+        .limit(5)
+        .then(({ data }) =>
+          ((data || []) as Array<{
+            id: string
+            chief_complaint: string | null
+            patient?: { full_name?: string | null } | { full_name?: string | null }[] | null
+          }>).map((row) => {
+            const patient = Array.isArray(row.patient) ? row.patient[0] : row.patient
+            return {
+              id: `critical:${row.id}`,
+              title: "Critical case requires attention",
+              message: `${patient?.full_name || "Patient"} is in the red triage queue${row.chief_complaint ? `: ${row.chief_complaint}` : ""}.`,
+              severity: "urgent" as const,
+              href: `/dashboard/emergency/${row.id}`,
+              label: "Critical case",
+            }
+          }),
+        ),
+    )
+  }
+
+  const [{ data: notifications }, { count: totalCount }, { count: unreadCount }, liveAlertGroups] = await Promise.all([
     supabase
       .from("notifications")
       .select("id, title, message, type, priority, is_read, created_at")
@@ -81,7 +193,9 @@ export default async function NotificationsPage(props: { searchParams?: Promise<
       .select("id", { count: "exact", head: true })
       .eq("user_id", user.id)
       .eq("is_read", false),
+    Promise.all(liveAlertTasks),
   ])
+  const liveAlerts = liveAlertGroups.flat()
   const boundedTotal = Math.min(totalCount || 0, PAGE_SCAN_LIMIT)
   const boundedUnread = Math.min(unreadCount || 0, boundedTotal)
   const boundedRead = Math.max(0, boundedTotal - boundedUnread)
@@ -121,6 +235,34 @@ export default async function NotificationsPage(props: { searchParams?: Promise<
         <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Showing the latest {PAGE_SCAN_LIMIT} notifications. Use a narrower workflow to access older history.
         </div>
+      ) : null}
+
+      {liveAlerts.length > 0 ? (
+        <Card className="border-l-4 border-l-red-500">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TriangleAlert className="h-5 w-5 text-red-600" />
+              Operational Alerts
+            </CardTitle>
+            <CardDescription>Live alerts from appointment, emergency, and pharmacy workflows.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {liveAlerts.map((alert) => (
+              <div key={alert.id} className="flex items-start justify-between gap-4 rounded-md border p-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium">{alert.title}</p>
+                    <Badge variant={alert.severity === "urgent" ? "destructive" : "outline"}>{alert.label}</Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{alert.message}</p>
+                </div>
+                <Button asChild size="sm" variant="outline">
+                  <Link href={alert.href}>Open</Link>
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       ) : null}
 
       <Tabs defaultValue="unread" className="space-y-4">

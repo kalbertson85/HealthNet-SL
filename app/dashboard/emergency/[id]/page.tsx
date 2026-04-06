@@ -7,6 +7,7 @@ import { AlertCircle, ArrowLeft, Calendar, Clock, User } from "lucide-react"
 import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 
 const triageLevels = {
   red: { label: "Critical", color: "bg-red-600", textColor: "text-red-600" },
@@ -227,9 +228,17 @@ export default async function EmergencyDetailPage({
               </div>
             )}
           </CardContent>
-        </Card>
+      </Card>
 
-        <Card>
+      <PatientWorkflowPanel
+        currentStage="triage"
+        patientId={triage.patient_id as string | null}
+        visitId={(triage.visit_id as string | null) ?? null}
+        title="Emergency workflow"
+        description="Emergency is a fast entry point, but the case should still continue through the same linked visit, billing, and follow-up workflow."
+      />
+
+      <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertCircle className="h-4 w-4" />

@@ -7,6 +7,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
+import { FormHelpTip } from "@/components/form-help-tip"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { advanceVisitToDoctorReviewIfDiagnosticsComplete } from "@/lib/visit-flow"
 
 export default async function RadiologyRequestDetailPage(props: {
   params: Promise<{ id: string }>
@@ -127,6 +130,11 @@ export default async function RadiologyRequestDetailPage(props: {
 
     await supabase.from("radiology_requests").update({ status }).eq("id", id)
 
+    const visitId = (request as { visit_id?: string | null }).visit_id ?? null
+    if (visitId && ["completed", "cancelled"].includes(status)) {
+      await advanceVisitToDoctorReviewIfDiagnosticsComplete(supabase, visitId)
+    }
+
     if (before && user) {
       try {
         await supabase.from("radiology_audit_logs").insert({
@@ -191,19 +199,7 @@ export default async function RadiologyRequestDetailPage(props: {
     }
 
     if (updatedRequest?.visit_id) {
-      const { data: remaining } = await supabase
-        .from("investigations")
-        .select("id, status")
-        .eq("visit_id", updatedRequest.visit_id as string)
-
-      const allCompleted = (remaining || []).every((inv) => inv.status === "completed")
-
-      if (allCompleted) {
-        await supabase
-          .from("visits")
-          .update({ visit_status: "doctor_review" })
-          .eq("id", updatedRequest.visit_id as string)
-      }
+      await advanceVisitToDoctorReviewIfDiagnosticsComplete(supabase, updatedRequest.visit_id as string)
     }
 
     if (user) {
@@ -284,12 +280,23 @@ export default async function RadiologyRequestDetailPage(props: {
         </div>
       </div>
 
+      <PatientWorkflowPanel
+        currentStage="diagnostics"
+        patientId={(request.patient_id as string | null) ?? null}
+        visitId={(request.visit_id as string | null) ?? null}
+        title="Diagnostic workflow"
+        description="Imaging results should return the same visit to doctor review only after all remaining diagnostics for that visit are complete."
+      />
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>Request Status</CardTitle>
             <Badge variant={request.status === "completed" ? "secondary" : "default"}>{request.status}</Badge>
           </div>
+          <p className="text-sm text-muted-foreground">
+            Update status when the request is booked, completed, or cancelled so the requesting team sees the current imaging state.
+          </p>
         </CardHeader>
         <CardContent>
           <form action={updateStatus} className="flex gap-2">
@@ -409,11 +416,17 @@ export default async function RadiologyRequestDetailPage(props: {
         <Card>
           <CardHeader>
             <CardTitle>Enter Results</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Submit a concise report and impression here. Saving results also completes the request and can advance the linked visit.
+            </p>
           </CardHeader>
           <CardContent>
             <form action={enterResults} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="interpretation">Report & Interpretation *</Label>
+                <div className="flex items-center gap-1">
+                  <Label htmlFor="interpretation">Report & Interpretation *</Label>
+                  <FormHelpTip text="Include the key findings first, then the clinical impression or recommendation so the doctor can act immediately." />
+                </div>
                 <Textarea
                   id="interpretation"
                   name="interpretation"

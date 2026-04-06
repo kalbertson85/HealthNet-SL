@@ -10,6 +10,9 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { logAuditEvent } from "@/lib/audit"
 import { shouldSendSms, sendSms } from "@/lib/notifications/sms"
+import { FormHelpTip } from "@/components/form-help-tip"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { advanceVisitToDoctorReviewIfDiagnosticsComplete } from "@/lib/visit-flow"
 
 export default async function LabTestDetailPage(props: {
   params: Promise<{ id: string }>
@@ -193,6 +196,11 @@ export default async function LabTestDetailPage(props: {
 
     await supabase.from("lab_tests").update({ status }).eq("id", id)
 
+    const visitId = (labTest as { visit_id?: string | null }).visit_id ?? null
+    if (visitId && ["completed", "cancelled"].includes(status)) {
+      await advanceVisitToDoctorReviewIfDiagnosticsComplete(supabase, visitId)
+    }
+
     if (before && user) {
       try {
         await supabase.from("lab_audit_logs").insert({
@@ -297,6 +305,11 @@ export default async function LabTestDetailPage(props: {
       }
     }
 
+    const visitId = (updatedTest?.visit_id as string | null) ?? ((labTest as { visit_id?: string | null }).visit_id ?? null)
+    if (visitId) {
+      await advanceVisitToDoctorReviewIfDiagnosticsComplete(supabase, visitId)
+    }
+
     redirect(`/dashboard/lab/${id}`)
   }
 
@@ -352,6 +365,14 @@ export default async function LabTestDetailPage(props: {
         </div>
       </div>
 
+      <PatientWorkflowPanel
+        currentStage="diagnostics"
+        patientId={(labTest.patient_id as string | null) ?? null}
+        visitId={(labTest.visit_id as string | null) ?? null}
+        title="Diagnostic workflow"
+        description="Lab results should return the same visit back to doctor review only after all outstanding diagnostics for that visit are completed or cancelled."
+      />
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -359,7 +380,11 @@ export default async function LabTestDetailPage(props: {
             <Badge variant={labTest.status === "completed" ? "secondary" : "default"}>{labTest.status}</Badge>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+            Move the test forward in order: mark sample collected, mark sample received, then enter final results.
+            Completed results can notify the patient by SMS when messaging is enabled.
+          </div>
           <form action={updateStatus} className="flex gap-2">
             <select
               name="status"
@@ -513,12 +538,18 @@ export default async function LabTestDetailPage(props: {
       {labTest.status !== "completed" ? (
         <Card>
           <CardHeader>
-            <CardTitle>Enter Results</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              Enter Results
+              <FormHelpTip text="Use this section for the final result narrative or interpretation. Submitting here marks the test as completed and records the action in the audit log." />
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <form action={enterResults} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="interpretation">Results & Interpretation *</Label>
+                <Label htmlFor="interpretation" className="flex items-center gap-2">
+                  Results & Interpretation *
+                  <FormHelpTip text="Record the clinically useful result summary here. Keep it specific enough for the next care step, especially if the visit should continue to treatment or discharge." />
+                </Label>
                 <Textarea
                   id="interpretation"
                   name="interpretation"

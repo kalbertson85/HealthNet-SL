@@ -7,6 +7,7 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { ROLES } from "@/lib/utils"
+import { fetchProfilesByIds } from "@/lib/admin/activity"
 
 interface AdminAuditLogRow {
   id: string
@@ -102,12 +103,11 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
 
   let profiles: { id: string; full_name: string | null; email: string | null }[] = []
   if (actorTargetIds.length > 0) {
-    const { data: profileRows } = await supabase
-      .from("profiles")
-      .select("id, full_name, email")
-      .in("id", actorTargetIds)
-
-    profiles = (profileRows || []) as { id: string; full_name: string | null; email: string | null }[]
+    profiles = (await fetchProfilesByIds(supabase, actorTargetIds)) as {
+      id: string
+      full_name: string | null
+      email: string | null
+    }[]
   }
 
   const profileMap = new Map<string, { name: string; email: string | null }>()

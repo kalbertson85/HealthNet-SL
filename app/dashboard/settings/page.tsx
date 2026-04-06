@@ -82,8 +82,8 @@ export default async function SettingsPage({
           </CardHeader>
           <CardContent className="space-y-4 text-sm text-muted-foreground">
             <p>
-              Profile details are managed from your account. In a future update, this section can be connected to
-              editable profile fields.
+              Profile identity is currently managed through your authenticated account and staff administration. Use
+              the security and notification sections below for account-level changes.
             </p>
           </CardContent>
         </Card>

@@ -11,7 +11,7 @@ const ALLOWED_TRANSITIONS: Record<VisitStatus, VisitStatus[]> = {
   doctor_pending: ["lab_pending", "billing_pending", "admitted"],
   lab_pending: ["doctor_review"],
   doctor_review: ["billing_pending", "admitted"],
-  billing_pending: ["pharmacy_pending", "admitted"],
+  billing_pending: ["pharmacy_pending", "admitted", "completed"],
   pharmacy_pending: ["completed"],
   admitted: ["completed"],
   completed: [],

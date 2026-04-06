@@ -23,6 +23,7 @@ interface ResetActivityPageProps {
 }
 
 export const revalidate = 0
+const RECENT_RESET_SCAN_LIMIT = 200
 
 export default async function ResetActivityPage({ searchParams }: ResetActivityPageProps) {
   const supabase = await createServerClient()
@@ -47,7 +48,7 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
     .from("password_reset_events")
     .select("id, email, created_at")
     .order("created_at", { ascending: false })
-    .limit(200)
+    .limit(RECENT_RESET_SCAN_LIMIT)
 
   if (fromFilter) {
     query = query.gte("created_at", fromFilter)
@@ -120,7 +121,10 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
       <Card>
         <CardHeader>
           <CardTitle>Filters</CardTitle>
-          <CardDescription>Filter by email and date range.</CardDescription>
+          <CardDescription>
+            Filter by email and date range. Results are limited to the latest {RECENT_RESET_SCAN_LIMIT} reset events
+            before client-side search is applied.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="mx-auto w-full max-w-4xl">
@@ -210,7 +214,7 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
       <Card>
         <CardHeader>
           <CardTitle>Recent reset requests</CardTitle>
-          <CardDescription>Showing up to 200 matching entries.</CardDescription>
+          <CardDescription>Showing up to {RECENT_RESET_SCAN_LIMIT} matching entries.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">

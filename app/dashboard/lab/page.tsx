@@ -9,6 +9,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TableCard } from "@/components/table-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { ReportFilterSummary } from "@/components/report-filter-summary"
+import { ExportPreviewCard } from "@/components/export-preview-card"
+
+const LAB_LIST_LIMIT = 50
 
 interface LabTestRow {
   id: string
@@ -25,8 +29,14 @@ interface LabTestRow {
   } | null
 }
 
-export default async function LabTestsPage() {
+export default async function LabTestsPage(props: {
+  searchParams?: Promise<{ status?: string; priority?: string }>
+}) {
   const supabase = await createServerClient()
+  const searchParams = props.searchParams ? await props.searchParams : undefined
+  const statusFilter = (searchParams?.status || "all").trim().toLowerCase()
+  const priorityFilter = (searchParams?.priority || "all").trim().toLowerCase()
+  const hasActiveFilters = statusFilter !== "all" || priorityFilter !== "all"
 
   const { user, profile } = await getSessionUserAndProfile()
 
@@ -38,6 +48,13 @@ export default async function LabTestsPage() {
   if (!can(rbacUser, "lab.manage")) {
     redirect("/dashboard")
   }
+  const canExport = can(rbacUser, "admin.export")
+  const exportQuery = new URLSearchParams()
+  if (statusFilter !== "all") exportQuery.set("status", statusFilter)
+  if (priorityFilter !== "all") exportQuery.set("priority", priorityFilter)
+  const exportHref = exportQuery.toString()
+    ? `/api/export/lab-tests?${exportQuery.toString()}`
+    : "/api/export/lab-tests"
 
   // Fetch lab tests
   const { data: labTests } = await supabase
@@ -51,7 +68,7 @@ export default async function LabTestsPage() {
       )
     `)
     .order("created_at", { ascending: false })
-    .limit(50)
+    .limit(LAB_LIST_LIMIT)
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -81,6 +98,18 @@ export default async function LabTestsPage() {
     }
   }
 
+  const rows = ((labTests || []) as LabTestRow[]).filter((test) => {
+    if (statusFilter !== "all" && (test.status || "").toLowerCase() !== statusFilter) return false
+    if (priorityFilter !== "all" && (test.priority || "").toLowerCase() !== priorityFilter) return false
+    return true
+  })
+
+  const statusSummary = {
+    pending: rows.filter((test) => test.status === "pending").length,
+    inProgress: rows.filter((test) => test.status === "in_progress").length,
+    completed: rows.filter((test) => test.status === "completed").length,
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -96,12 +125,111 @@ export default async function LabTestsPage() {
         </Button>
       </div>
 
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Pending</CardTitle>
+            <CardDescription>Awaiting sample processing or review.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{statusSummary.pending}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>In Progress</CardTitle>
+            <CardDescription>Currently being processed by the lab team.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{statusSummary.inProgress}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Completed</CardTitle>
+            <CardDescription>Tests with entered results.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{statusSummary.completed}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <form method="GET" className="flex flex-wrap items-end gap-3 text-sm">
+        <div className="space-y-1">
+          <label htmlFor="status" className="text-xs font-medium text-muted-foreground">
+            Status
+          </label>
+          <select
+            id="status"
+            name="status"
+            defaultValue={statusFilter}
+            className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="in_progress">In progress</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label htmlFor="priority" className="text-xs font-medium text-muted-foreground">
+            Priority
+          </label>
+          <select
+            id="priority"
+            name="priority"
+            defaultValue={priorityFilter}
+            className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <option value="all">All priorities</option>
+            <option value="routine">Routine</option>
+            <option value="urgent">Urgent</option>
+            <option value="stat">STAT</option>
+          </select>
+        </div>
+        <div className="mt-4 flex items-center gap-2">
+          {hasActiveFilters ? (
+            <Button asChild type="button" size="sm" variant="outline">
+              <Link href="/dashboard/lab">Reset</Link>
+            </Button>
+          ) : null}
+          <Button type="submit" size="sm">
+            Apply filters
+          </Button>
+        </div>
+      </form>
+
+      <ReportFilterSummary
+        items={[
+          { label: "Status", value: statusFilter !== "all" ? statusFilter : null },
+          { label: "Priority", value: priorityFilter !== "all" ? priorityFilter : null },
+        ]}
+      />
+      {canExport ? (
+        <ExportPreviewCard
+          title="Export current lab view"
+          description="Apply status and priority filters, confirm the current lab preview, then export that same filtered set as CSV."
+          href={exportHref}
+          previewCount={rows.length}
+          previewLabel="lab tests are visible in the current preview"
+          limitNote="Exports honor status and priority filters and return up to 5,000 rows."
+        />
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>All Lab Tests</CardTitle>
           <CardDescription>Recent lab test orders and results</CardDescription>
         </CardHeader>
         <CardContent>
+          {(labTests?.length || 0) >= LAB_LIST_LIMIT ? (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Showing the latest {LAB_LIST_LIMIT} lab tests. Use status and priority filters, then open the relevant
+              workflow for older records.
+            </div>
+          ) : null}
           <TableCard title="All Lab Tests" description="Recent lab test orders and results">
             <Table>
               <TableHeader>
@@ -117,8 +245,8 @@ export default async function LabTestsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {labTests && labTests.length > 0 ? (
-                  labTests.map((test: LabTestRow) => (
+                {rows.length > 0 ? (
+                  rows.map((test: LabTestRow) => (
                     <TableRow key={test.id} className="hover:bg-muted/50">
                       <TableCell className="font-medium">{test.test_number}</TableCell>
                       <TableCell>
@@ -159,8 +287,8 @@ export default async function LabTestsPage() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground">
-                      No lab tests found
+                    <TableCell colSpan={8} className="text-center text-muted-foreground">
+                      {hasActiveFilters ? "No lab tests match the selected filters." : "No lab tests found."}
                     </TableCell>
                   </TableRow>
                 )}

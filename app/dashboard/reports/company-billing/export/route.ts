@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
 import { enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
+import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
 
 const EXPORT_ROW_LIMIT = 5_000
 
@@ -66,15 +67,6 @@ interface PatientLite {
   full_name: string | null
   patient_number: string | null
 }
-interface PrescriptionLite {
-  id: string
-  visit_id: string | null
-  doctor_id: string | null
-}
-interface DoctorProfileLite {
-  id: string
-  full_name: string | null
-}
 interface CompanyLite {
   id: string
   name: string | null
@@ -95,28 +87,14 @@ interface CompanyLite {
   const patientIds = Array.from(
     new Set(filteredInvoices.map((inv) => inv.patient_id).filter((id): id is string => Boolean(id)))
   )
-  const visitIds = Array.from(new Set(filteredInvoices.map((inv) => inv.visit_id).filter((id): id is string => Boolean(id))))
 
-  const [{ data: patients }, { data: prescriptions }] = await Promise.all([
+  const { data: patients } = await (
     patientIds.length
       ? supabase.from("patients").select("id, full_name, patient_number").in("id", patientIds)
-      : Promise.resolve({ data: [] as PatientLite[] }),
-    visitIds.length
-      ? supabase.from("prescriptions").select("id, visit_id, doctor_id").in("visit_id", visitIds)
-      : Promise.resolve({ data: [] as PrescriptionLite[] }),
-  ])
-
-  const doctorIds = Array.from(
-    new Set(
-      ((prescriptions || []) as PrescriptionLite[])
-        .map((rx) => rx.doctor_id || null)
-        .filter((id): id is string => Boolean(id)),
-    ),
+      : Promise.resolve({ data: [] as PatientLite[] })
   )
 
-  const { data: doctorProfiles } = doctorIds.length
-    ? await supabase.from("profiles").select("id, full_name").in("id", doctorIds)
-    : { data: [] as DoctorProfileLite[] }
+  const coverageMap = selectedCompanyId ? await fetchCompanyCoverageMap(supabase, selectedCompanyId, patientIds) : new Map()
 
   const patientById = new Map<string, { full_name?: string | null; patient_number?: string | null }>()
   for (const p of (patients || []) as PatientLite[]) {
@@ -124,21 +102,6 @@ interface CompanyLite {
       full_name: p.full_name ?? null,
       patient_number: p.patient_number ?? null,
     })
-  }
-
-  const doctorIdByVisitId = new Map<string, string>()
-  for (const rx of (prescriptions || []) as PrescriptionLite[]) {
-    const vId = rx.visit_id ?? null
-    const dId = rx.doctor_id ?? null
-    if (!vId || !dId) continue
-    if (!doctorIdByVisitId.has(vId)) {
-      doctorIdByVisitId.set(vId, dId)
-    }
-  }
-
-  const doctorNameById = new Map<string, string | null>()
-  for (const doc of (doctorProfiles || []) as DoctorProfileLite[]) {
-    doctorNameById.set(doc.id, doc.full_name ?? null)
   }
 
   const companyNameById = new Map<string, string | null>()
@@ -149,9 +112,10 @@ interface CompanyLite {
   const headers = [
     "Date",
     "Company",
-    "StaffName",
-    "StaffNumber",
-    "DoctorName",
+    "BeneficiaryName",
+    "PatientNumber",
+    "Relationship",
+    "PrincipalEmployee",
     "VisitId",
     "InvoiceNumber",
     "TotalAmount",
@@ -174,9 +138,8 @@ interface CompanyLite {
 
   for (const inv of filteredInvoices) {
     const patient = inv.patient_id ? patientById.get(inv.patient_id) : null
-    const visitDoctorId = inv.visit_id ? doctorIdByVisitId.get(inv.visit_id) : null
-    const doctorName = visitDoctorId ? doctorNameById.get(visitDoctorId) : null
     const companyName = inv.company_id ? companyNameById.get(inv.company_id) : inv.companies?.name || null
+    const coverage = inv.patient_id ? coverageMap.get(inv.patient_id) : null
 
     const total = Number(inv.total_amount ?? 0)
     const paid = Number(inv.paid_amount ?? 0)
@@ -187,7 +150,8 @@ interface CompanyLite {
       JSON.stringify(companyName ?? ""),
       JSON.stringify(patient?.full_name ?? ""),
       JSON.stringify(patient?.patient_number ?? ""),
-      JSON.stringify(doctorName ?? ""),
+      JSON.stringify(coverage?.relationshipLabel ?? "Unlinked"),
+      JSON.stringify(coverage?.principalEmployeeName ?? ""),
       inv.visit_id ?? "",
       inv.invoice_number ?? "",
       String(total),

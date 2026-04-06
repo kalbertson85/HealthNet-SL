@@ -8,6 +8,7 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { redirect } from "next/navigation"
 import { startPageRenderTimer } from "@/lib/observability/page-performance"
+import { findAdmissionIdByVisitId } from "@/lib/visit-flow"
 
 interface VisitRow {
   id: string
@@ -23,6 +24,7 @@ interface VisitRow {
     name?: string | null
     code?: string | null
   } | null
+  linkedAdmissionId?: string | null
 }
 
 interface NursingNoteRow {
@@ -55,7 +57,7 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
        patients(id, full_name, patient_number),
        facilities(name, code)`
     )
-    .in("visit_status", ["doctor_pending", "doctor_review", "lab_pending", "billing_pending"])
+    .in("visit_status", ["doctor_pending", "doctor_review", "lab_pending", "billing_pending", "admitted"])
     .order("created_at", { ascending: false })
     .limit(MAX_ACTIVE_VISITS)
 
@@ -96,8 +98,15 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
             code: facility.code,
           }
         : null,
+      linkedAdmissionId: null,
     }
   })
+    await Promise.all(
+      visits.map(async (visit) => {
+        if (visit.visit_status !== "admitted") return
+        visit.linkedAdmissionId = await findAdmissionIdByVisitId(supabase, visit.id)
+      }),
+    )
     const visitsTruncated = (visitsData?.length || 0) >= MAX_ACTIVE_VISITS
     const visitIds = visits.map((v) => v.id)
 
@@ -252,7 +261,10 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
             </div>
           ) : null}
           {visits.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No active visits found.</p>
+            <p className="text-sm text-muted-foreground">
+              No active visits are available for nursing documentation right now. Check inpatient admissions or wait for
+              the next visit handoff before recording notes here.
+            </p>
           ) : (
             visits.map((visit, index) => {
               const notes = notesByVisitId.get(visit.id) || []
@@ -267,6 +279,26 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
                       </p>
                     </div>
                     <Badge variant="outline">{visit.visit_status}</Badge>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {visit.linkedAdmissionId ? (
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/dashboard/inpatient/${visit.linkedAdmissionId}`}>Open admission</Link>
+                      </Button>
+                    ) : null}
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/dashboard/records/visit/${visit.id}`}>Open visit handoff</Link>
+                    </Button>
+                    {visit.patients?.id ? (
+                      <Button asChild variant="outline" size="sm">
+                        <Link
+                          href={`/dashboard/appointments/new?patient_id=${visit.patients.id}&source=nursing&reason=${encodeURIComponent("Nursing follow-up")}&visit_id=${visit.id}`}
+                        >
+                          Book follow-up
+                        </Link>
+                      </Button>
+                    ) : null}
                   </div>
 
                   {notes.length > 0 && (

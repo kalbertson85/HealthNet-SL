@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { redirect } from "next/navigation"
+import { ensureQueueEntryForVisit } from "@/lib/visit-flow"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 
 interface PatientSummary {
   id: string
@@ -293,6 +295,15 @@ export default async function TriagePage(props: {
       console.error("[triage] Error inserting triage audit log:", auditError.message || auditError)
     }
 
+    const queuePriority = priority === "emergency" ? "emergency" : priority === "urgent" ? "urgent" : "normal"
+    await ensureQueueEntryForVisit(supabase, {
+      patientId,
+      visitId,
+      department: "opd",
+      priority: queuePriority,
+      notes: `Triage priority: ${priority}`,
+    })
+
     redirect("/dashboard/triage")
   }
 
@@ -480,6 +491,12 @@ export default async function TriagePage(props: {
           )}
         </CardContent>
       </Card>
+
+      <PatientWorkflowPanel
+        currentStage="triage"
+        title="Triage workflow"
+        description="Triage should link the active visit to the OPD queue so the doctor worklist can pick patients up in the correct order."
+      />
     </div>
   )
 }

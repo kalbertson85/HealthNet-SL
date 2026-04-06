@@ -1,13 +1,9 @@
 import { createServerClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
+import { LabTestCreateForm } from "@/components/lab-test-create-form"
 
 export default async function NewLabTestPage(props: { searchParams: Promise<{ patient_id?: string }> }) {
   const supabase = await createServerClient()
@@ -84,87 +80,7 @@ export default async function NewLabTestPage(props: { searchParams: Promise<{ pa
         </div>
       </div>
 
-      <form action={createLabTest}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Test Details</CardTitle>
-            <CardDescription>Select patient and test information</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <Label>Patient *</Label>
-              <Select name="patient_id" defaultValue={searchPatientId} required>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select patient" />
-                </SelectTrigger>
-                <SelectContent>
-                  {patients?.map((patient) => (
-                    <SelectItem key={patient.id} value={patient.id}>
-                      {patient.full_name} ({patient.patient_number})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Test Category *</Label>
-                <Select name="test_category" required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Hematology">Hematology</SelectItem>
-                    <SelectItem value="Clinical Chemistry">Clinical Chemistry</SelectItem>
-                    <SelectItem value="Microbiology">Microbiology</SelectItem>
-                    <SelectItem value="Immunology">Immunology</SelectItem>
-                    <SelectItem value="Urinalysis">Urinalysis</SelectItem>
-                    <SelectItem value="Parasitology">Parasitology</SelectItem>
-                    <SelectItem value="Blood Bank">Blood Bank</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="test_type">Test Type *</Label>
-                <Input id="test_type" name="test_type" placeholder="e.g., Complete Blood Count" required />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Priority *</Label>
-                <Select name="priority" defaultValue="routine" required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select priority" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="routine">Routine</SelectItem>
-                    <SelectItem value="urgent">Urgent</SelectItem>
-                    <SelectItem value="stat">STAT</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="notes">Clinical Notes</Label>
-              <Textarea
-                id="notes"
-                name="notes"
-                placeholder="Clinical indication or additional information..."
-                rows={3}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="mt-6 flex justify-end gap-4">
-          <Button type="button" variant="outline" asChild>
-            <Link href="/dashboard/lab">Cancel</Link>
-          </Button>
-          <Button type="submit">Order Test</Button>
-        </div>
-      </form>
+      <LabTestCreateForm patients={patients || []} defaultPatientId={searchPatientId || ""} action={createLabTest} />
     </div>
   )
 }

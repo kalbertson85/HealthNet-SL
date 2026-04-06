@@ -16,14 +16,31 @@ export async function GET(request: NextRequest) {
 
   try {
     const { supabase } = await requirePermission(request, "admin.export")
+    const { searchParams } = new URL(request.url)
+    const searchQuery = (searchParams.get("search") || "").trim()
+    const statusFilter = (searchParams.get("status") || "").trim().toLowerCase()
+    const genderFilter = (searchParams.get("gender") || "").trim().toLowerCase()
 
-    const { data: fetchedPatients, error } = await supabase
+    let query = supabase
       .from("patients")
       .select(
-        "national_id, patient_number, first_name, last_name, date_of_birth, gender, phone, email, address, blood_group, allergies, medical_history, emergency_contact_name, emergency_contact_phone, next_of_kin, status, created_at",
+        "national_id, patient_number, first_name, last_name, full_name, date_of_birth, gender, phone, phone_number, email, address, blood_group, allergies, medical_history, emergency_contact_name, emergency_contact_phone, next_of_kin, status, created_at",
       )
       .order("created_at", { ascending: false })
-      .limit(EXPORT_ROW_LIMIT + 1)
+
+    if (searchQuery) {
+      query = query.or(
+        `patient_number.ilike.%${searchQuery}%,full_name.ilike.%${searchQuery}%,phone_number.ilike.%${searchQuery}%`,
+      )
+    }
+    if (statusFilter && statusFilter !== "all") {
+      query = query.eq("status", statusFilter)
+    }
+    if (genderFilter && genderFilter !== "all") {
+      query = query.eq("gender", genderFilter)
+    }
+
+    const { data: fetchedPatients, error } = await query.limit(EXPORT_ROW_LIMIT + 1)
 
     if (error) {
       return new NextResponse("Error fetching data", { status: 500 })
@@ -59,11 +76,11 @@ export async function GET(request: NextRequest) {
       const row = [
         patient.national_id || "",
         patient.patient_number,
-        patient.first_name,
-        patient.last_name,
+        patient.first_name || patient.full_name || "",
+        patient.last_name || "",
         patient.date_of_birth,
         patient.gender,
-        patient.phone,
+        patient.phone || patient.phone_number || "",
         patient.email || "",
         `"${patient.address || ""}"`,
         patient.blood_group || "",

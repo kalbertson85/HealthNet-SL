@@ -1,11 +1,9 @@
 import { createServerClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
+import { PharmacyMedicationForm } from "@/components/pharmacy-medication-form"
 
 export default async function NewMedicationPage() {
   async function createMedicationWithStock(formData: FormData) {
@@ -99,100 +97,7 @@ export default async function NewMedicationPage() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Medication details</CardTitle>
-          <CardDescription>Basic details used across prescriptions, dispensing, and stock tracking.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form action={createMedicationWithStock} className="space-y-8">
-            <div className="grid gap-6 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="name">Medication name *</Label>
-                <Input id="name" name="name" placeholder="e.g. Paracetamol" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="dosage_form">Dosage form *</Label>
-                <Input id="dosage_form" name="dosage_form" placeholder="e.g. tablet, syrup, injection" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="strength">Strength *</Label>
-                <Input id="strength" name="strength" placeholder="e.g. 500mg, 5mg/5ml" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="unit">Unit *</Label>
-                <Input id="unit" name="unit" placeholder="e.g. tablet, ml" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="category">Category *</Label>
-                <Input id="category" name="category" placeholder="e.g. Analgesic, Antibiotic" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="form">Brand / additional form (optional)</Label>
-                <Input id="form" name="form" placeholder="Optional: branded form description" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="unit_price">Unit price *</Label>
-                <Input
-                  id="unit_price"
-                  name="unit_price"
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  placeholder="e.g. 200"
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <h2 className="text-base font-semibold">Stock details</h2>
-              </div>
-              <div className="grid gap-6 md:grid-cols-4">
-                <div className="space-y-2">
-                  <Label htmlFor="location">Location</Label>
-                  <Input id="location" name="location" defaultValue="Main Pharmacy" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="quantity_on_hand">Quantity on hand *</Label>
-                  <Input
-                    id="quantity_on_hand"
-                    name="quantity_on_hand"
-                    type="number"
-                    min={0}
-                    step={1}
-                    defaultValue={0}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="reorder_level">Reorder level</Label>
-                  <Input
-                    id="reorder_level"
-                    name="reorder_level"
-                    type="number"
-                    min={0}
-                    step={1}
-                    defaultValue={0}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="expiry_date">Expiry date</Label>
-                  <Input id="expiry_date" name="expiry_date" type="date" />
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3">
-              <Button type="button" variant="outline" asChild>
-                <Link href="/dashboard/pharmacy">Cancel</Link>
-              </Button>
-              <Button type="submit">Save medication and stock</Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+      <PharmacyMedicationForm action={createMedicationWithStock} />
     </div>
   )
 }

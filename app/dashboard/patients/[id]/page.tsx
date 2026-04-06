@@ -7,6 +7,30 @@ import { Edit, FileText, Calendar, Pill, ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { PatientPhotoCapture } from "@/components/PatientPhotoCapture"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
+import { ensureActiveVisitForPatient, ensureQueueEntryForVisit } from "@/lib/visit-flow"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { buildFollowUpAppointmentHref } from "@/lib/patient-flow"
+
+interface PatientDetailRecord {
+  id: string
+  full_name: string | null
+  patient_number: string | null
+  photo_url?: string | null
+  company_id?: string | null
+  free_health_category?: string | null
+  national_id?: string | null
+  gender?: string | null
+  date_of_birth?: string | null
+  blood_group?: string | null
+  phone_number?: string | null
+  email?: string | null
+  address?: string | null
+  emergency_contact_name?: string | null
+  emergency_contact_phone?: string | null
+  next_of_kin?: unknown
+  allergies?: string | null
+  medical_history?: string | null
+}
 
 export default async function PatientDetailPage({
   params,
@@ -15,17 +39,36 @@ export default async function PatientDetailPage({
 }) {
   const supabase = await createServerClient()
   const { id } = await params
+  const patientBaseSelect =
+    "id, full_name, patient_number, company_id, free_health_category, national_id, gender, date_of_birth, blood_group, phone_number, email, address, emergency_contact_name, emergency_contact_phone, next_of_kin, allergies, medical_history"
 
-  const { data: patient, error } = await supabase
+  let patient: PatientDetailRecord | null = null
+  let photoFeatureAvailable = true
+
+  const { data: patientWithPhoto, error } = await supabase
     .from("patients")
-    .select(
-      "id, full_name, patient_number, photo_url, company_id, free_health_category, national_id, gender, date_of_birth, blood_group, phone_number, email, address, emergency_contact_name, emergency_contact_phone, next_of_kin, allergies, medical_history",
-    )
+    .select(`${patientBaseSelect}, photo_url`)
     .eq("id", id)
     .maybeSingle()
 
-  if (error) {
-    console.error("[v0] Error loading patient detail:", error.message || error)
+  if (error?.message?.includes("patients.photo_url")) {
+    photoFeatureAvailable = false
+    const { data: patientWithoutPhoto, error: fallbackError } = await supabase
+      .from("patients")
+      .select(patientBaseSelect)
+      .eq("id", id)
+      .maybeSingle()
+
+    if (fallbackError) {
+      console.error("[v0] Error loading patient detail:", fallbackError.message || fallbackError)
+    } else {
+      patient = patientWithoutPhoto ? ({ ...patientWithoutPhoto, photo_url: null } as PatientDetailRecord) : null
+    }
+  } else {
+    if (error) {
+      console.error("[v0] Error loading patient detail:", error.message || error)
+    }
+    patient = patientWithPhoto as PatientDetailRecord | null
   }
 
   if (!patient) {
@@ -40,6 +83,15 @@ export default async function PatientDetailPage({
     supabase.from("prescriptions").select("id", { count: "exact", head: true }).eq("patient_id", id),
     supabase.from("lab_tests").select("id", { count: "exact", head: true }).eq("patient_id", id),
   ])
+
+  const { data: activeVisit } = await supabase
+    .from("visits")
+    .select("id, visit_status")
+    .eq("patient_id", id)
+    .in("visit_status", ["triage_pending", "doctor_pending", "doctor_review", "lab_pending", "billing_pending", "pharmacy_pending", "admitted"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
   const age = patientRecord.date_of_birth
     ? Math.floor((new Date().getTime() - new Date(patientRecord.date_of_birth).getTime()) / 31557600000)
@@ -62,51 +114,21 @@ export default async function PatientDetailPage({
     const patientId = patientRecord.id as string
 
     try {
-      // Avoid creating multiple visits for the same patient on the same day
-      const startOfDay = new Date()
-      startOfDay.setHours(0, 0, 0, 0)
-
-      const { data: existingVisit } = await supabase
-        .from("visits")
-        .select("id")
-        .eq("patient_id", patientId)
-        .gte("created_at", startOfDay.toISOString())
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle()
-
-      if (!existingVisit) {
-        const companyAwarePatient = patientRecord as { company_id?: string | null; free_health_category?: string | null }
-
-        const freeHealthCategory = (companyAwarePatient.free_health_category as string | null) ?? "none"
-        const isFreeHealthCare = freeHealthCategory !== "none"
-
-        const hasCompany = (companyAwarePatient.company_id as string | null) ?? null
-        const payerCategory = isFreeHealthCare ? "fhc" : hasCompany ? "company" : "self_pay"
-
-        const { data: opdFacility } = await supabase
-          .from("facilities")
-          .select("id, code")
-          .eq("code", "opd")
-          .maybeSingle()
-
-        const facilityId = (opdFacility?.id as string | null) ?? null
-
-        await supabase.from("visits").insert({
-          patient_id: patientId,
-          visit_status: "doctor_pending",
-          assigned_company_id: hasCompany,
-          is_free_health_care: isFreeHealthCare,
-          payer_category: payerCategory,
-          facility_id: facilityId,
+      const visitId = await ensureActiveVisitForPatient(supabase, patientId, { facilityCode: "opd" })
+      if (visitId) {
+        await ensureQueueEntryForVisit(supabase, {
+          patientId,
+          visitId,
+          department: "opd",
+          priority: "normal",
+          notes: "Started from patient profile",
         })
       }
     } catch (error) {
       console.error("[v0] Error starting visit for patient:", error)
     }
 
-    // After starting/ensuring a visit, send the user to the doctor queue
-    redirect("/dashboard/doctor")
+    redirect("/dashboard/triage")
   }
 
   return (
@@ -120,7 +142,14 @@ export default async function PatientDetailPage({
             </Link>
           </Button>
           <div className="flex items-center gap-4">
-            <PatientPhotoCapture patientId={patientRecord.id} initialPhotoUrl={patientRecord.photo_url} />
+            <PatientPhotoCapture
+              patientId={patientRecord.id}
+              initialPhotoUrl={patientRecord.photo_url}
+              disabled={!photoFeatureAvailable}
+              disabledMessage={
+                !photoFeatureAvailable ? "Patient photo uploads are disabled until the photo_url column is added." : undefined
+              }
+            />
             <div>
               <h1 className="text-balance text-3xl font-bold tracking-tight">{patientRecord.full_name}</h1>
               <p className="text-pretty text-muted-foreground">Patient Number: {patientRecord.patient_number}</p>
@@ -271,6 +300,13 @@ export default async function PatientDetailPage({
         </Card>
       </div>
 
+      <PatientWorkflowPanel
+        currentStage="registration"
+        patientId={patientRecord.id}
+        title="Registration workflow"
+        description="Registration is complete when the chart, insurance, and contact details are accurate. The next operational step is triage and queue placement."
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Quick Actions</CardTitle>
@@ -279,22 +315,36 @@ export default async function PatientDetailPage({
         <CardContent className="flex flex-wrap gap-2">
           <form action={startVisit}>
             <Button type="submit" variant="default">
-              Start Visit (Doctor Queue)
+              Start visit and send to triage
             </Button>
           </form>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/appointments/new?patient_id=${patientRecord.id}`}>Book Appointment</Link>
+            <Link
+              href={buildFollowUpAppointmentHref({
+                patientId: patientRecord.id,
+                source: "follow_up",
+                reason: "Planned review",
+              })}
+            >
+              Schedule follow-up
+            </Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/prescriptions/new?patient_id=${patientRecord.id}`}>
+            <Link
+              href={`/dashboard/prescriptions/new?patient_id=${patientRecord.id}${activeVisit?.id ? `&visit_id=${activeVisit.id}` : ""}`}
+            >
               Create Prescription
             </Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/lab/new?patient_id=${patientRecord.id}`}>Order Lab Test</Link>
+            <Link href={`/dashboard/lab/new?patient_id=${patientRecord.id}${activeVisit?.id ? `&visit_id=${activeVisit.id}` : ""}`}>
+              Order Lab Test
+            </Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href={`/dashboard/billing/new?patient_id=${patientRecord.id}`}>Create Invoice</Link>
+            <Link href={activeVisit?.id ? `/dashboard/billing/visit/${activeVisit.id}` : `/dashboard/billing/new?patient_id=${patientRecord.id}`}>
+              {activeVisit?.id ? "Open active visit billing" : "Create invoice"}
+            </Link>
           </Button>
         </CardContent>
       </Card>

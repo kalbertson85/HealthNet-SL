@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableCard } from "@/components/table-card"
 
+const SURGERY_LIST_LIMIT = 50
+
 interface SurgeryRow {
   id: string
   procedure_name: string
@@ -51,7 +53,7 @@ export default async function SurgeryPage() {
     )
     .order("scheduled_at", { ascending: false })
     .order("created_at", { ascending: false })
-    .limit(50)
+    .limit(SURGERY_LIST_LIMIT)
 
   const rows = (data || []) as SurgeryRow[]
 
@@ -70,6 +72,12 @@ export default async function SurgeryPage() {
           <CardDescription>Procedures recorded in the system, with Free Health Care and facility context.</CardDescription>
         </CardHeader>
         <CardContent>
+          {(data?.length || 0) >= SURGERY_LIST_LIMIT ? (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Showing the latest {SURGERY_LIST_LIMIT} surgeries. Use the related inpatient or patient workflows when you
+              need older surgical history.
+            </div>
+          ) : null}
           <TableCard title="Surgeries" description="Recent surgical procedures.">
             <Table>
               <TableHeader>
@@ -87,7 +95,8 @@ export default async function SurgeryPage() {
                 {rows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
-                      No surgeries recorded.
+                      No surgeries are recorded in this view. Use the inpatient workflow to schedule the next procedure
+                      or open a patient admission to review surgical history.
                     </TableCell>
                   </TableRow>
                 ) : (

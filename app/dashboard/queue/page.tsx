@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { ReportFilterSummary } from "@/components/report-filter-summary"
 
 const ACTIVE_QUEUE_LIMIT = 300
 
@@ -218,6 +219,8 @@ export default async function QueuePage(props: {
         </div>
       )}
 
+      <ReportFilterSummary items={[{ label: "Queue status", value: hasActiveStatusFilter ? statusFilter : null }]} />
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {queuesByDept.map((dept) => (
           <Card key={dept.id}>
@@ -257,7 +260,7 @@ export default async function QueuePage(props: {
                 href={`/dashboard/queue/${dept.id}`}
                 className="mt-2 inline-flex w-full items-center justify-center rounded-md border px-3 py-2 text-sm hover:bg-accent"
               >
-                View Queue
+                Open department queue
               </Link>
             </CardContent>
           </Card>
@@ -370,7 +373,7 @@ export default async function QueuePage(props: {
               )})
             ) : (
               <div className="text-center py-8 text-muted-foreground">
-                No patients in queue.
+                {hasActiveStatusFilter ? "No queue items match the selected filter." : "No active queue items found."}
                 {hasActiveStatusFilter ? (
                   <>
                     {" "}

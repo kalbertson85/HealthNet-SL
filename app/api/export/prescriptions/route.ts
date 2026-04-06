@@ -5,6 +5,23 @@ import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 
 const EXPORT_ROW_LIMIT = 5_000
 
+interface PrescriptionExportRow {
+  prescription_number: string
+  medications: unknown
+  status: string
+  dispensed_at: string | null
+  created_at: string
+  patient?: {
+    patient_number?: string | null
+    first_name?: string | null
+    last_name?: string | null
+  } | null
+  doctor?: {
+    first_name?: string | null
+    last_name?: string | null
+  } | null
+}
+
 export async function GET(request: NextRequest) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "api_export_prescriptions",
@@ -15,6 +32,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const { supabase } = await requirePermission(request, "admin.export")
+    const { searchParams } = new URL(request.url)
+    const query = (searchParams.get("q") || "").trim().toLowerCase()
+    const statusFilter = (searchParams.get("status") || "").trim().toLowerCase()
 
     const { data: fetchedPrescriptions, error } = await supabase
       .from("prescriptions")
@@ -34,8 +54,30 @@ export async function GET(request: NextRequest) {
       return new NextResponse("Error fetching data", { status: 500 })
     }
 
-    const isTruncated = (fetchedPrescriptions || []).length > EXPORT_ROW_LIMIT
-    const prescriptions = (fetchedPrescriptions || []).slice(0, EXPORT_ROW_LIMIT)
+    const filteredRows = ((fetchedPrescriptions || []) as PrescriptionExportRow[]).filter((rx) => {
+      if (statusFilter && statusFilter !== "all" && (rx.status || "").toLowerCase() !== statusFilter) {
+        return false
+      }
+      if (!query) return true
+
+      const haystack = [
+        rx.prescription_number,
+        rx.status,
+        rx.patient?.patient_number,
+        rx.patient?.first_name,
+        rx.patient?.last_name,
+        rx.doctor?.first_name,
+        rx.doctor?.last_name,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+
+      return haystack.includes(query)
+    })
+
+    const isTruncated = filteredRows.length > EXPORT_ROW_LIMIT
+    const prescriptions = filteredRows.slice(0, EXPORT_ROW_LIMIT)
 
     const headers = [
       "Prescription Number",

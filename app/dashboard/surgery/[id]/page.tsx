@@ -1,13 +1,17 @@
 import { createServerClient } from "@/lib/supabase/server"
-import { notFound } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { findAdmissionIdByVisitId } from "@/lib/visit-flow"
 
 interface SurgeryDetail {
   id: string
+  patient_id: string | null
+  visit_id: string | null
   procedure_name: string
   procedure_type: string | null
   status: string
@@ -31,6 +35,49 @@ export default async function SurgeryDetailPage(props: { params: Promise<{ id: s
   const { id } = await props.params
   const supabase = await createServerClient()
 
+  async function updateSurgeryStatus(formData: FormData) {
+    "use server"
+
+    const supabase = await createServerClient()
+    const nextStatus = ((formData.get("next_status") as string | null) || "").trim()
+    const surgeryId = ((formData.get("surgery_id") as string | null) || "").trim()
+    const visitId = ((formData.get("visit_id") as string | null) || "").trim() || null
+    const patientId = ((formData.get("patient_id") as string | null) || "").trim() || null
+
+    if (!surgeryId || !nextStatus) {
+      redirect("/dashboard/surgery")
+    }
+
+    const now = new Date().toISOString()
+    const updatePayload: Record<string, unknown> = { status: nextStatus }
+
+    if (nextStatus === "in_progress") {
+      updatePayload.started_at = now
+    } else if (nextStatus === "completed") {
+      updatePayload.started_at = updatePayload.started_at || now
+      updatePayload.ended_at = now
+    }
+
+    const { error } = await supabase.from("surgeries").update(updatePayload).eq("id", surgeryId)
+    if (error) {
+      console.error("[surgery] Error updating surgery status:", error.message || error)
+    }
+
+    if (nextStatus === "completed" && visitId) {
+      const admissionId = await findAdmissionIdByVisitId(supabase, visitId)
+      if (admissionId) {
+        redirect(`/dashboard/inpatient/${admissionId}`)
+      }
+      if (patientId) {
+        redirect(
+          `/dashboard/appointments/new?patient_id=${patientId}&source=surgery&reason=${encodeURIComponent("Post-surgery follow-up")}&visit_id=${visitId}`,
+        )
+      }
+    }
+
+    redirect(`/dashboard/surgery/${surgeryId}`)
+  }
+
   const { data } = await supabase
     .from("surgeries")
     .select(
@@ -50,6 +97,9 @@ export default async function SurgeryDetailPage(props: { params: Promise<{ id: s
   }
 
   const surgery = data as SurgeryDetail
+  const admissionId = surgery.visit_id ? await findAdmissionIdByVisitId(supabase, surgery.visit_id) : null
+  const canStart = surgery.status !== "completed" && !surgery.started_at
+  const canComplete = surgery.status !== "completed"
 
   return (
     <div className="space-y-6">
@@ -97,6 +147,26 @@ export default async function SurgeryDetailPage(props: { params: Promise<{ id: s
               Ended: {new Date(surgery.ended_at).toLocaleString()}
             </span>
           )}
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            {canStart ? (
+              <form action={updateSurgeryStatus}>
+                <input type="hidden" name="surgery_id" value={surgery.id} />
+                <input type="hidden" name="visit_id" value={surgery.visit_id || ""} />
+                <input type="hidden" name="patient_id" value={surgery.patient_id || ""} />
+                <input type="hidden" name="next_status" value="in_progress" />
+                <Button type="submit" size="sm">Start surgery</Button>
+              </form>
+            ) : null}
+            {canComplete ? (
+              <form action={updateSurgeryStatus}>
+                <input type="hidden" name="surgery_id" value={surgery.id} />
+                <input type="hidden" name="visit_id" value={surgery.visit_id || ""} />
+                <input type="hidden" name="patient_id" value={surgery.patient_id || ""} />
+                <input type="hidden" name="next_status" value="completed" />
+                <Button type="submit" size="sm" variant="outline">Complete surgery</Button>
+              </form>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -178,6 +248,48 @@ export default async function SurgeryDetailPage(props: { params: Promise<{ id: s
           </p>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Next care handoff</CardTitle>
+          <CardDescription>
+            Surgery should feed back into inpatient recovery, nursing observation, discharge, and follow-up instead of ending here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          {admissionId ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/dashboard/inpatient/${admissionId}`}>Open linked admission</Link>
+            </Button>
+          ) : null}
+          {surgery.visit_id ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/dashboard/records/visit/${surgery.visit_id}`}>Open visit handoff</Link>
+            </Button>
+          ) : null}
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/nursing">Open nursing workspace</Link>
+          </Button>
+          {surgery.patient_id ? (
+            <Button asChild variant="outline" size="sm">
+              <Link
+                href={`/dashboard/appointments/new?patient_id=${surgery.patient_id}&source=surgery&reason=${encodeURIComponent("Post-surgery follow-up")}&visit_id=${surgery.visit_id || ""}`}
+              >
+                Book follow-up
+              </Link>
+            </Button>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <PatientWorkflowPanel
+        currentStage="extended-care"
+        patientId={surgery.patient_id}
+        visitId={surgery.visit_id}
+        admissionId={admissionId}
+        title="Extended care workflow"
+        description="Surgery belongs inside the same admission and visit journey. After theatre, move the patient through inpatient recovery, nursing observation, discharge, and follow-up."
+      />
     </div>
   )
 }

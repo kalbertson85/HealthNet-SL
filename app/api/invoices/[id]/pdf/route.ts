@@ -1,12 +1,252 @@
-
 import { NextResponse, type NextRequest } from "next/server"
+import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from "pdf-lib"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
 import { enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
-import { PDFDocument, StandardFonts } from "pdf-lib"
+import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
 
-function truncate(value: string, max: number): string {
-  return value.length > max ? value.slice(0, max - 1) + "…" : value
+const PAGE_MARGIN = 40
+const SECTION_GAP = 18
+const LINE_GAP = 6
+const FONT_SIZE_BODY = 10
+const FONT_SIZE_SMALL = 9
+const FONT_SIZE_HEADING = 18
+const FONT_SIZE_LABEL = 9
+const BRAND_BLUE = rgb(0.1, 0.31, 0.69)
+const TEXT_COLOR = rgb(0.15, 0.17, 0.2)
+const MUTED_TEXT = rgb(0.4, 0.45, 0.52)
+const BORDER_COLOR = rgb(0.84, 0.87, 0.91)
+const LIGHT_FILL = rgb(0.96, 0.97, 0.99)
+
+type LineItem = {
+  description?: string | null
+  quantity?: number | null
+  unit_price?: number | null
+}
+
+type InvoiceRecord = {
+  id: string
+  invoice_number?: string | null
+  patient_id?: string | null
+  subtotal?: number | null
+  tax?: number | null
+  total?: number | null
+  total_amount?: number | null
+  paid_amount?: number | null
+  paid_status?: string | null
+  status?: string | null
+  created_at?: string | null
+  line_items?: LineItem[] | null
+  visit_id?: string | null
+  payer_type?: string | null
+  company_id?: string | null
+  created_by?: string | null
+  notes?: string | null
+  visits?: {
+    id?: string | null
+    diagnosis?: string | null
+    assigned_company_id?: string | null
+    patients?: {
+      full_name?: string | null
+      patient_number?: string | null
+      insurance_type?: string | null
+      insurance_card_number?: string | null
+      insurance_expiry_date?: string | null
+      insurance_mobile?: string | null
+    } | null
+  } | null
+}
+
+type CompanyRecord = {
+  name?: string | null
+  address?: string | null
+  contact_person?: string | null
+  phone?: string | null
+  email?: string | null
+  terms?: string | null
+  invoice_footer_text?: string | null
+} | null
+
+type HospitalSettings = {
+  hospital_name?: string | null
+  billing_logo_url?: string | null
+  address?: string | null
+  phone?: string | null
+  email?: string | null
+} | null
+
+type PageState = {
+  page: PDFPage
+  y: number
+}
+
+function formatCurrency(value: number): string {
+  return `Le ${new Intl.NumberFormat("en-SL", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value)}`
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) return ""
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ""
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date)
+}
+
+function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
+  if (!text.trim()) return []
+  const words = text.split(/\s+/)
+  const lines: string[] = []
+  let current = ""
+
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+      current = candidate
+      continue
+    }
+
+    if (current) {
+      lines.push(current)
+      current = word
+      continue
+    }
+
+    let chunk = ""
+    for (const char of word) {
+      const next = chunk + char
+      if (font.widthOfTextAtSize(next, size) <= maxWidth) {
+        chunk = next
+      } else {
+        if (chunk) lines.push(chunk)
+        chunk = char
+      }
+    }
+    current = chunk
+  }
+
+  if (current) lines.push(current)
+  return lines
+}
+
+function addPage(pdfDoc: PDFDocument): PageState {
+  const page = pdfDoc.addPage()
+  return { page, y: page.getSize().height - PAGE_MARGIN }
+}
+
+function ensureSpace(pdfDoc: PDFDocument, state: PageState, neededHeight: number): PageState {
+  if (state.y - neededHeight >= PAGE_MARGIN) return state
+  return addPage(pdfDoc)
+}
+
+function drawTextLine(
+  page: PDFPage,
+  text: string,
+  x: number,
+  y: number,
+  font: PDFFont,
+  size: number,
+  color = TEXT_COLOR,
+) {
+  page.drawText(text, { x, y, font, size, color })
+}
+
+function drawWrappedBlock(
+  page: PDFPage,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  font: PDFFont,
+  size: number,
+  color = TEXT_COLOR,
+  lineHeight = size + 3,
+): number {
+  const lines = wrapText(text, font, size, width)
+  let cursor = y
+  for (const line of lines) {
+    drawTextLine(page, line, x, cursor, font, size, color)
+    cursor -= lineHeight
+  }
+  return cursor
+}
+
+function drawInfoBox(
+  page: PDFPage,
+  x: number,
+  y: number,
+  width: number,
+  title: string,
+  rows: Array<{ label: string; value: string }>,
+  fonts: { regular: PDFFont; bold: PDFFont },
+): number {
+  const titleHeight = 16
+  const rowHeight = 15
+  const height = 14 + titleHeight + rows.length * rowHeight
+
+  page.drawRectangle({
+    x,
+    y: y - height,
+    width,
+    height,
+    borderColor: BORDER_COLOR,
+    borderWidth: 1,
+    color: rgb(1, 1, 1),
+  })
+  page.drawRectangle({
+    x,
+    y: y - titleHeight - 6,
+    width,
+    height: titleHeight + 6,
+    color: LIGHT_FILL,
+  })
+
+  drawTextLine(page, title, x + 12, y - 16, fonts.bold, FONT_SIZE_BODY)
+
+  let cursor = y - 34
+  for (const row of rows) {
+    drawTextLine(page, row.label, x + 12, cursor, fonts.bold, FONT_SIZE_LABEL, MUTED_TEXT)
+    drawTextLine(page, row.value || "-", x + width * 0.38, cursor, fonts.regular, FONT_SIZE_BODY)
+    cursor -= rowHeight
+  }
+
+  return y - height
+}
+
+function drawSectionTitle(page: PDFPage, title: string, x: number, y: number, bold: PDFFont): number {
+  drawTextLine(page, title, x, y, bold, 12)
+  page.drawLine({
+    start: { x, y: y - 4 },
+    end: { x: x + 120, y: y - 4 },
+    color: BORDER_COLOR,
+    thickness: 1,
+  })
+  return y - 18
+}
+
+function drawKeyValueLines(
+  page: PDFPage,
+  rows: Array<{ label: string; value: string }>,
+  x: number,
+  y: number,
+  width: number,
+  fonts: { regular: PDFFont; bold: PDFFont },
+): number {
+  let cursor = y
+  const labelWidth = 82
+  for (const row of rows) {
+    drawTextLine(page, row.label, x, cursor, fonts.bold, FONT_SIZE_LABEL, MUTED_TEXT)
+    const nextY = drawWrappedBlock(page, row.value || "-", x + labelWidth, cursor, width - labelWidth, fonts.regular, FONT_SIZE_BODY)
+    cursor = nextY - LINE_GAP
+  }
+  return cursor
 }
 
 export async function GET(
@@ -24,397 +264,317 @@ export async function GET(
     const { supabase } = await requirePermission(request, "billing.manage")
     const { id } = await params
 
-  const { data: invoice, error } = await supabase
-    .from("invoices")
-    .select(
-      `id, invoice_number, subtotal, tax, total, total_amount, paid_amount, paid_status, status, created_at, line_items, visit_id, payer_type, company_id, created_by, notes,
-       visits (
-         id,
-         diagnosis,
-         assigned_company_id,
-         patients (full_name, patient_number, insurance_type, insurance_card_number, insurance_expiry_date, insurance_mobile)
-       )`,
-    )
-    .eq("id", id)
-    .maybeSingle()
+    const { data: invoice, error } = await supabase
+      .from("invoices")
+      .select(
+        `id, invoice_number, patient_id, subtotal, tax, total, total_amount, paid_amount, paid_status, status, created_at, line_items, visit_id, payer_type, company_id, created_by, notes,
+         visits (
+           id,
+           diagnosis,
+           assigned_company_id,
+           patients (full_name, patient_number, insurance_type, insurance_card_number, insurance_expiry_date, insurance_mobile)
+         )`,
+      )
+      .eq("id", id)
+      .maybeSingle()
 
-  if (error || !invoice) {
-    return new NextResponse("Invoice not found", { status: 404 })
-  }
+    if (error || !invoice) {
+      return new NextResponse("Invoice not found", { status: 404 })
+    }
 
-  const companyIdForInvoice = (invoice as { company_id?: string | null }).company_id ?? invoice.visits?.assigned_company_id
+    const typedInvoice = invoice as InvoiceRecord
 
-  const { data: company } = companyIdForInvoice
-    ? await supabase
-        .from("companies")
-        .select("name, address, contact_person, phone, email, terms, invoice_footer_text")
-        .eq("id", companyIdForInvoice)
-        .maybeSingle()
-    : { data: null }
+    const companyIdForInvoice = typedInvoice.company_id ?? typedInvoice.visits?.assigned_company_id ?? null
 
-  const { data: settings } = await supabase
-    .from("hospital_settings")
-    .select("hospital_name, billing_logo_url, address, phone, email")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle()
+    const { data: company } = companyIdForInvoice
+      ? await supabase
+          .from("companies")
+          .select("name, address, contact_person, phone, email, terms, invoice_footer_text")
+          .eq("id", companyIdForInvoice)
+          .maybeSingle()
+      : { data: null as CompanyRecord }
 
-  const createdAt = invoice.created_at ? new Date(invoice.created_at).toLocaleString() : ""
-  const hospitalName = settings?.hospital_name || "Hospital"
-  const hospitalAddress = settings?.address || ""
-  const hospitalPhone = settings?.phone || ""
-  const hospitalEmail = settings?.email || ""
-  const visit = invoice.visits as
-    | {
-        id?: string | null
-        diagnosis?: string | null
-        patients?: {
-          full_name?: string | null
-          patient_number?: string | null
-          insurance_type?: string | null
-          insurance_card_number?: string | null
-          insurance_expiry_date?: string | null
-          insurance_mobile?: string | null
-        } | null
+    const { data: settings } = await supabase
+      .from("hospital_settings")
+      .select("hospital_name, billing_logo_url, address, phone, email")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    const typedCompany = company as CompanyRecord
+    const typedSettings = settings as HospitalSettings
+    const payerType = (typedInvoice.payer_type || "patient").toLowerCase()
+    const coverageMap =
+      payerType === "company" && companyIdForInvoice && typedInvoice.patient_id
+        ? await fetchCompanyCoverageMap(supabase, companyIdForInvoice, [typedInvoice.patient_id])
+        : new Map()
+
+    const pdfDoc = await PDFDocument.create()
+    const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica)
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+    const state = addPage(pdfDoc)
+    let page = state.page
+    let y = state.y
+
+    const hospitalName = typedSettings?.hospital_name?.trim() || "Hospital"
+    const createdAt = formatDateTime(typedInvoice.created_at)
+    const patient = typedInvoice.visits?.patients ?? null
+    const patientName = patient?.full_name?.trim() || "Unknown patient"
+    const patientNumber = patient?.patient_number?.trim() || "Not assigned"
+    const coverage = typedInvoice.patient_id ? coverageMap.get(typedInvoice.patient_id) : null
+    const totalAmount = Number(typedInvoice.total ?? typedInvoice.total_amount ?? 0)
+    const subtotal = Number(typedInvoice.subtotal ?? typedInvoice.total_amount ?? 0)
+    const tax = Number(typedInvoice.tax ?? 0)
+    const paidAmount = Number(typedInvoice.paid_amount ?? 0)
+    const balance = Math.max(totalAmount - paidAmount, 0)
+    const invoiceStatus = ((typedInvoice.status || typedInvoice.paid_status || "pending") as string).replace(/_/g, " ")
+    const visitId = typedInvoice.visits?.id || typedInvoice.visit_id || ""
+    const visitReference = visitId ? `VIS-${visitId.replace(/-/g, "").slice(-6).toUpperCase()}` : "Not linked"
+
+    let logoHeight = 0
+    if (typedSettings?.billing_logo_url) {
+      try {
+        const res = await fetch(typedSettings.billing_logo_url)
+        if (res.ok) {
+          const bytes = await res.arrayBuffer()
+          let logoImage
+          try {
+            logoImage = await pdfDoc.embedPng(bytes)
+          } catch {
+            logoImage = await pdfDoc.embedJpg(bytes)
+          }
+          const targetWidth = 110
+          const scale = targetWidth / logoImage.width
+          logoHeight = logoImage.height * scale
+          page.drawImage(logoImage, {
+            x: PAGE_MARGIN,
+            y: y - logoHeight,
+            width: targetWidth,
+            height: logoHeight,
+          })
+        }
+      } catch (logoError) {
+        console.error("[v0] Error embedding invoice logo", logoError)
       }
-    | null
-    | undefined
-
-  const patient = visit?.patients as
-    | {
-        full_name?: string | null
-        patient_number?: string | null
-        insurance_type?: string | null
-        insurance_card_number?: string | null
-        insurance_expiry_date?: string | null
-        insurance_mobile?: string | null
-      }
-    | null
-    | undefined
-
-  const patientName = patient?.full_name || ""
-  const patientNumber = patient?.patient_number || ""
-  const patientInsuranceType = (patient?.insurance_type || "").toLowerCase()
-  const patientInsuranceId = patient?.insurance_card_number || ""
-  const patientInsuranceExpiry = patient?.insurance_expiry_date || ""
-  const patientInsuranceMobile = patient?.insurance_mobile || ""
-
-  const rawVisitId = (visit?.id as string | null) || ((invoice as { visit_id?: string | null }).visit_id || "")
-  const visitDisplayId = rawVisitId
-    ? (() => {
-        const compact = rawVisitId.replace(/-/g, "")
-        const suffix = compact.slice(-6).toUpperCase()
-        return `VIS-${suffix}`
-      })()
-    : ""
-  const visitDiagnosisRaw = (visit?.diagnosis as string | null) || ""
-
-  let insuranceValidityLabel = ""
-  if (patientInsuranceExpiry) {
-    const expiryDate = new Date(patientInsuranceExpiry)
-    const today = new Date()
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const expiryMidnight = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), expiryDate.getDate())
-    insuranceValidityLabel = expiryMidnight.getTime() >= todayMidnight.getTime() ? "Valid" : "Expired"
-  }
-
-  const lines: string[] = []
-
-  const payerType = ((invoice as { payer_type?: string | null }).payer_type || "patient") as string
-
-  const normalizedTotalAmount = Number((invoice as { total_amount?: number | null }).total_amount ?? 0)
-  const normalizedPaidAmount = Number((invoice as { paid_amount?: number | null }).paid_amount ?? 0)
-  const normalizedBalance = Math.max(normalizedTotalAmount - normalizedPaidAmount, 0)
-
-  const paidStatusLabel =
-    ((invoice as { status?: string | null }).status || null) ??
-    ((invoice as { paid_status?: string | null }).paid_status || "")
-
-  lines.push(hospitalName.toUpperCase())
-  if (hospitalAddress) {
-    lines.push(hospitalAddress)
-  }
-  if (hospitalPhone || hospitalEmail) {
-    const contactParts = [hospitalPhone && `Tel: ${hospitalPhone}`, hospitalEmail && `Email: ${hospitalEmail}`].filter(
-      Boolean,
-    ) as string[]
-    if (contactParts.length) {
-      lines.push(contactParts.join("  ·  "))
     }
-  }
-  lines.push("INVOICE")
-  lines.push("".padEnd(40, "-"))
-  lines.push("")
-  lines.push(`Invoice #: ${invoice.invoice_number || invoice.id}`)
-  if (createdAt) lines.push(`Date: ${createdAt}`)
-  lines.push(`Status: ${paidStatusLabel}`)
-  lines.push(`Amount paid: Le ${normalizedPaidAmount}`)
-  lines.push(`Balance: Le ${normalizedBalance}`)
-  const companyFound = Boolean(company)
-  lines.push(
-    `Debug: payer_type=${payerType}, company_id=${companyIdForInvoice || ""}, company_found=${companyFound}`,
-  )
-  if (visitDisplayId || visitDiagnosisRaw) {
-    lines.push("")
-    lines.push("Visit details:")
-    if (visitDisplayId) {
-      lines.push(`  Visit ID: ${visitDisplayId}`)
-    }
-    if (payerType !== "company" && visitDiagnosisRaw) {
-      lines.push(`  Diagnosis: ${truncate(visitDiagnosisRaw, 80)}`)
-    }
-  }
-  lines.push("")
 
-  if (payerType === "company") {
-    lines.push("Bill To (Company):")
-    if (company?.name) {
-      lines.push(`  ${company.name}`)
-    } else if (companyIdForInvoice) {
-      lines.push(`  Company ID: ${companyIdForInvoice}`)
+    const headerTop = y
+    const headerLeft = PAGE_MARGIN + (logoHeight > 0 ? 126 : 0)
+    drawTextLine(page, hospitalName, headerLeft, headerTop - 8, boldFont, 14)
+    let hospitalInfoY = headerTop - 26
+    for (const line of [typedSettings?.address, typedSettings?.phone ? `Tel: ${typedSettings.phone}` : null, typedSettings?.email ? `Email: ${typedSettings.email}` : null].filter(Boolean) as string[]) {
+      drawTextLine(page, line, headerLeft, hospitalInfoY, regularFont, FONT_SIZE_BODY, MUTED_TEXT)
+      hospitalInfoY -= 13
     }
-    if (company?.address) lines.push(`  ${company.address}`)
-    if (company?.contact_person || company?.phone) {
-      const parts = [company?.contact_person, company?.phone].filter(Boolean)
-      lines.push(`  Contact: ${parts.join(" · ")}`)
-    }
-    if (company?.email) lines.push(`  Email: ${company.email}`)
-    lines.push("")
-    if (patientName || patientNumber) {
-      lines.push("Patient:")
-      if (patientName) lines.push(`  ${patientName}`)
-      if (patientNumber) lines.push(`  Patient #: ${patientNumber}`)
-      lines.push("")
-    }
-    if (patientInsuranceType || patientInsuranceId || patientInsuranceExpiry || patientInsuranceMobile) {
-      lines.push("Insurance:")
-      if (patientInsuranceType) {
-        const friendlyType =
-          patientInsuranceType === "employee"
-            ? "Employee"
-            : patientInsuranceType === "dependent"
-              ? "Dependent"
-              : patientInsuranceType
-        lines.push(`  Coverage type: ${friendlyType}`)
-      }
-      if (patientInsuranceId) {
-        lines.push(`  Insurance ID: ${patientInsuranceId}`)
-      }
-      if (patientInsuranceExpiry) {
-        const expiry = new Date(patientInsuranceExpiry)
-        lines.push(`  Expiry: ${expiry.toLocaleDateString()}`)
-      }
-      if (patientInsuranceMobile) {
-        lines.push(`  Mobile: ${patientInsuranceMobile}`)
-      }
-      if (insuranceValidityLabel) {
-        lines.push(`  Status: ${insuranceValidityLabel}`)
-      }
-      lines.push("")
-    }
-    if (company?.terms) {
-      lines.push("Terms:")
-      lines.push(company.terms)
-      lines.push("")
-    }
-    if (company?.invoice_footer_text) {
-      lines.push("Invoice footer:")
-      lines.push(company.invoice_footer_text)
-      lines.push("")
-    }
-  } else if (payerType === "patient" && company) {
-    lines.push("Bill To (Patient / Company):")
-    lines.push(`  Patient: ${patientName}`)
-    if (patientNumber) {
-      lines.push(`  Patient #: ${patientNumber}`)
-    }
-    lines.push(`  Company: ${company.name}`)
-    lines.push("")
-  } else {
-    lines.push("Bill To (Patient):")
-    lines.push(`  ${patientName}`)
-    if (patientNumber) {
-      lines.push(`  Patient #: ${patientNumber}`)
-    }
-    if (company && company.name) {
-      lines.push(`  Employer: ${company.name}`)
-    }
-    lines.push("")
-    if (patientInsuranceType || patientInsuranceId || patientInsuranceExpiry || patientInsuranceMobile) {
-      lines.push("Insurance (patient-held):")
-      if (patientInsuranceType) {
-        const friendlyType =
-          patientInsuranceType === "employee"
-            ? "Employee"
-            : patientInsuranceType === "dependent"
-              ? "Dependent"
-              : patientInsuranceType
-        lines.push(`  Coverage type: ${friendlyType}`)
-      }
-      if (patientInsuranceId) {
-        lines.push(`  Insurance ID: ${patientInsuranceId}`)
-      }
-      if (patientInsuranceExpiry) {
-        const expiry = new Date(patientInsuranceExpiry)
-        lines.push(`  Expiry: ${expiry.toLocaleDateString()}`)
-      }
-      if (patientInsuranceMobile) {
-        lines.push(`  Mobile: ${patientInsuranceMobile}`)
-      }
-      if (insuranceValidityLabel) {
-        lines.push(`  Status: ${insuranceValidityLabel}`)
-      }
-      lines.push("")
-    }
-  }
 
-  lines.push("Items:")
-  lines.push("  Description                   Qty   Unit       Total")
-  lines.push("  " + "-".repeat(50))
+    drawTextLine(page, "INVOICE", 430, headerTop - 8, boldFont, FONT_SIZE_HEADING, BRAND_BLUE)
+    drawTextLine(page, `Status: ${invoiceStatus}`, 430, headerTop - 30, boldFont, FONT_SIZE_BODY)
+    drawTextLine(page, `Invoice #: ${typedInvoice.invoice_number || typedInvoice.id}`, 430, headerTop - 44, regularFont, FONT_SIZE_BODY)
+    if (createdAt) {
+      drawTextLine(page, createdAt, 430, headerTop - 58, regularFont, FONT_SIZE_BODY, MUTED_TEXT)
+    }
 
-  interface LineItem {
-    description?: string
-    quantity?: number
-    unit_price?: number
-  }
+    y = Math.min(headerTop - Math.max(logoHeight, 56) - 18, hospitalInfoY - 6)
+    page.drawLine({
+      start: { x: PAGE_MARGIN, y },
+      end: { x: page.getSize().width - PAGE_MARGIN, y },
+      color: BORDER_COLOR,
+      thickness: 1,
+    })
+    y -= SECTION_GAP
 
-  type InvoiceRowForTotals = {
-    subtotal?: number | null
-    tax?: number | null
-    total?: number | null
-    total_amount?: number | null
-    line_items?: LineItem[] | null
-  }
+    const boxWidth = (page.getSize().width - PAGE_MARGIN * 2 - 16) / 2
+    const billToRows = payerType === "company"
+      ? [
+          { label: "Company", value: typedCompany?.name?.trim() || "Company-linked billing" },
+          { label: "Contact", value: [typedCompany?.contact_person, typedCompany?.phone].filter(Boolean).join(" · ") || typedCompany?.email || "-" },
+          { label: "Address", value: typedCompany?.address?.trim() || "-" },
+          { label: "Email", value: typedCompany?.email?.trim() || "-" },
+        ]
+      : [
+          { label: "Patient", value: patientName },
+          { label: "Patient #", value: patientNumber },
+          { label: "Payer", value: payerType === "patient" ? "Patient self-pay" : payerType || "Patient" },
+          { label: "Company", value: typedCompany?.name?.trim() || "-" },
+        ]
 
-  const typedInvoice = invoice as InvoiceRowForTotals
-
-  const legacySubtotal = Number(typedInvoice.subtotal ?? typedInvoice.total_amount ?? 0)
-  const legacyTax = Number(typedInvoice.tax ?? 0)
-  const legacyTotal = Number(typedInvoice.total ?? typedInvoice.total_amount ?? legacySubtotal + legacyTax)
-
-  let items = ((typedInvoice.line_items as LineItem[] | null) || []).filter((item) =>
-    Boolean(item && (item.description || item.quantity || item.unit_price)),
-  )
-
-  // For legacy invoices that have totals but no structured line_items, create a single summary line
-  if (!items.length && legacyTotal > 0) {
-    items = [
+    const patientRows = [
+      { label: "Name", value: patientName },
+      { label: "Patient #", value: patientNumber },
+      { label: "Coverage", value: patient?.insurance_type ? String(patient.insurance_type).replace(/^./, (c) => c.toUpperCase()) : "-" },
       {
-        description: "Visit charges",
-        quantity: 1,
-        unit_price: legacyTotal,
+        label: "Insurance ID",
+        value: patient?.insurance_card_number?.trim() || "-",
       },
     ]
-  }
 
-  if (!items.length) {
-    lines.push("  (No line items recorded)")
-  } else {
-    for (const item of items) {
-      const desc = truncate(item.description || "Item", 27)
-      const qty = item.quantity ?? 0
-      const price = item.unit_price ?? 0
-      const lineTotal = qty * price
-      const descCol = desc.padEnd(27)
-      const qtyCol = String(qty).padStart(3)
-      const priceCol = String(price).padStart(8)
-      const totalCol = String(lineTotal).padStart(9)
-      lines.push(`  ${descCol} ${qtyCol}   ${priceCol} ${totalCol}`)
-    }
-  }
-
-  lines.push("")
-  lines.push(`Subtotal: Le ${legacySubtotal}`)
-  lines.push(`Tax: Le ${legacyTax}`)
-  lines.push(`Total: Le ${legacyTotal}`)
-  lines.push("")
-
-  const invoiceNotes = (invoice as { notes?: string | null }).notes || ""
-  if (invoiceNotes) {
-    lines.push("Notes:")
-    for (const noteLine of invoiceNotes.split(/\r?\n/)) {
-      lines.push(`  ${noteLine}`)
-    }
-    lines.push("")
-  }
-
-  lines.push("Signatures:")
-  lines.push("")
-  lines.push("  ____________________________           ____________________________")
-  lines.push("  Cashier / Authorized by                Patient / Company representative")
-  lines.push("")
-
-  const pdfDoc = await PDFDocument.create()
-  const page = pdfDoc.addPage()
-  const font = await pdfDoc.embedFont(StandardFonts.Courier)
-
-  const fontSize = 10
-  const lineHeight = 12
-  const { height } = page.getSize()
-  const margin = 40
-  let cursorY = height - margin
-
-  // Draw hospital logo at the top of the first page if available
-  if (settings?.billing_logo_url) {
-    try {
-      const res = await fetch(settings.billing_logo_url)
-      if (res.ok) {
-        const logoBytes = await res.arrayBuffer()
-        let logoImage
-        try {
-          logoImage = await pdfDoc.embedPng(logoBytes)
-        } catch {
-          logoImage = await pdfDoc.embedJpg(logoBytes)
-        }
-
-        const targetWidth = 120
-        const scale = targetWidth / logoImage.width
-        const logoWidth = targetWidth
-        const logoHeight = logoImage.height * scale
-
-        page.drawImage(logoImage, {
-          x: margin,
-          y: cursorY - logoHeight,
-          width: logoWidth,
-          height: logoHeight,
-        })
-
-        cursorY -= logoHeight + 16
-      }
-    } catch (e) {
-      console.error("[v0] Error embedding invoice logo", e)
-    }
-  }
-
-  for (const line of lines) {
-    if (cursorY < margin) {
-      // add a new page if we run out of space
-      const newPage = pdfDoc.addPage()
-      cursorY = newPage.getSize().height - margin
-      page.drawText("Continued...", {
-        x: margin,
-        y: margin / 2,
-        size: 8,
-        font,
-      })
-    }
-
-    page.drawText(line, {
-      x: margin,
-      y: cursorY,
-      size: fontSize,
-      font,
+    const leftBottom = drawInfoBox(page, PAGE_MARGIN, y, boxWidth, payerType === "company" ? "Bill To" : "Billing Details", billToRows, {
+      regular: regularFont,
+      bold: boldFont,
     })
-    cursorY -= lineHeight
-  }
+    const rightBottom = drawInfoBox(page, PAGE_MARGIN + boxWidth + 16, y, boxWidth, "Patient", patientRows, {
+      regular: regularFont,
+      bold: boldFont,
+    })
+    y = Math.min(leftBottom, rightBottom) - SECTION_GAP
 
-  const pdfBytes = await pdfDoc.save()
+    y = drawSectionTitle(page, "Visit Information", PAGE_MARGIN, y, boldFont)
+    y = drawKeyValueLines(
+      page,
+      payerType === "company"
+        ? [
+            { label: "Visit Ref", value: visitReference },
+            { label: "Covered Person", value: patientName },
+            {
+              label: "Relationship",
+              value: coverage?.relationshipLabel || "-",
+            },
+            {
+              label: "Principal Employee",
+              value: coverage?.principalEmployeeName || "-",
+            },
+          ]
+        : [
+            { label: "Visit Ref", value: visitReference },
+            { label: "Payer Type", value: payerType ? payerType.replace(/^./, (c) => c.toUpperCase()) : "Patient" },
+            { label: "Diagnosis", value: typedInvoice.visits?.diagnosis?.trim() || "Not recorded" },
+          ],
+      PAGE_MARGIN,
+      y,
+      page.getSize().width - PAGE_MARGIN * 2,
+      { regular: regularFont, bold: boldFont },
+    )
+    y -= 8
+
+    const typedItems = (typedInvoice.line_items || []).filter((item) => item && (item.description || item.quantity || item.unit_price))
+    const items = typedItems.length
+      ? typedItems.map((item) => ({
+          description: item.description?.trim() || "Item",
+          quantity: Number(item.quantity ?? 0),
+          unitPrice: Number(item.unit_price ?? 0),
+        }))
+      : totalAmount > 0
+        ? [{ description: "Visit charges", quantity: 1, unitPrice: totalAmount }]
+        : []
+
+    const tableHeaderHeight = 24
+    const rowHeight = 20
+    const tableHeight = tableHeaderHeight + Math.max(items.length, 1) * rowHeight + 8
+    ;({ page, y } = ensureSpace(pdfDoc, { page, y }, tableHeight + 80))
+
+    const fullWidth = page.getSize().width - PAGE_MARGIN * 2
+    const colX = {
+      description: PAGE_MARGIN + 12,
+      qty: PAGE_MARGIN + fullWidth - 180,
+      unit: PAGE_MARGIN + fullWidth - 120,
+      total: PAGE_MARGIN + fullWidth - 60,
+    }
+
+    drawSectionTitle(page, "Invoice Items", PAGE_MARGIN, y, boldFont)
+    page.drawRectangle({
+      x: PAGE_MARGIN,
+      y: y - 24,
+      width: fullWidth,
+      height: 24,
+      color: LIGHT_FILL,
+      borderColor: BORDER_COLOR,
+      borderWidth: 1,
+    })
+    drawTextLine(page, "Description", colX.description, y - 16, boldFont, FONT_SIZE_LABEL)
+    drawTextLine(page, "Qty", colX.qty, y - 16, boldFont, FONT_SIZE_LABEL)
+    drawTextLine(page, "Unit", colX.unit, y - 16, boldFont, FONT_SIZE_LABEL)
+    drawTextLine(page, "Total", colX.total, y - 16, boldFont, FONT_SIZE_LABEL)
+    y -= 24
+
+    if (!items.length) {
+      page.drawRectangle({
+        x: PAGE_MARGIN,
+        y: y - rowHeight,
+        width: fullWidth,
+        height: rowHeight,
+        borderColor: BORDER_COLOR,
+        borderWidth: 1,
+      })
+      drawTextLine(page, "No line items recorded", colX.description, y - 14, regularFont, FONT_SIZE_BODY, MUTED_TEXT)
+      y -= rowHeight
+    } else {
+      for (const item of items) {
+        page.drawRectangle({
+          x: PAGE_MARGIN,
+          y: y - rowHeight,
+          width: fullWidth,
+          height: rowHeight,
+          borderColor: BORDER_COLOR,
+          borderWidth: 1,
+        })
+        const lineTotal = item.quantity * item.unitPrice
+        drawTextLine(page, item.description, colX.description, y - 14, regularFont, FONT_SIZE_BODY)
+        drawTextLine(page, String(item.quantity), colX.qty, y - 14, regularFont, FONT_SIZE_BODY)
+        drawTextLine(page, formatCurrency(item.unitPrice), colX.unit, y - 14, regularFont, FONT_SIZE_BODY)
+        drawTextLine(page, formatCurrency(lineTotal), colX.total, y - 14, regularFont, FONT_SIZE_BODY)
+        y -= rowHeight
+      }
+    }
+    y -= SECTION_GAP
+
+    const totalsWidth = 210
+    const totalsX = page.getSize().width - PAGE_MARGIN - totalsWidth
+    page.drawRectangle({
+      x: totalsX,
+      y: y - 76,
+      width: totalsWidth,
+      height: 76,
+      borderColor: BORDER_COLOR,
+      borderWidth: 1,
+      color: LIGHT_FILL,
+    })
+    const totalsRows = [
+      ["Subtotal", formatCurrency(subtotal)],
+      ["Tax", formatCurrency(tax)],
+      ["Amount paid", formatCurrency(paidAmount)],
+      ["Balance", formatCurrency(balance)],
+    ] as const
+    let totalsY = y - 16
+    for (const [label, value] of totalsRows) {
+      drawTextLine(page, label, totalsX + 12, totalsY, label === "Balance" ? boldFont : regularFont, FONT_SIZE_BODY)
+      drawTextLine(page, value, totalsX + 120, totalsY, label === "Balance" ? boldFont : regularFont, FONT_SIZE_BODY)
+      totalsY -= 15
+    }
+    drawTextLine(page, "Invoice total", PAGE_MARGIN, y - 20, boldFont, 11)
+    drawTextLine(page, formatCurrency(totalAmount), PAGE_MARGIN, y - 40, boldFont, 16, BRAND_BLUE)
+    y -= 94
+
+    if (typedInvoice.notes?.trim()) {
+      ;({ page, y } = ensureSpace(pdfDoc, { page, y }, 90))
+      y = drawSectionTitle(page, "Notes", PAGE_MARGIN, y, boldFont)
+      y = drawWrappedBlock(page, typedInvoice.notes.trim(), PAGE_MARGIN, y, fullWidth, regularFont, FONT_SIZE_BODY)
+      y -= SECTION_GAP
+    }
+
+    if (typedCompany?.terms?.trim()) {
+      ;({ page, y } = ensureSpace(pdfDoc, { page, y }, 90))
+      y = drawSectionTitle(page, "Billing Terms", PAGE_MARGIN, y, boldFont)
+      y = drawWrappedBlock(page, typedCompany.terms.trim(), PAGE_MARGIN, y, fullWidth, regularFont, FONT_SIZE_SMALL, MUTED_TEXT)
+      y -= SECTION_GAP
+    }
+
+    ;({ page, y } = ensureSpace(pdfDoc, { page, y }, 80))
+    const signatureY = y - 10
+    page.drawLine({ start: { x: PAGE_MARGIN + 10, y: signatureY }, end: { x: PAGE_MARGIN + 220, y: signatureY }, color: BORDER_COLOR, thickness: 1 })
+    page.drawLine({ start: { x: PAGE_MARGIN + 300, y: signatureY }, end: { x: PAGE_MARGIN + 510, y: signatureY }, color: BORDER_COLOR, thickness: 1 })
+    drawTextLine(page, "Prepared by / Cashier", PAGE_MARGIN + 10, signatureY - 14, regularFont, FONT_SIZE_SMALL, MUTED_TEXT)
+    drawTextLine(page, payerType === "company" ? "Company representative" : "Patient / Representative", PAGE_MARGIN + 300, signatureY - 14, regularFont, FONT_SIZE_SMALL, MUTED_TEXT)
+
+    const footerText = typedCompany?.invoice_footer_text?.trim() || `Generated on ${new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`
+    drawTextLine(page, footerText, PAGE_MARGIN, 28, regularFont, 8, MUTED_TEXT)
+
+    const pdfBytes = await pdfDoc.save()
 
     return new NextResponse(pdfBytes as unknown as BodyInit, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename=invoice_${invoice.invoice_number || id}.pdf`,
+        "Content-Disposition": `inline; filename=invoice_${typedInvoice.invoice_number || id}.pdf`,
         ...NO_STORE_DOWNLOAD_HEADERS,
       },
     })

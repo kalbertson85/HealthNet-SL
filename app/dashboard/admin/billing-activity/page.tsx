@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { fetchInvoicesWithPatientsByIds, fetchProfilesByIds } from "@/lib/admin/activity"
 
 interface BillingActivitySearchParams {
   actor?: string
@@ -29,6 +30,7 @@ interface BillingAuditRow {
 }
 
 export const revalidate = 0
+const RECENT_BILLING_AUDIT_LIMIT = 200
 
 export default async function BillingActivityPage({
   searchParams,
@@ -59,7 +61,7 @@ export default async function BillingActivityPage({
     .from("billing_audit_logs")
     .select("id, created_at, action, old_status, new_status, amount, actor_user_id, invoice_id")
     .order("created_at", { ascending: false })
-    .limit(200)
+    .limit(RECENT_BILLING_AUDIT_LIMIT)
 
   if (actorFilter) {
     query = query.eq("actor_user_id", actorFilter)
@@ -92,12 +94,8 @@ export default async function BillingActivityPage({
   const actorProfilesById = new Map<string, { full_name: string | null; role: string | null }>()
 
   if (invoiceIds.length > 0) {
-    const { data: invoices } = await supabase
-      .from("invoices")
-      .select("id, invoice_number, patient_id, patients(full_name, patient_number)")
-      .in("id", invoiceIds)
-
-    for (const inv of invoices || []) {
+    const invoices = await fetchInvoicesWithPatientsByIds(supabase, invoiceIds)
+    for (const inv of invoices) {
       invoicesById.set(inv.id as string, {
         id: inv.id as string,
         invoice_number: (inv.invoice_number as string | null) ?? null,
@@ -108,12 +106,8 @@ export default async function BillingActivityPage({
   }
 
   if (actorIds.length > 0) {
-    const { data: actorProfiles } = await supabase
-      .from("profiles")
-      .select("id, full_name, role")
-      .in("id", actorIds)
-
-    for (const p of actorProfiles || []) {
+    const actorProfiles = await fetchProfilesByIds(supabase, actorIds)
+    for (const p of actorProfiles) {
       actorProfilesById.set(p.id as string, {
         full_name: (p.full_name as string | null) ?? null,
         role: (p.role as string | null) ?? null,
@@ -175,7 +169,10 @@ export default async function BillingActivityPage({
       <Card>
         <CardHeader>
           <CardTitle>Filters</CardTitle>
-          <CardDescription>Filter billing events by actor, patient, action, and date range.</CardDescription>
+          <CardDescription>
+            Filter billing events by actor, patient, action, and date range. Results are limited to the latest{" "}
+            {RECENT_BILLING_AUDIT_LIMIT} audit rows before invoice and patient details are resolved.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 max-w-4xl">
@@ -225,7 +222,7 @@ export default async function BillingActivityPage({
           <div className="flex items-center justify-between gap-4">
             <div>
               <CardTitle>Recent billing activity</CardTitle>
-              <CardDescription>Showing up to 200 matching entries.</CardDescription>
+              <CardDescription>Showing up to {RECENT_BILLING_AUDIT_LIMIT} matching entries.</CardDescription>
             </div>
           </div>
         </CardHeader>

@@ -8,12 +8,18 @@ import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { assertVisitTransition, type VisitStatus } from "@/lib/visits"
 import { InvoiceLineItems } from "../InvoiceLineItems"
+import { FormHelpTip } from "@/components/form-help-tip"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 
 interface LineItem {
   description: string
   quantity: number
   unit_price: number
-  type?: string
+  item_type?: string
+}
+
+interface RecommendedServiceItem extends LineItem {
+  source: "admission" | "surgery" | "nursing"
 }
 
 interface VisitPatient {
@@ -35,7 +41,7 @@ export default async function VisitBillingPage(props: {
   const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
   const errorCode = resolvedSearchParams?.error
 
-  const [{ data: visit, error: visitError }, { data: companies }, { data: admissionForVisit }] = await Promise.all([
+  const [{ data: visit, error: visitError }, { data: companies }, { data: admissionForVisit }, { data: surgeriesForVisit }, { data: nursingNotesForVisit }] = await Promise.all([
     supabase
       .from("visits")
       .select(
@@ -48,10 +54,21 @@ export default async function VisitBillingPage(props: {
     supabase.from("companies").select("id, name").order("name"),
     supabase
       .from("admissions")
-      .select("id, status")
+      .select("id, status, admission_date, discharge_date, wards(name), beds(bed_number)")
       .eq("visit_id", visitId)
-      .in("status", ["admitted"])
+      .in("status", ["admitted", "discharged"])
       .maybeSingle(),
+    supabase
+      .from("surgeries")
+      .select("id, procedure_name, procedure_type, status, scheduled_at")
+      .eq("visit_id", visitId)
+      .order("scheduled_at", { ascending: true }),
+    supabase
+      .from("visit_nursing_notes")
+      .select("id, note_type, procedure_type, performed_at")
+      .eq("visit_id", visitId)
+      .order("performed_at", { ascending: false })
+      .limit(200),
   ])
 
   if (visitError) {
@@ -89,12 +106,20 @@ export default async function VisitBillingPage(props: {
     .eq("visit_id", visitId)
     .maybeSingle()
 
+  const { data: linkedPrescription } = await supabase
+    .from("prescriptions")
+    .select("id, prescription_number, status")
+    .eq("visit_id", visitId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
   let existingInvoiceItems: LineItem[] = []
 
   if (existingInvoice?.id) {
     const { data: invoiceItems, error: invoiceItemsError } = await supabase
       .from("invoice_items")
-      .select("description, quantity, unit_price")
+      .select("description, quantity, unit_price, item_type")
       .eq("invoice_id", existingInvoice.id as string)
 
     if (invoiceItemsError) {
@@ -105,7 +130,93 @@ export default async function VisitBillingPage(props: {
       description: (item.description as string) || "",
       quantity: Number(item.quantity || 0),
       unit_price: Number(item.unit_price || 0),
+      item_type: ((item as { item_type?: string | null }).item_type as string | null) || "billable",
     })) as LineItem[]
+  }
+
+  const recommendedExtendedCareItems: RecommendedServiceItem[] = []
+
+  if (admissionForVisit) {
+    const admissionWardRelation = (admissionForVisit as { wards?: { name?: string | null } | Array<{ name?: string | null }> | null }).wards
+    const admissionBedRelation = (admissionForVisit as { beds?: { bed_number?: string | null } | Array<{ bed_number?: string | null }> | null }).beds
+    const admissionWard = Array.isArray(admissionWardRelation) ? (admissionWardRelation[0] ?? null) : admissionWardRelation ?? null
+    const admissionBed = Array.isArray(admissionBedRelation) ? (admissionBedRelation[0] ?? null) : admissionBedRelation ?? null
+    recommendedExtendedCareItems.push({
+      description: `Admission and bed allocation${admissionWard?.name ? ` (${admissionWard.name}` : ""}${admissionBed?.bed_number ? ` - Bed ${admissionBed.bed_number}` : admissionWard?.name ? ")" : ""}`,
+      quantity: 1,
+      unit_price: 0,
+      item_type: "billable",
+      source: "admission",
+    })
+  }
+
+  for (const surgery of (surgeriesForVisit || []) as Array<{
+    procedure_name?: string | null
+    procedure_type?: string | null
+    status?: string | null
+  }>) {
+    const procedureName = (surgery.procedure_name || "Surgical procedure").trim()
+    const procedureType = (surgery.procedure_type || "").trim()
+    const status = (surgery.status || "").trim()
+    recommendedExtendedCareItems.push({
+      description: `${procedureName}${procedureType ? ` (${procedureType})` : ""}${status ? ` - ${status}` : ""}`,
+      quantity: 1,
+      unit_price: 0,
+      item_type: "billable",
+      source: "surgery",
+    })
+  }
+
+  const nursingNotes = (nursingNotesForVisit || []) as Array<{
+    note_type?: string | null
+    procedure_type?: string | null
+  }>
+  const nursingProcedureCounts = new Map<string, number>()
+  for (const note of nursingNotes) {
+    const procedure = (note.procedure_type || "").trim()
+    if (!procedure) continue
+    nursingProcedureCounts.set(procedure, (nursingProcedureCounts.get(procedure) || 0) + 1)
+  }
+  for (const [procedure, count] of nursingProcedureCounts.entries()) {
+    recommendedExtendedCareItems.push({
+      description: `Nursing procedure: ${procedure.replace(/_/g, " ")}`,
+      quantity: count,
+      unit_price: 0,
+      item_type: "billable",
+      source: "nursing",
+    })
+  }
+
+  if (nursingNotes.length > 0) {
+    recommendedExtendedCareItems.push({
+      description: `Nursing observation / ward monitoring`,
+      quantity: 1,
+      unit_price: 0,
+      item_type: "billable",
+      source: "nursing",
+    })
+  }
+
+  const normalizedExistingDescriptions = new Set(
+    existingInvoiceItems.map((item) => item.description.trim().toLowerCase()).filter(Boolean),
+  )
+  const suggestedExtendedCareItems: RecommendedServiceItem[] = recommendedExtendedCareItems.filter(
+    (item) => !normalizedExistingDescriptions.has(item.description.trim().toLowerCase()),
+  )
+  const capturedExtendedCareItems: RecommendedServiceItem[] = recommendedExtendedCareItems.filter((item) =>
+    normalizedExistingDescriptions.has(item.description.trim().toLowerCase()),
+  )
+
+  const suggestedBySource = {
+    admission: suggestedExtendedCareItems.filter((item) => item.source === "admission").length,
+    surgery: suggestedExtendedCareItems.filter((item) => item.source === "surgery").length,
+    nursing: suggestedExtendedCareItems.filter((item) => item.source === "nursing").length,
+  }
+
+  const capturedBySource = {
+    admission: capturedExtendedCareItems.filter((item) => item.source === "admission").length,
+    surgery: capturedExtendedCareItems.filter((item) => item.source === "surgery").length,
+    nursing: capturedExtendedCareItems.filter((item) => item.source === "nursing").length,
   }
 
   const errorMessage = (() => {
@@ -141,7 +252,7 @@ export default async function VisitBillingPage(props: {
         const quantity = Number(quantities[index] || 0)
         const unit_price = Number(unitPrices[index] || 0)
         const item_type = (itemTypes[index] as string | undefined) || "billable"
-        return { description, quantity, unit_price, type: item_type }
+        return { description, quantity, unit_price, item_type }
       })
       .filter((item) => item.description && item.quantity > 0 && item.unit_price >= 0)
 
@@ -160,7 +271,7 @@ export default async function VisitBillingPage(props: {
     // For Sierra Leone Free Health Care visits, we record economic prices in line items
     // but only bill for items that are not explicitly marked as FHC-covered.
     const billableSubtotal = items.reduce((sum, item) => {
-      const item_type = (item.type as string | undefined) || "billable"
+      const item_type = (item.item_type as string | undefined) || "billable"
       if (isFreeHealthCareVisit && item_type === "fhc_covered") return sum
       return sum + item.quantity * item.unit_price
     }, 0)
@@ -260,7 +371,7 @@ export default async function VisitBillingPage(props: {
 
       if (items.length > 0) {
         const invoiceItemsPayload = items.map((baseItem: LineItem) => {
-          const item_type = (baseItem.type as string | undefined) || "billable"
+          const item_type = (baseItem.item_type as string | undefined) || "billable"
           const rawAmount = baseItem.quantity * baseItem.unit_price
 
           // For FHC visits, zero out only items explicitly marked as fhc_covered
@@ -375,7 +486,69 @@ export default async function VisitBillingPage(props: {
     redirect("/dashboard/billing")
   }
 
-  const initialItems: LineItem[] = existingInvoiceItems
+  async function markPaidAndCompleteVisit(formData: FormData) {
+    "use server"
+
+    const supabase = await createServerClient()
+    const { user } = await getSessionUserAndProfile()
+
+    if (!user) {
+      redirect("/auth/login")
+    }
+    const visitId = formData.get("visit_id") as string
+
+    const { data: invoiceBefore } = await supabase
+      .from("invoices")
+      .select("id, total_amount, status")
+      .eq("visit_id", visitId)
+      .maybeSingle()
+
+    const { data: beforeVisit } = await supabase
+      .from("visits")
+      .select("visit_status")
+      .eq("id", visitId)
+      .maybeSingle()
+
+    const currentStatus = (beforeVisit?.visit_status as VisitStatus | null) ?? null
+    if (!currentStatus) {
+      redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
+    }
+
+    try {
+      assertVisitTransition(currentStatus as VisitStatus, "completed")
+    } catch (err) {
+      console.error("[v0] Invalid visit status transition (billing -> completed)", {
+        visitId,
+        from: currentStatus,
+        to: "completed",
+        error: err instanceof Error ? err.message : String(err),
+      })
+      redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
+    }
+
+    if (!invoiceBefore) {
+      redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
+    }
+
+    await supabase
+      .from("invoices")
+      .update({
+        paid_amount: invoiceBefore.total_amount ?? 0,
+        status: "paid",
+        payment_date: new Date().toISOString(),
+      })
+      .eq("id", invoiceBefore.id as string)
+
+    await supabase
+      .from("visits")
+      .update({ visit_status: "completed" })
+      .eq("id", visitId)
+
+    redirect("/dashboard/billing")
+  }
+
+  const initialItems: LineItem[] =
+    existingInvoiceItems.length > 0 ? existingInvoiceItems : suggestedExtendedCareItems.length > 0 ? suggestedExtendedCareItems : []
 
   return (
     <div className="space-y-6">
@@ -388,7 +561,7 @@ export default async function VisitBillingPage(props: {
         <div className="space-y-1">
           <h1 className="text-balance text-3xl font-bold tracking-tight">Bill Visit</h1>
           <p className="text-pretty text-muted-foreground">
-            Create or update an invoice for this visit before sending it to pharmacy.
+            Create or update an invoice for this visit before sending it to pharmacy or closing the visit.
           </p>
         </div>
         <Button asChild variant="outline" size="sm">
@@ -425,13 +598,17 @@ export default async function VisitBillingPage(props: {
                   href={`/dashboard/inpatient/${admissionForVisit.id}`}
                   className="text-[11px] text-emerald-700 underline-offset-2 hover:underline"
                 >
-                  Admitted  view admission
+                  Admitted - view admission
                 </Link>
               )}
             </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
+          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+            Billing should follow this order: confirm payer, save invoice items, then mark the visit paid only when
+            payment is fully settled and the visit is ready either for pharmacy or direct closure.
+          </div>
           {patient?.insurance_type && defaultCompanyId && (
             <div
               className={`rounded-md border px-3 py-2 text-xs ${
@@ -449,7 +626,7 @@ export default async function VisitBillingPage(props: {
               )}
               {insuranceExpiryStr && (
                 <p>
-                  Expiry: {new Date(insuranceExpiryStr).toLocaleDateString()} 31
+                  Expiry: {new Date(insuranceExpiryStr).toLocaleDateString()} -
                   <span className={isInsuranceValid ? "text-emerald-700" : "text-amber-700 font-semibold"}>
                     {isInsuranceValid ? " Valid" : " Expired"}
                   </span>
@@ -468,11 +645,13 @@ export default async function VisitBillingPage(props: {
             <p className="font-medium">{patient?.full_name || "Unknown patient"}</p>
             <p className="text-xs text-muted-foreground">{patient?.patient_number || "–"}</p>
           </div>
-          <div className="rounded-md bg-muted px-3 py-2 text-[10px] font-mono text-muted-foreground">
-            <p>visit_id: {visit.id}</p>
-            <p>facility_id: {(visit as { facility_id?: string | null }).facility_id ?? "none"}</p>
-            <p>payer_category: {visit.payer_category || "unknown"}</p>
-            <p>is_free_health_care: {String(visit.is_free_health_care ?? false)}</p>
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <p>
+              Visit payer category: <span className="font-medium text-foreground">{visit.payer_category || "unknown"}</span>
+            </p>
+            <p>
+              Facility assignment: <span className="font-medium text-foreground">{facility?.name || "Unassigned"}</span>
+            </p>
           </div>
           {visit.is_free_health_care && (
             <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
@@ -492,14 +671,71 @@ export default async function VisitBillingPage(props: {
               <p className="text-sm whitespace-pre-wrap">{visit.prescription_list.notes}</p>
             </div>
           )}
+          {linkedPrescription ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+              Structured prescription linked:{" "}
+              <Link href={`/dashboard/prescriptions/${linkedPrescription.id}`} className="font-medium underline-offset-2 hover:underline">
+                {linkedPrescription.prescription_number || linkedPrescription.id}
+              </Link>
+            </div>
+          ) : visit.prescription_list?.notes ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              This visit has prescription notes but no structured prescription record yet.{" "}
+              <Link href={`/dashboard/prescriptions/new?patient_id=${visit.patient_id}&visit_id=${visitId}`} className="font-medium underline-offset-2 hover:underline">
+                Create the prescription before sending this visit to Pharmacy
+              </Link>
+              .
+            </div>
+          ) : null}
+          {suggestedExtendedCareItems.length > 0 ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+              Suggested extended-care charges found for this visit: {suggestedExtendedCareItems.length}. These items are preloaded into the invoice with zero price so billing can confirm and price them before saving.
+            </div>
+          ) : null}
+          {recommendedExtendedCareItems.length > 0 ? (
+            <div className="rounded-md border px-3 py-3 text-xs">
+              <p className="mb-2 font-medium text-foreground">Extended-care billing coverage</p>
+              <div className="grid gap-2 md:grid-cols-3">
+                <div className="rounded-md border bg-muted/30 px-3 py-2">
+                  <p className="font-medium">Admission</p>
+                  <p className="text-muted-foreground">
+                    Captured: {capturedBySource.admission} · Missing: {suggestedBySource.admission}
+                  </p>
+                </div>
+                <div className="rounded-md border bg-muted/30 px-3 py-2">
+                  <p className="font-medium">Surgery</p>
+                  <p className="text-muted-foreground">
+                    Captured: {capturedBySource.surgery} · Missing: {suggestedBySource.surgery}
+                  </p>
+                </div>
+                <div className="rounded-md border bg-muted/30 px-3 py-2">
+                  <p className="font-medium">Nursing</p>
+                  <p className="text-muted-foreground">
+                    Captured: {capturedBySource.nursing} · Missing: {suggestedBySource.nursing}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
+
+      <PatientWorkflowPanel
+        currentStage="billing"
+        patientId={(visit.patient_id as string | null) ?? null}
+        visitId={visitId}
+        title="Billing continuity"
+        description="Billing should sit after consultation and diagnostics, then route the visit into pharmacy, admission, discharge, or follow-up."
+      />
 
       <form action={saveInvoice}>
         <input type="hidden" name="visit_id" value={visitId} />
         <Card>
           <CardHeader>
-            <CardTitle>Invoice Line Items</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              Invoice Line Items
+              <FormHelpTip text="Use one line per billable service, medicine, or exception. Free Health Care items are still recorded here for audit visibility, but covered items are zero-rated during save." />
+            </CardTitle>
             <CardDescription>Services and medicines to charge for this visit.</CardDescription>
           </CardHeader>
           <InvoiceLineItems initialItems={initialItems} />
@@ -507,7 +743,10 @@ export default async function VisitBillingPage(props: {
           <CardContent className="space-y-4 pt-0">
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label>Payer</Label>
+                <Label className="flex items-center gap-2">
+                  Payer
+                  <FormHelpTip text="Choose company only when valid cover applies and the claim should be raised against that company. Otherwise keep billing against the patient." />
+                </Label>
                 <div className="flex flex-col gap-2 text-sm">
                   <label className="inline-flex items-center gap-2">
                     <input
@@ -575,12 +814,20 @@ export default async function VisitBillingPage(props: {
         </Card>
       </form>
 
-      <form action={markPaidAndSendToPharmacy} className="flex justify-end">
-        <input type="hidden" name="visit_id" value={visitId} />
-        <Button type="submit" variant="default" disabled={!existingInvoice}>
-          Mark paid & send to Pharmacy
-        </Button>
-      </form>
+      <div className="flex flex-wrap justify-end gap-2">
+        <form action={markPaidAndCompleteVisit}>
+          <input type="hidden" name="visit_id" value={visitId} />
+          <Button type="submit" variant="outline" disabled={!existingInvoice}>
+            Mark paid & complete visit
+          </Button>
+        </form>
+        <form action={markPaidAndSendToPharmacy}>
+          <input type="hidden" name="visit_id" value={visitId} />
+          <Button type="submit" variant="default" disabled={!existingInvoice || !linkedPrescription}>
+            Mark paid & send to Pharmacy
+          </Button>
+        </form>
+      </div>
     </div>
   )
 }

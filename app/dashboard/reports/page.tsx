@@ -10,27 +10,26 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { startPageRenderTimer } from "@/lib/observability/page-performance"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  fetchFhcAnalytics,
+  fetchReportsSummary,
+  fetchTopCompanies,
+  parseReportDate,
+} from "@/lib/reports/queries"
 
-const MAX_MONTHLY_INVOICE_ROWS = 3000
-const MAX_FHC_ANALYTICS_ROWS = 3000
-
-interface InvoiceRow {
-  total_amount?: number | null
-  paid_amount?: number | null
-  payment_date?: string | null
-  created_at?: string | null
-  payer_type?: string | null
-  company_id?: string | null
-  companies?: {
-    name?: string | null
-  } | null
+function ReportSummaryFallback() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, idx) => (
+        <Skeleton key={idx} className="h-24 w-full" />
+      ))}
+    </div>
+  )
 }
 
-type FhcVisitsRef = {
-  is_free_health_care?: boolean | null
-  facility_id?: string | null
-  facilities?: { name?: string | null; code?: string | null } | null
-} | null
+function TopCompaniesFallback() {
+  return <Skeleton className="h-80 w-full" />
+}
 
 function FhcSectionFallback() {
   return (
@@ -47,189 +46,114 @@ function FhcSectionFallback() {
   )
 }
 
-function upsertCarePath(
-  map: Map<string, { name: string; code: string | null; admissions: number; surgeries: number; nursingNotes: number }>,
-  visits: FhcVisitsRef,
-  field: "admissions" | "surgeries" | "nursingNotes",
-) {
-  if (!visits?.is_free_health_care) return
-  const facilityId = visits.facility_id ?? "(none)"
-  const facilityName = visits.facilities?.name ?? "Unknown facility"
-  const facilityCode = visits.facilities?.code ?? null
-  const existing = map.get(facilityId) || { name: facilityName, code: facilityCode, admissions: 0, surgeries: 0, nursingNotes: 0 }
-  existing[field] += 1
-  map.set(facilityId, existing)
+async function ReportsSummarySection({ fromIso, toIso, fromParam, toParam }: { fromIso: string; toIso: string; fromParam: string; toParam: string }) {
+  const sectionPerf = startPageRenderTimer("dashboard.reports.summary", { slowThresholdMs: 1200 })
+  const supabase = await createServerClient()
+
+  try {
+    const { monthlyRevenue, paidInvoiceRows, newPatientsCount, completedVisitsCount, pendingLabTestsCount, source } =
+      await fetchReportsSummary(supabase, fromIso, toIso)
+
+    sectionPerf.done({
+      query_count: 4,
+      paid_invoice_rows: paidInvoiceRows.length || 0,
+      new_patients: newPatientsCount.count || 0,
+      completed_visits: completedVisitsCount.count || 0,
+      source,
+    })
+
+    return (
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <StatCard title="Revenue" value={`Le ${monthlyRevenue.toLocaleString()}`} description={`Paid invoices from ${fromParam} to ${toParam}`} icon={<FileText className="h-4 w-4 text-muted-foreground" />} />
+        <StatCard title="New Patients" value={newPatientsCount.count ?? 0} description={`Registered from ${fromParam} to ${toParam}`} icon={<Users className="h-4 w-4 text-muted-foreground" />} />
+        <StatCard title="Completed Visits" value={completedVisitsCount.count ?? 0} description={`Finished visits from ${fromParam} to ${toParam}`} icon={<Activity className="h-4 w-4 text-muted-foreground" />} />
+        <StatCard title="Pending Lab Tests" value={pendingLabTestsCount.count ?? 0} description="Awaiting results" icon={<CalendarRange className="h-4 w-4 text-muted-foreground" />} />
+      </div>
+    )
+  } catch (error) {
+    sectionPerf.fail(error, { query_count: 4 })
+    throw error
+  }
+}
+
+async function TopCompaniesSection({ fromIso, toIso }: { fromIso: string; toIso: string }) {
+  const sectionPerf = startPageRenderTimer("dashboard.reports.top_companies", { slowThresholdMs: 1200 })
+  const supabase = await createServerClient()
+
+  try {
+    const { companyInvoiceRows, topCompanies, source } = await fetchTopCompanies(supabase, fromIso, toIso)
+
+    sectionPerf.done({
+      query_count: 1,
+      company_invoice_rows: companyInvoiceRows.length || 0,
+      top_companies: topCompanies.length,
+      source,
+    })
+
+    return (
+      <TableCard title="Top companies by outstanding balance" description="Largest unpaid company balances this month.">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-xs text-muted-foreground">
+              <th className="py-2 font-medium">Company</th>
+              <th className="py-2 font-medium text-right">Outstanding (Le)</th>
+              <th className="py-2 font-medium text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topCompanies.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="py-4 text-center text-xs text-muted-foreground">
+                  No outstanding company balances for this period.
+                </td>
+              </tr>
+            ) : (
+              topCompanies.map(([companyId, entry]) => (
+                <tr key={companyId} className="border-b last:border-0">
+                  <td className="py-2 text-sm">{entry.name}</td>
+                  <td className="py-2 text-right text-sm">{entry.outstanding.toLocaleString()}</td>
+                  <td className="py-2 text-right text-xs">
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/dashboard/billing?company_id=${companyId}`}>Open company billing view</Link>
+                    </Button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </TableCard>
+    )
+  } catch (error) {
+    sectionPerf.fail(error, { query_count: 1 })
+    throw error
+  }
 }
 
 async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; toParam: string }) {
   const sectionPerf = startPageRenderTimer("dashboard.reports.fhc", { slowThresholdMs: 1200 })
   const supabase = await createServerClient()
-  const startOfMonthIso = `${fromParam}T00:00:00.000Z`
+  const startOfRangeIso = `${fromParam}T00:00:00.000Z`
+  const endOfRangeIso = `${toParam}T23:59:59.999Z`
 
   try {
-    const [{ data: fhcItems }, { data: fhcRadiology }, { data: fhcLab }, { data: fhcAdmissions }, { data: fhcSurgeries }, { data: fhcNursingNotes }] =
-      await Promise.all([
-        supabase
-          .from("invoice_items")
-          .select(
-            `quantity, unit_price, item_type,
-             invoices(created_at, visit_id,
-               visits(is_free_health_care, facility_id,
-                 facilities(name, code)
-               )
-             )`,
-          )
-          .gte("invoices.created_at", startOfMonthIso)
-          .limit(MAX_FHC_ANALYTICS_ROWS),
-        supabase
-          .from("radiology_requests")
-          .select(
-            `id, status,
-             visits(is_free_health_care, facility_id,
-               facilities(name)
-             )`,
-          )
-          .gte("created_at", startOfMonthIso)
-          .order("created_at", { ascending: false })
-          .limit(MAX_FHC_ANALYTICS_ROWS),
-        supabase
-          .from("lab_tests")
-          .select(
-            `id, status,
-             visits(is_free_health_care, facility_id,
-               facilities(name)
-             )`,
-          )
-          .gte("created_at", startOfMonthIso)
-          .order("created_at", { ascending: false })
-          .limit(MAX_FHC_ANALYTICS_ROWS),
-        supabase
-          .from("admissions")
-          .select(
-            `id, admission_date, status,
-             visits(is_free_health_care, facility_id,
-               facilities(name, code)
-             )`,
-          )
-          .gte("admission_date", startOfMonthIso)
-          .order("admission_date", { ascending: false })
-          .limit(MAX_FHC_ANALYTICS_ROWS),
-        supabase
-          .from("surgeries")
-          .select(
-            `id, status,
-             visits(is_free_health_care, facility_id,
-               facilities(name, code)
-             )`,
-          )
-          .gte("scheduled_at", startOfMonthIso)
-          .order("scheduled_at", { ascending: false })
-          .limit(MAX_FHC_ANALYTICS_ROWS),
-        supabase
-          .from("visit_nursing_notes")
-          .select(
-            `id, visit_id,
-             visits(is_free_health_care, facility_id,
-               facilities(name, code)
-             )`,
-          )
-          .gte("performed_at", startOfMonthIso)
-          .order("performed_at", { ascending: false })
-          .limit(MAX_FHC_ANALYTICS_ROWS),
-      ])
-
-    let fhcEconomicCost = 0
-    const fhcCostByFacility = new Map<string, { name: string; code: string | null; amount: number }>()
-    for (const row of fhcItems || []) {
-      const inv = (row.invoices || null) as { visits?: FhcVisitsRef } | null
-      const visits = inv?.visits || null
-      if (!visits?.is_free_health_care) continue
-      if ((row.item_type || "billable") !== "fhc_covered") continue
-      const amount = Number(row.quantity ?? 0) * Number(row.unit_price ?? 0)
-      if (!Number.isFinite(amount)) continue
-      fhcEconomicCost += amount
-      const facilityId = visits.facility_id ?? "(none)"
-      const facilityName = visits.facilities?.name ?? "Unknown facility"
-      const facilityCode = visits.facilities?.code ?? null
-      const existing = fhcCostByFacility.get(facilityId) || { name: facilityName, code: facilityCode, amount: 0 }
-      existing.amount += amount
-      fhcCostByFacility.set(facilityId, existing)
-    }
-
-    const fhcCarePathByFacility = new Map<string, { name: string; code: string | null; admissions: number; surgeries: number; nursingNotes: number }>()
-    for (const row of fhcAdmissions || []) upsertCarePath(fhcCarePathByFacility, (row.visits || null) as FhcVisitsRef, "admissions")
-    for (const row of fhcSurgeries || []) upsertCarePath(fhcCarePathByFacility, (row.visits || null) as FhcVisitsRef, "surgeries")
-    for (const row of fhcNursingNotes || []) upsertCarePath(fhcCarePathByFacility, (row.visits || null) as FhcVisitsRef, "nursingNotes")
-
-    const fhcSurgeriesByFacility = new Map<string, { name: string; code: string | null; count: number; completedCount: number }>()
-    for (const row of fhcSurgeries || []) {
-      const visits = (row.visits || null) as FhcVisitsRef
-      if (!visits?.is_free_health_care) continue
-      const facilityId = visits.facility_id ?? "(none)"
-      const facilityName = visits.facilities?.name ?? "Unknown facility"
-      const facilityCode = visits.facilities?.code ?? null
-      const existing = fhcSurgeriesByFacility.get(facilityId) || { name: facilityName, code: facilityCode, count: 0, completedCount: 0 }
-      existing.count += 1
-      if ((row.status || "").toLowerCase() === "completed") existing.completedCount += 1
-      fhcSurgeriesByFacility.set(facilityId, existing)
-    }
-
-    const fhcRadiologyByFacility = new Map<string, { name: string; count: number }>()
-    for (const row of fhcRadiology || []) {
-      const visits = (row.visits || null) as { is_free_health_care?: boolean | null; facility_id?: string | null; facilities?: { name?: string | null } | null } | null
-      if (!visits?.is_free_health_care) continue
-      const facilityId = visits.facility_id ?? "(none)"
-      const facilityName = visits.facilities?.name ?? "Unknown facility"
-      const existing = fhcRadiologyByFacility.get(facilityId) || { name: facilityName, count: 0 }
-      existing.count += 1
-      fhcRadiologyByFacility.set(facilityId, existing)
-    }
-
-    const fhcLabByFacility = new Map<string, { name: string; count: number }>()
-    for (const row of fhcLab || []) {
-      const visits = (row.visits || null) as { is_free_health_care?: boolean | null; facility_id?: string | null; facilities?: { name?: string | null } | null } | null
-      if (!visits?.is_free_health_care) continue
-      const facilityId = visits.facility_id ?? "(none)"
-      const facilityName = visits.facilities?.name ?? "Unknown facility"
-      const existing = fhcLabByFacility.get(facilityId) || { name: facilityName, count: 0 }
-      existing.count += 1
-      fhcLabByFacility.set(facilityId, existing)
-    }
-
-    const fhcAdmissionsByFacility = new Map<string, { name: string; code: string | null; count: number; admittedCount: number; dischargedCount: number }>()
-    for (const row of fhcAdmissions || []) {
-      const visits = (row.visits || null) as FhcVisitsRef
-      if (!visits?.is_free_health_care) continue
-      const facilityId = visits.facility_id ?? "(none)"
-      const facilityName = visits.facilities?.name ?? "Unknown facility"
-      const facilityCode = visits.facilities?.code ?? null
-      const existing =
-        fhcAdmissionsByFacility.get(facilityId) || { name: facilityName, code: facilityCode, count: 0, admittedCount: 0, dischargedCount: 0 }
-      existing.count += 1
-      const status = (row.status || "").toLowerCase()
-      if (status === "admitted") existing.admittedCount += 1
-      if (status === "discharged") existing.dischargedCount += 1
-      fhcAdmissionsByFacility.set(facilityId, existing)
-    }
-
-    const monthlyDataTruncated =
-      (fhcItems?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
-      (fhcRadiology?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
-      (fhcLab?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
-      (fhcAdmissions?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
-      (fhcSurgeries?.length || 0) >= MAX_FHC_ANALYTICS_ROWS ||
-      (fhcNursingNotes?.length || 0) >= MAX_FHC_ANALYTICS_ROWS
+    const {
+      economicCostTotal,
+      costByFacility,
+      carePathByFacility,
+      radiologyByFacility,
+      labByFacility,
+      admissionsByFacility,
+      monthlyDataTruncated,
+      rowCount,
+      source,
+    } = await fetchFhcAnalytics(supabase, startOfRangeIso, endOfRangeIso)
 
     sectionPerf.done({
-      query_count: 6,
-      fhc_rows:
-        (fhcItems?.length || 0) +
-        (fhcRadiology?.length || 0) +
-        (fhcLab?.length || 0) +
-        (fhcAdmissions?.length || 0) +
-        (fhcSurgeries?.length || 0) +
-        (fhcNursingNotes?.length || 0),
+      query_count: source === "rpc" ? 1 : 6,
+      fhc_rows: rowCount,
       monthly_data_truncated: monthlyDataTruncated,
+      source,
     })
 
     return (
@@ -242,7 +166,7 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
 
         <StatCard
           title="FHC economic cost (month)"
-          value={`Le ${fhcEconomicCost.toLocaleString()}`}
+          value={`Le ${economicCostTotal.toLocaleString()}`}
           description="Economic value of FHC-covered items this month"
           icon={<FileText className="h-4 w-4 text-muted-foreground" />}
         />
@@ -256,13 +180,13 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
               </tr>
             </thead>
             <tbody>
-              {fhcCostByFacility.size === 0 ? (
+              {costByFacility.length === 0 ? (
                 <tr>
                   <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No FHC-covered items recorded this month.</td>
                 </tr>
               ) : (
-                Array.from(fhcCostByFacility.entries()).map(([id, entry]) => (
-                  <tr key={id} className="border-b last:border-0">
+                costByFacility.map((entry) => (
+                  <tr key={entry.facilityId} className="border-b last:border-0">
                     <td className="py-2 text-sm">
                       {entry.code ? (
                         <Link href={`/dashboard/reports/free-health-care?facility=${encodeURIComponent(entry.code)}`} className="underline-offset-2 hover:underline">
@@ -296,13 +220,13 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
               </tr>
             </thead>
             <tbody>
-              {fhcCarePathByFacility.size === 0 ? (
+              {carePathByFacility.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="py-4 text-center text-xs text-muted-foreground">No FHC care-path activity recorded this month.</td>
                 </tr>
               ) : (
-                Array.from(fhcCarePathByFacility.entries()).map(([id, entry]) => (
-                  <tr key={id} className="border-b last:border-0">
+                carePathByFacility.map((entry) => (
+                  <tr key={entry.facilityId} className="border-b last:border-0">
                     <td className="py-2 text-sm">{entry.name}</td>
                     <td className="py-2 text-right text-sm">{entry.admissions}</td>
                     <td className="py-2 text-right text-sm">{entry.surgeries}</td>
@@ -324,13 +248,13 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
                 </tr>
               </thead>
               <tbody>
-                {fhcRadiologyByFacility.size === 0 ? (
+                {radiologyByFacility.length === 0 ? (
                   <tr>
                     <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No FHC radiology requests recorded this month.</td>
                   </tr>
                 ) : (
-                  Array.from(fhcRadiologyByFacility.entries()).map(([id, entry]) => (
-                    <tr key={id} className="border-b last:border-0">
+                  radiologyByFacility.map((entry) => (
+                    <tr key={entry.facilityId} className="border-b last:border-0">
                       <td className="py-2 text-sm">{entry.name}</td>
                       <td className="py-2 text-right text-sm">{entry.count}</td>
                     </tr>
@@ -349,13 +273,13 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
                 </tr>
               </thead>
               <tbody>
-                {fhcLabByFacility.size === 0 ? (
+                {labByFacility.length === 0 ? (
                   <tr>
                     <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No FHC lab tests recorded this month.</td>
                   </tr>
                 ) : (
-                  Array.from(fhcLabByFacility.entries()).map(([id, entry]) => (
-                    <tr key={id} className="border-b last:border-0">
+                  labByFacility.map((entry) => (
+                    <tr key={entry.facilityId} className="border-b last:border-0">
                       <td className="py-2 text-sm">{entry.name}</td>
                       <td className="py-2 text-right text-sm">{entry.count}</td>
                     </tr>
@@ -377,13 +301,13 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
               </tr>
             </thead>
             <tbody>
-              {fhcAdmissionsByFacility.size === 0 ? (
+              {admissionsByFacility.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="py-4 text-center text-xs text-muted-foreground">No FHC-linked admissions recorded this month.</td>
                 </tr>
               ) : (
-                Array.from(fhcAdmissionsByFacility.entries()).map(([id, entry]) => (
-                  <tr key={id} className="border-b last:border-0">
+                admissionsByFacility.map((entry) => (
+                  <tr key={entry.facilityId} className="border-b last:border-0">
                     <td className="py-2 text-sm">{entry.name}</td>
                     <td className="py-2 text-right text-sm">{entry.count}</td>
                     <td className="py-2 text-right text-sm">{entry.admittedCount}</td>
@@ -397,14 +321,13 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
       </div>
     )
   } catch (error) {
-    sectionPerf.fail(error, { query_count: 6 })
+    sectionPerf.fail(error, { query_count: 1 })
     throw error
   }
 }
 
-export default async function ReportsPage() {
+export default async function ReportsPage(props: { searchParams?: Promise<{ from?: string; to?: string }> }) {
   const pagePerf = startPageRenderTimer("dashboard.reports")
-  const supabase = await createServerClient()
 
   try {
     const { user, profile } = await getSessionUserAndProfile()
@@ -415,56 +338,25 @@ export default async function ReportsPage() {
       redirect("/dashboard")
     }
 
-    const startOfMonth = new Date()
-    startOfMonth.setDate(1)
-    startOfMonth.setHours(0, 0, 0, 0)
-    const thirtyDaysAgo = new Date()
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-    thirtyDaysAgo.setHours(0, 0, 0, 0)
-
-    const [{ data: invoices }, newPatientsCount, completedVisitsCount, pendingLabTestsCount] = await Promise.all([
-      supabase
-        .from("invoices")
-        .select("total_amount, paid_amount, payment_date, created_at, payer_type, company_id, companies(name)")
-        .gte("created_at", startOfMonth.toISOString())
-        .order("created_at", { ascending: false })
-        .limit(MAX_MONTHLY_INVOICE_ROWS),
-      supabase.from("patients").select("id", { count: "exact", head: true }).gte("created_at", thirtyDaysAgo.toISOString()),
-      supabase.from("visits").select("id", { count: "exact", head: true }).gte("created_at", thirtyDaysAgo.toISOString()).eq("visit_status", "completed"),
-      supabase.from("lab_tests").select("id", { count: "exact", head: true }).eq("status", "pending"),
-    ])
-
     const now = new Date()
-    const fromParam = startOfMonth.toISOString().slice(0, 10)
-    const toParam = now.toISOString().slice(0, 10)
+    const defaultStart = new Date()
+    defaultStart.setDate(1)
+    defaultStart.setHours(0, 0, 0, 0)
+    const searchParams = props.searchParams ? await props.searchParams : undefined
+    const fromDate = parseReportDate(searchParams?.from, defaultStart)
+    const toBaseDate = parseReportDate(searchParams?.to, now)
+    const toDate = new Date(toBaseDate)
+    toDate.setHours(23, 59, 59, 999)
+    const fromParam = fromDate.toISOString().slice(0, 10)
+    const toParam = toDate.toISOString().slice(0, 10)
+    const fromIso = fromDate.toISOString()
+    const toIso = toDate.toISOString()
 
-    let monthlyRevenue = 0
-    const companyOutstandingMap = new Map<string, { name: string; outstanding: number }>()
-    for (const row of (invoices || []) as InvoiceRow[]) {
-      const total = Number(row.total_amount ?? 0)
-      const paid = Number(row.paid_amount ?? 0)
-      const paymentDate = row.payment_date ? new Date(row.payment_date) : null
-      if (paymentDate && paymentDate >= startOfMonth && paymentDate <= now) {
-        monthlyRevenue += paid
-      }
-      const payerType = (row.payer_type ?? "patient").toLowerCase()
-      const companyId = row.company_id ?? null
-      if (payerType === "company" && companyId) {
-        const outstanding = Math.max(total - paid, 0)
-        if (outstanding > 0) {
-          const existing = companyOutstandingMap.get(companyId) || { name: row.companies?.name || "Unknown company", outstanding: 0 }
-          existing.outstanding += outstanding
-          companyOutstandingMap.set(companyId, existing)
-        }
-      }
-    }
-
-    const topCompanies = Array.from(companyOutstandingMap.entries()).sort((a, b) => b[1].outstanding - a[1].outstanding).slice(0, 5)
     pagePerf.done({
-      query_count: 4,
-      invoice_rows: invoices?.length || 0,
-      new_patients: newPatientsCount.count || 0,
-      completed_visits: completedVisitsCount.count || 0,
+      query_count: 0,
+      streamed_sections: 3,
+      from: fromParam,
+      to: toParam,
     })
 
     return (
@@ -474,45 +366,52 @@ export default async function ReportsPage() {
           <p className="text-muted-foreground">High-level analytics across patients, billing, and clinical activity.</p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Monthly Revenue" value={`Le ${monthlyRevenue.toLocaleString()}`} description="Total revenue this month" icon={<FileText className="h-4 w-4 text-muted-foreground" />} />
-          <StatCard title="New Patients (30d)" value={newPatientsCount.count ?? 0} description="Recently registered patients" icon={<Users className="h-4 w-4 text-muted-foreground" />} />
-          <StatCard title="Completed Visits (30d)" value={completedVisitsCount.count ?? 0} description="Finished appointments" icon={<Activity className="h-4 w-4 text-muted-foreground" />} />
-          <StatCard title="Pending Lab Tests" value={pendingLabTestsCount.count ?? 0} description="Awaiting results" icon={<CalendarRange className="h-4 w-4 text-muted-foreground" />} />
-        </div>
+        <form method="GET" className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-4 text-sm">
+          <div className="space-y-1">
+            <label htmlFor="from" className="text-xs font-medium text-muted-foreground">
+              From
+            </label>
+            <input
+              id="from"
+              name="from"
+              type="date"
+              defaultValue={fromParam}
+              className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="to" className="text-xs font-medium text-muted-foreground">
+              To
+            </label>
+            <input
+              id="to"
+              name="to"
+              type="date"
+              defaultValue={toParam}
+              className="h-9 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="submit" size="sm">
+              Apply range
+            </Button>
+            <Button asChild type="button" size="sm" variant="outline">
+              <Link href="/dashboard/reports">Reset</Link>
+            </Button>
+          </div>
+        </form>
+
+        <Suspense fallback={<ReportSummaryFallback />}>
+          <ReportsSummarySection fromIso={fromIso} toIso={toIso} fromParam={fromParam} toParam={toParam} />
+        </Suspense>
+
+        <Suspense fallback={<TopCompaniesFallback />}>
+          <TopCompaniesSection fromIso={fromIso} toIso={toIso} />
+        </Suspense>
 
         <Suspense fallback={<FhcSectionFallback />}>
           <FhcAnalyticsSection fromParam={fromParam} toParam={toParam} />
         </Suspense>
-
-        <TableCard title="Top companies by outstanding balance" description="Largest unpaid company balances this month.">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="py-2 font-medium">Company</th>
-                <th className="py-2 font-medium text-right">Outstanding (Le)</th>
-                <th className="py-2 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topCompanies.length === 0 ? (
-                <tr><td colSpan={3} className="py-4 text-center text-xs text-muted-foreground">No outstanding company balances for this period.</td></tr>
-              ) : (
-                topCompanies.map(([companyId, entry]) => (
-                  <tr key={companyId} className="border-b last:border-0">
-                    <td className="py-2 text-sm">{entry.name}</td>
-                    <td className="py-2 text-right text-sm">{entry.outstanding.toLocaleString()}</td>
-                    <td className="py-2 text-right text-xs">
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/dashboard/billing?company_id=${companyId}`}>View invoices</Link>
-                      </Button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </TableCard>
 
         <div className="flex flex-col gap-3 md:flex-row">
           <div className="flex flex-1 items-center justify-between rounded-lg border bg-card p-4">
@@ -538,7 +437,7 @@ export default async function ReportsPage() {
       </div>
     )
   } catch (error) {
-    pagePerf.fail(error, { query_count: 4 })
+    pagePerf.fail(error, { query_count: 0 })
     throw error
   }
 }

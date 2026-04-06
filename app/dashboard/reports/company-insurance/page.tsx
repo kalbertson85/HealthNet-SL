@@ -5,6 +5,7 @@ import { can } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
+import { ReportFilterSummary } from "@/components/report-filter-summary"
 
 interface CompanyInsuranceReportsPageProps {
   searchParams: Promise<{ company_id?: string; status?: string; page?: string }>
@@ -207,6 +208,13 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
         </div>
       </form>
 
+      <ReportFilterSummary
+        items={[
+          { label: "Company", value: (companies || []).find((company) => company.id === selectedCompanyId)?.name || selectedCompanyId },
+          { label: "Insurance status", value: statusFilter !== "all" ? statusFilter : null },
+        ]}
+      />
+
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader>
@@ -287,7 +295,7 @@ export default async function CompanyInsuranceReportsPage({ searchParams }: Comp
                             <Link href={`/dashboard/settings/companies/${id}/employees`}>Employees</Link>
                           </Button>
                           <Button asChild size="sm" variant="ghost">
-                            <Link href={`/dashboard/billing?company_id=${id}`}>Billing</Link>
+                            <Link href={`/dashboard/billing?company_id=${id}`}>Open invoices</Link>
                           </Button>
                         </div>
                       </td>

@@ -116,6 +116,15 @@ export async function POST(request: NextRequest) {
       .eq("id", patientId)
 
     if (error) {
+      if (String(error.message || "").includes("patients.photo_url")) {
+        logApiRequestComplete(request, "api.patients.photo.upload", logCtx, 503)
+        return apiError(
+          503,
+          "patient_photo_schema_missing",
+          "Patient photo support is not enabled yet. Apply scripts/016_add_patient_fields.sql first.",
+          request,
+        )
+      }
       console.error("[v0] Error updating patient photo_url", { requestId, error })
       logApiRequestFailure(request, "api.patients.photo.upload", logCtx, 500, error)
       return apiError(500, "patient_photo_update_failed", "Failed to update patient photo", request)

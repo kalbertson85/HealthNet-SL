@@ -101,7 +101,7 @@ export default async function CompaniesSettingsPage() {
             </Link>
           </Button>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Company Billing</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Company Billing Profiles</h1>
             <p className="text-muted-foreground">
               Manage corporate clients that can be set as payers on patient invoices.
             </p>
@@ -157,7 +157,7 @@ export default async function CompaniesSettingsPage() {
                   </Button>
                   <Button asChild size="sm" variant="outline">
                     <Link href={`/dashboard/reports/company-insurance?company_id=${company.id}`}>
-                      Insurance dashboard
+                      Insurance coverage
                     </Link>
                   </Button>
                   <Button asChild size="sm" variant="outline">
@@ -285,4 +285,3 @@ export default async function CompaniesSettingsPage() {
     </div>
   )
 }
-

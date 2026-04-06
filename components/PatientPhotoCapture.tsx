@@ -9,14 +9,23 @@ interface PatientPhotoCaptureProps {
   patientId: string
   initialPhotoUrl?: string | null
   className?: string
+  disabled?: boolean
+  disabledMessage?: string
 }
 
-export function PatientPhotoCapture({ patientId, initialPhotoUrl, className }: PatientPhotoCaptureProps) {
+export function PatientPhotoCapture({
+  patientId,
+  initialPhotoUrl,
+  className,
+  disabled = false,
+  disabledMessage,
+}: PatientPhotoCaptureProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(initialPhotoUrl ?? null)
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
   const handleFileChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
+    if (disabled) return
     const file = event.target.files?.[0]
     if (!file) return
 
@@ -67,6 +76,7 @@ export function PatientPhotoCapture({ patientId, initialPhotoUrl, className }: P
         <div className="space-y-1 text-xs text-muted-foreground">
           <p className="font-medium text-foreground">Patient photo</p>
           <p>Used on patient profile and printed documents.</p>
+          {disabled && disabledMessage ? <p className="text-[11px] text-amber-700">{disabledMessage}</p> : null}
           <div className="flex items-center gap-2">
             <Input
               type="file"
@@ -74,7 +84,7 @@ export function PatientPhotoCapture({ patientId, initialPhotoUrl, className }: P
               capture="environment"
               onChange={handleFileChange}
               className="max-w-[220px] cursor-pointer text-xs"
-              disabled={isPending}
+              disabled={isPending || disabled}
             />
             {isPending && (
               <span className="text-[11px] text-muted-foreground">Uploading...</span>

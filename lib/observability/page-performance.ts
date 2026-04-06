@@ -28,6 +28,7 @@ function isNextControlFlowError(error: unknown): boolean {
 export function startPageRenderTimer(page: string, options: PagePerfOptions = {}): PagePerfTimer {
   const startedAt = Date.now()
   const slowThresholdMs = options.slowThresholdMs ?? 1200
+  const emitInfoLogs = process.env.PAGE_PERF_DEBUG === "true"
 
   return {
     done(meta = {}) {
@@ -44,7 +45,7 @@ export function startPageRenderTimer(page: string, options: PagePerfOptions = {}
             message: `Slow render: ${page}`,
           })
         }
-      } else {
+      } else if (emitInfoLogs) {
         console.info("[page]", payload)
       }
     },

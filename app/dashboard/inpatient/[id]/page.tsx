@@ -7,6 +7,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { AlertCircle } from "lucide-react"
 import { assertVisitTransition, type VisitStatus } from "@/lib/visits"
+import { FormHelpTip } from "@/components/form-help-tip"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import Link from "next/link"
+import { Button } from "@/components/ui/button"
 
 interface Vital {
   id: string
@@ -39,6 +43,7 @@ interface AdmissionDetailRow {
   discharge_instructions: string | null
   emergency_admission: boolean | null
   status: string
+  patient_id: string | null
   bed_id: string | null
   ward_id: string | null
   visit_id: string | null
@@ -127,7 +132,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
     .select(`
       id, admission_number, admission_date, admission_reason, diagnosis, treatment_plan,
       discharge_date, discharge_summary, discharge_instructions,
-      emergency_admission, status, bed_id, ward_id, visit_id,
+      emergency_admission, status, patient_id, bed_id, ward_id, visit_id,
       patients(full_name, patient_number, phone_number),
       wards(name, ward_number),
       beds(bed_number, bed_type),
@@ -461,9 +466,15 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
 
           {admissionRow.status === "admitted" && (
             <form action={addNursingNote} className="space-y-3 pt-2 border-t mt-2">
+              <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                Add concise notes for observations, interventions, pain changes, or handover points. This keeps the ward team aligned without opening a separate workflow.
+              </div>
               <div className="grid gap-3 md:grid-cols-3 items-end">
                 <div className="space-y-2 md:col-span-1">
-                  <Label htmlFor="note_type">Note Type</Label>
+                  <div className="flex items-center gap-1">
+                    <Label htmlFor="note_type">Note Type</Label>
+                    <FormHelpTip text="Choose a type only when it adds meaning for review. Routine is fine for standard bedside updates." />
+                  </div>
                   <select
                     id="note_type"
                     name="note_type"
@@ -479,7 +490,10 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
                   </select>
                 </div>
                 <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="note">Add Note *</Label>
+                  <div className="flex items-center gap-1">
+                    <Label htmlFor="note">Add Note *</Label>
+                    <FormHelpTip text="Record the change, intervention, and outcome clearly enough that the next nurse or doctor can continue care immediately." />
+                  </div>
                   <Textarea
                     id="note"
                     name="note"
@@ -504,11 +518,15 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
         <Card>
           <CardHeader>
             <CardTitle>Discharge Patient</CardTitle>
+            <CardDescription>Complete both fields before discharging so follow-up care and documentation remain usable.</CardDescription>
           </CardHeader>
           <CardContent>
             <form action={discharge} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="discharge_summary">Discharge Summary *</Label>
+                <div className="flex items-center gap-1">
+                  <Label htmlFor="discharge_summary">Discharge Summary *</Label>
+                  <FormHelpTip text="Summarize admission reason, key treatment, condition at discharge, and any unresolved issues." />
+                </div>
                 <Textarea
                   id="discharge_summary"
                   name="discharge_summary"
@@ -519,7 +537,10 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="discharge_instructions">Discharge Instructions *</Label>
+                <div className="flex items-center gap-1">
+                  <Label htmlFor="discharge_instructions">Discharge Instructions *</Label>
+                  <FormHelpTip text="Include medicines, warning signs, wound care, review dates, and where the patient should return if symptoms worsen." />
+                </div>
                 <Textarea
                   id="discharge_instructions"
                   name="discharge_instructions"
@@ -561,9 +582,33 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
               <p className="text-sm font-medium text-muted-foreground">Discharge Instructions</p>
               <p className="whitespace-pre-wrap">{admissionRow.discharge_instructions}</p>
             </div>
+            {admissionRow.patient_id ? (
+              <div className="pt-2">
+                <Button asChild size="sm" variant="outline">
+                  <Link
+                    href={`/dashboard/appointments/new?patient_id=${admissionRow.patient_id}&source=inpatient_discharge&reason=${encodeURIComponent("Post-discharge follow-up")}&visit_id=${admissionRow.visit_id || ""}&admission_id=${admissionRow.id}`}
+                  >
+                    Book follow-up appointment
+                  </Link>
+                </Button>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       )}
+
+      <PatientWorkflowPanel
+        currentStage={admissionRow.status === "discharged" ? "discharge" : "extended-care"}
+        patientId={admissionRow.patient_id}
+        visitId={admissionRow.visit_id}
+        admissionId={admissionRow.id}
+        title={admissionRow.status === "discharged" ? "Discharge and follow-up" : "Extended care workflow"}
+        description={
+          admissionRow.status === "discharged"
+            ? "Discharge closes the admission, but the patient journey should continue with follow-up booking and records access."
+            : "Inpatient, surgery, and nursing modules should all feed toward discharge documentation and follow-up planning."
+        }
+      />
     </div>
   )
 }

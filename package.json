@@ -93,7 +93,7 @@
   },
   "pnpm": {
     "overrides": {
-      "baseline-browser-mapping": "2.10.15"
+      "baseline-browser-mapping": "2.10.16"
     }
   }
 }

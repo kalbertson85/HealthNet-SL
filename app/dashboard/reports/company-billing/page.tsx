@@ -8,6 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
 import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency, formatDate as formatLocalizedDate } from "@/lib/locale-format"
+import { logAuditEvent } from "@/lib/audit"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface CompanyBillingReportsPageProps {
   searchParams: Promise<{ company_id?: string; from?: string; to?: string; status?: string; page?: string }>
@@ -61,6 +66,7 @@ function parseReportDate(value: string | null, fallback: Date) {
 
 export default async function CompanyBillingReportsPage({ searchParams }: CompanyBillingReportsPageProps) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -96,33 +102,44 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   async function backfillCompanyCoverage(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user, profile } = await getSessionUserAndProfile()
+    const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+    const parsed = z
+      .object({
+        company_id: z.string().uuid(),
+        patient_id: z.string().uuid(),
+        linkage_type: z.enum(["employee", "dependent"]),
+        principal_employee_id: z.string().uuid().optional(),
+        dependent_relationship: z.string().trim().max(100).optional(),
+        from: z.string().trim().max(50).optional(),
+        to: z.string().trim().max(50).optional(),
+        status: z.string().trim().max(50).optional(),
+      })
+      .safeParse({
+        company_id: formData.get("company_id"),
+        patient_id: formData.get("patient_id"),
+        linkage_type: formData.get("linkage_type"),
+        principal_employee_id: formData.get("principal_employee_id") || undefined,
+        dependent_relationship: formData.get("dependent_relationship"),
+        from: formData.get("from"),
+        to: formData.get("to"),
+        status: formData.get("status"),
+      })
 
-    const rbacUser = { id: user?.id ?? "", role: (profile as { role?: string | null } | null)?.role ?? user?.role ?? null }
-    if (!user) {
-      redirect("/auth/login")
-    }
-    if (!can(rbacUser, "admin.settings.manage") && !can(rbacUser, "admin.export")) {
-      redirect("/dashboard")
-    }
-
-    const companyId = ((formData.get("company_id") as string | null) || "").trim()
-    const patientId = ((formData.get("patient_id") as string | null) || "").trim()
-    const linkageType = ((formData.get("linkage_type") as string | null) || "").trim()
-    const principalEmployeeId = ((formData.get("principal_employee_id") as string | null) || "").trim() || null
-    const dependentRelationship = ((formData.get("dependent_relationship") as string | null) || "").trim() || null
-    const from = ((formData.get("from") as string | null) || "").trim()
-    const to = ((formData.get("to") as string | null) || "").trim()
-    const status = ((formData.get("status") as string | null) || "").trim()
-
-    if (!companyId || !patientId || !["employee", "dependent"].includes(linkageType)) {
+    if (!parsed.success) {
       redirect("/dashboard/reports/company-billing")
     }
+    const companyId = parsed.data.company_id
+    const patientId = parsed.data.patient_id
+    const linkageType = parsed.data.linkage_type
+    const principalEmployeeId = parsed.data.principal_employee_id || null
+    const dependentRelationship = parsed.data.dependent_relationship || null
+    const from = parsed.data.from || ""
+    const to = parsed.data.to || ""
+    const status = parsed.data.status || ""
 
     const { data: patient } = await supabase
       .from("patients")
-      .select("id, full_name, phone_number, insurance_card_number, insurance_expiry_date, insurance_card_serial, insurance_mobile")
+      .select("id, full_name, phone_number, company_id, insurance_type, employee_id, insurance_card_number, insurance_expiry_date, insurance_card_serial, insurance_mobile")
       .eq("id", patientId)
       .maybeSingle()
 
@@ -136,10 +153,64 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         : "expired"
       : "missing"
 
-    await supabase.from("employee_dependents").delete().eq("patient_id", patientId)
+    const { data: originalEmployee } = await supabase
+      .from("company_employees")
+      .select(
+        "id, company_id, patient_id, full_name, phone, insurance_card_number, insurance_card_serial, insurance_expiry_date, status",
+      )
+      .eq("patient_id", patientId)
+      .maybeSingle()
+    const { data: originalDependentRows } = await supabase
+      .from("employee_dependents")
+      .select(
+        "id, employee_id, patient_id, full_name, relationship, insurance_card_number, insurance_card_serial, insurance_expiry_date, status",
+      )
+      .eq("patient_id", patientId)
+
+    const rollbackLinkage = async () => {
+      await supabase
+        .from("patients")
+        .update({
+          company_id: patient.company_id ?? null,
+          insurance_type: patient.insurance_type ?? null,
+          employee_id: patient.employee_id ?? null,
+        })
+        .eq("id", patientId)
+
+      await supabase.from("employee_dependents").delete().eq("patient_id", patientId)
+      if ((originalDependentRows || []).length > 0) {
+        await supabase.from("employee_dependents").upsert(originalDependentRows || [], { onConflict: "patient_id" })
+      }
+
+      if (originalEmployee?.id) {
+        await supabase
+          .from("company_employees")
+          .upsert(
+            {
+              id: originalEmployee.id,
+              company_id: originalEmployee.company_id,
+              patient_id: originalEmployee.patient_id,
+              full_name: originalEmployee.full_name,
+              phone: originalEmployee.phone,
+              insurance_card_number: originalEmployee.insurance_card_number,
+              insurance_card_serial: originalEmployee.insurance_card_serial,
+              insurance_expiry_date: originalEmployee.insurance_expiry_date,
+              status: originalEmployee.status,
+            },
+            { onConflict: "patient_id" },
+          )
+      } else {
+        await supabase.from("company_employees").delete().eq("patient_id", patientId)
+      }
+    }
+
+    const { error: clearDependentsError } = await supabase.from("employee_dependents").delete().eq("patient_id", patientId)
+    if (clearDependentsError) {
+      redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+    }
 
     if (linkageType === "employee") {
-      const { data: employeeRow } = await supabase
+      const { data: employeeRow, error: employeeUpsertError } = await supabase
         .from("company_employees")
         .upsert(
           {
@@ -155,8 +226,12 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         )
         .select("id")
         .maybeSingle()
+      if (employeeUpsertError) {
+        await rollbackLinkage()
+        redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+      }
 
-      await supabase
+      const { error: patientUpdateError } = await supabase
         .from("patients")
         .update({
           company_id: companyId,
@@ -164,6 +239,33 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           employee_id: employeeRow?.id ?? null,
         })
         .eq("id", patientId)
+      if (patientUpdateError) {
+        await rollbackLinkage()
+        redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+      }
+
+      await logAuditEvent({
+        action: "patient.coverage_linked",
+        entityType: "patient",
+        entityId: patientId,
+        user,
+        metadata: {
+          patient_id: patientId,
+          company_id: companyId,
+          linkage_type: "employee",
+          source: "company_billing_audit",
+        },
+        before: {
+          company_id: patient.company_id as string | null,
+          insurance_type: patient.insurance_type as string | null,
+          employee_id: patient.employee_id as string | null,
+        },
+        after: {
+          company_id: companyId,
+          insurance_type: "employee",
+          employee_id: employeeRow?.id ?? null,
+        },
+      })
     } else {
       if (!principalEmployeeId) {
         redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
@@ -180,9 +282,13 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
       }
 
-      await supabase.from("company_employees").delete().eq("patient_id", patientId)
+      const { error: employeeDeleteError } = await supabase.from("company_employees").delete().eq("patient_id", patientId)
+      if (employeeDeleteError) {
+        await rollbackLinkage()
+        redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+      }
 
-      await supabase
+      const { error: dependentUpsertError } = await supabase
         .from("employee_dependents")
         .upsert(
           {
@@ -196,8 +302,12 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           },
           { onConflict: "patient_id" },
         )
+      if (dependentUpsertError) {
+        await rollbackLinkage()
+        redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+      }
 
-      await supabase
+      const { error: patientUpdateError } = await supabase
         .from("patients")
         .update({
           company_id: companyId,
@@ -205,6 +315,35 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           employee_id: principalEmployee.id,
         })
         .eq("id", patientId)
+      if (patientUpdateError) {
+        await rollbackLinkage()
+        redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status || "all"}`)
+      }
+
+      await logAuditEvent({
+        action: "patient.coverage_linked",
+        entityType: "patient",
+        entityId: patientId,
+        user,
+        metadata: {
+          patient_id: patientId,
+          company_id: companyId,
+          linkage_type: "dependent",
+          principal_employee_id: principalEmployee.id,
+          dependent_relationship: dependentRelationship || "Dependent",
+          source: "company_billing_audit",
+        },
+        before: {
+          company_id: patient.company_id as string | null,
+          insurance_type: patient.insurance_type as string | null,
+          employee_id: patient.employee_id as string | null,
+        },
+        after: {
+          company_id: companyId,
+          insurance_type: "dependent",
+          employee_id: principalEmployee.id,
+        },
+      })
     }
 
     revalidatePath("/dashboard/reports/company-billing")
@@ -316,14 +455,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     return query ? `?${query}` : ""
   }
 
-  const formatDate = (value: string | null) => {
-    if (!value) return ""
-    try {
-      return new Date(value).toLocaleDateString()
-    } catch {
-      return value
-    }
-  }
+  const formatDate = (value: string | null) => formatLocalizedDate(value, settings, { style: "numeric" })
 
   const employeeRoster = (employeeRosterRaw || []) as EmployeeRosterLite[]
   const unlinkedRows = selectedCompanyId
@@ -496,7 +628,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             <CardDescription>Sum of {totalRows} matching invoice(s) in this period.</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">Le {totalAmount.toLocaleString()}</p>
+            <p className="text-2xl font-bold">{formatCurrency(totalAmount, settings)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -504,7 +636,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             <CardTitle>Total paid</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-emerald-600">Le {totalPaid.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-emerald-600">{formatCurrency(totalPaid, settings)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -512,7 +644,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             <CardTitle>Outstanding balance</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">Le {totalBalance.toLocaleString()}</p>
+            <p className="text-2xl font-bold">{formatCurrency(totalBalance, settings)}</p>
           </CardContent>
         </Card>
       </div>
@@ -571,7 +703,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                         </p>
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        <p>Total billed: Le {row.total.toLocaleString()}</p>
+                        <p>Total billed: {formatCurrency(row.total, settings)}</p>
                         <p>Status: {row.status}</p>
                       </div>
                     </div>
@@ -670,9 +802,9 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                     <th className="px-3 py-2 text-left font-medium">Principal employee</th>
                     <th className="px-3 py-2 text-left font-medium">Visit ID</th>
                     <th className="px-3 py-2 text-left font-medium">Invoice #</th>
-                    <th className="px-3 py-2 text-right font-medium">Total (Le)</th>
-                    <th className="px-3 py-2 text-right font-medium">Paid (Le)</th>
-                    <th className="px-3 py-2 text-right font-medium">Balance (Le)</th>
+                    <th className="px-3 py-2 text-right font-medium">Total</th>
+                    <th className="px-3 py-2 text-right font-medium">Paid</th>
+                    <th className="px-3 py-2 text-right font-medium">Balance</th>
                     <th className="px-3 py-2 text-left font-medium">Status</th>
                   </tr>
                 </thead>
@@ -687,9 +819,9 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                       <td className="px-3 py-2 whitespace-nowrap">{row.principalEmployee}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.visitId || "-"}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.invoiceNumber}</td>
-                      <td className="px-3 py-2 text-right whitespace-nowrap">{row.total.toLocaleString()}</td>
-                      <td className="px-3 py-2 text-right whitespace-nowrap">{row.paid.toLocaleString()}</td>
-                      <td className="px-3 py-2 text-right whitespace-nowrap">{row.balance.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">{formatCurrency(row.total, settings)}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">{formatCurrency(row.paid, settings)}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">{formatCurrency(row.balance, settings)}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{row.status}</td>
                     </tr>
                   ))}

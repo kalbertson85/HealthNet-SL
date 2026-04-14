@@ -7,6 +7,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 export const revalidate = 0
 const WARD_REQUEST_LIST_LIMIT = 100
@@ -45,8 +49,11 @@ interface WardRequestItemQueryRow {
   medications?: WardRequestItemRow["medications"]
 }
 
-export default async function WardRequestsPage() {
+export default async function WardRequestsPage(props: { searchParams?: Promise<{ error?: string }> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
+  const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
+  const errorCode = resolvedSearchParams?.error
 
   const { user, profile } = await getSessionUserAndProfile()
 
@@ -105,33 +112,40 @@ export default async function WardRequestsPage() {
   async function markRequestDispensed(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user, profile } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
-    if (!can(rbacUser, "pharmacy.manage")) {
-      redirect("/dashboard")
-    }
-
-    const requestId = (formData.get("request_id") as string | null) ?? null
-    if (!requestId) {
+    const { supabase } = await requireServerActionPermission("pharmacy.manage")
+    const parsed = z
+      .object({ request_id: z.string().uuid() })
+      .safeParse({ request_id: formData.get("request_id") })
+    if (!parsed.success) {
       redirect("/dashboard/pharmacy/ward-requests")
     }
+    const requestId = parsed.data.request_id
+
+    const { data: currentRequest } = await supabase
+      .from("ward_medication_requests")
+      .select("id, status")
+      .eq("id", requestId)
+      .maybeSingle()
+    const previousStatus = (currentRequest?.status as string | null) ?? null
 
     // Mark header as dispensed
-    await supabase
+    const { error: headerUpdateError } = await supabase
       .from("ward_medication_requests")
       .update({ status: "dispensed" })
       .eq("id", requestId)
+    if (headerUpdateError) {
+      redirect("/dashboard/pharmacy/ward-requests?error=request_update_failed")
+    }
 
     // For any items where quantity_approved is set but quantity_dispensed is null, copy approved -> dispensed
     const { error: syncError } = await supabase.rpc("sync_ward_request_dispensed_quantities", { p_request_id: requestId })
     if (syncError) {
       console.error("[pharmacy] Error syncing ward request quantities:", syncError.message || syncError)
+      await supabase
+        .from("ward_medication_requests")
+        .update({ status: previousStatus || "pending" })
+        .eq("id", requestId)
+      redirect("/dashboard/pharmacy/ward-requests?error=sync_failed")
     }
 
     redirect("/dashboard/pharmacy/ward-requests")
@@ -140,27 +154,24 @@ export default async function WardRequestsPage() {
   async function approveItem(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user, profile } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
-    if (!can(rbacUser, "pharmacy.manage")) {
-      redirect("/dashboard")
-    }
-
-    const itemId = (formData.get("item_id") as string | null) ?? null
-    const qtyRaw = (formData.get("quantity_approved") as string | null) ?? null
-    if (!itemId) {
+    const { supabase, user } = await requireServerActionPermission("pharmacy.manage")
+    const parsed = z
+      .object({
+        item_id: z.string().uuid(),
+        quantity_approved: z.coerce.number().int().min(0).optional(),
+      })
+      .safeParse({
+        item_id: formData.get("item_id"),
+        quantity_approved: formData.get("quantity_approved"),
+      })
+    if (!parsed.success) {
       redirect("/dashboard/pharmacy/ward-requests")
     }
+    const itemId = parsed.data.item_id
 
-    const qty = qtyRaw ? Number.parseInt(qtyRaw, 10) : null
+    const qty = parsed.data.quantity_approved ?? null
 
-    await supabase
+    const { error: itemUpdateError } = await supabase
       .from("ward_medication_request_items")
       .update({
         status: "approved",
@@ -169,6 +180,9 @@ export default async function WardRequestsPage() {
         reviewed_at: new Date().toISOString(),
       })
       .eq("id", itemId)
+    if (itemUpdateError) {
+      redirect("/dashboard/pharmacy/ward-requests?error=item_update_failed")
+    }
 
     redirect("/dashboard/pharmacy/ward-requests")
   }
@@ -176,24 +190,16 @@ export default async function WardRequestsPage() {
   async function rejectItem(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user, profile } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
-    if (!can(rbacUser, "pharmacy.manage")) {
-      redirect("/dashboard")
-    }
-
-    const itemId = (formData.get("item_id") as string | null) ?? null
-    if (!itemId) {
+    const { supabase, user } = await requireServerActionPermission("pharmacy.manage")
+    const parsed = z
+      .object({ item_id: z.string().uuid() })
+      .safeParse({ item_id: formData.get("item_id") })
+    if (!parsed.success) {
       redirect("/dashboard/pharmacy/ward-requests")
     }
+    const itemId = parsed.data.item_id
 
-    await supabase
+    const { error: itemUpdateError } = await supabase
       .from("ward_medication_request_items")
       .update({
         status: "rejected",
@@ -202,6 +208,9 @@ export default async function WardRequestsPage() {
         reviewed_at: new Date().toISOString(),
       })
       .eq("id", itemId)
+    if (itemUpdateError) {
+      redirect("/dashboard/pharmacy/ward-requests?error=item_update_failed")
+    }
 
     redirect("/dashboard/pharmacy/ward-requests")
   }
@@ -223,6 +232,21 @@ export default async function WardRequestsPage() {
 
   return (
     <div className="space-y-6">
+      {errorCode === "request_update_failed" ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Ward request status could not be updated.
+        </div>
+      ) : null}
+      {errorCode === "sync_failed" ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Ward request status was rolled back because dispense quantity sync failed.
+        </div>
+      ) : null}
+      {errorCode === "item_update_failed" ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Ward request item update failed.
+        </div>
+      ) : null}
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Ward medication requests</h1>
@@ -265,7 +289,7 @@ export default async function WardRequestsPage() {
                         <CardDescription>
                           {req.patients?.patient_number || "-"} • Ward {req.ward_name} •
                           {" "}
-                          {new Date(req.created_at).toLocaleString()}
+                          {formatDateTime(req.created_at, settings)}
                         </CardDescription>
                       </div>
                       <div className="flex flex-col items-end gap-2">

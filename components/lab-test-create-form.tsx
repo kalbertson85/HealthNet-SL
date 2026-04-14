@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -11,6 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { FormDraftStatus } from "@/components/form-draft-status"
 import { FormHelpTip } from "@/components/form-help-tip"
 import { useLocalDraft } from "@/lib/use-local-draft"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Checkbox } from "@/components/ui/checkbox"
+import { createClient } from "@/lib/supabase/client"
 
 interface PatientOption {
   id: string
@@ -20,35 +23,90 @@ interface PatientOption {
 
 interface LabDraft {
   patient_id: string
+  visit_id: string
   test_category: string
   test_type: string
   priority: string
   notes: string
+  allow_duplicate: boolean
+}
+
+interface DuplicateLabOrder {
+  id: string
+  test_number: string | null
+  status: string | null
+  created_at: string | null
 }
 
 export function LabTestCreateForm({
   patients,
   defaultPatientId,
+  defaultVisitId,
   action,
 }: {
   patients: PatientOption[]
   defaultPatientId?: string
+  defaultVisitId?: string
   action: (formData: FormData) => void | Promise<void>
 }) {
   const initialValue: LabDraft = {
     patient_id: defaultPatientId || "",
+    visit_id: defaultVisitId || "",
     test_category: "",
     test_type: "",
     priority: "routine",
     notes: "",
+    allow_duplicate: false,
   }
 
   const { value, setValue, lastSavedAt, resetDraft } = useLocalDraft("draft:lab:new", initialValue)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [duplicateOrders, setDuplicateOrders] = useState<DuplicateLabOrder[]>([])
+  const [isCheckingDuplicates, setIsCheckingDuplicates] = useState(false)
+  const supabase = useMemo(() => createClient(), [])
 
   const update = <K extends keyof LabDraft>(field: K, fieldValue: LabDraft[K]) => {
     setValue({ ...value, [field]: fieldValue })
   }
+
+  useEffect(() => {
+    if (!value.patient_id || !value.test_type.trim()) {
+      setDuplicateOrders([])
+      return
+    }
+
+    let cancelled = false
+    setIsCheckingDuplicates(true)
+
+    const loadDuplicates = async () => {
+      const since = new Date()
+      since.setDate(since.getDate() - 7)
+
+      const { data, error } = await supabase
+        .from("lab_tests")
+        .select("id, test_number, status, created_at")
+        .eq("patient_id", value.patient_id)
+        .ilike("test_type", value.test_type.trim())
+        .neq("status", "cancelled")
+        .gte("created_at", since.toISOString())
+        .order("created_at", { ascending: false })
+        .limit(5)
+
+      if (cancelled) return
+      if (error) {
+        console.error("[v0] Error checking duplicate lab orders:", error.message || error)
+        setDuplicateOrders([])
+      } else {
+        setDuplicateOrders((data || []) as DuplicateLabOrder[])
+      }
+      setIsCheckingDuplicates(false)
+    }
+
+    void loadDuplicates()
+    return () => {
+      cancelled = true
+    }
+  }, [supabase, value.patient_id, value.test_type])
 
   return (
     <>
@@ -66,8 +124,10 @@ export function LabTestCreateForm({
         }}
       >
         <input type="hidden" name="patient_id" value={value.patient_id} />
+        <input type="hidden" name="visit_id" value={value.visit_id} />
         <input type="hidden" name="test_category" value={value.test_category} />
         <input type="hidden" name="priority" value={value.priority} />
+        <input type="hidden" name="allow_duplicate" value={value.allow_duplicate ? "true" : "false"} />
 
         <Card>
           <CardHeader>
@@ -160,6 +220,42 @@ export function LabTestCreateForm({
                 onChange={(e) => update("notes", e.target.value)}
               />
             </div>
+
+            {value.patient_id && value.test_type.trim() ? (
+              duplicateOrders.length > 0 ? (
+                <Alert variant="destructive">
+                  <AlertDescription className="space-y-2">
+                    <p>
+                      A similar lab order for this patient already exists within the last 7 days. Review the existing
+                      orders before creating another one.
+                    </p>
+                    <ul className="list-disc pl-5 text-xs">
+                      {duplicateOrders.map((order) => (
+                        <li key={order.id}>
+                          {order.test_number || order.id} · {order.status || "pending"} ·{" "}
+                          {order.created_at ? new Date(order.created_at).toLocaleString() : "date unavailable"}
+                        </li>
+                      ))}
+                    </ul>
+                    <label className="flex items-start gap-2 text-xs font-medium">
+                      <Checkbox
+                        checked={value.allow_duplicate}
+                        onCheckedChange={(checked) => update("allow_duplicate", Boolean(checked))}
+                      />
+                      <span>I have reviewed the existing orders and need to place a duplicate test anyway.</span>
+                    </label>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert>
+                  <AlertDescription>
+                    {isCheckingDuplicates
+                      ? "Checking for recent duplicate lab orders..."
+                      : "No recent duplicate order was detected for this patient and test type."}
+                  </AlertDescription>
+                </Alert>
+              )
+            ) : null}
           </CardContent>
         </Card>
 
@@ -167,7 +263,7 @@ export function LabTestCreateForm({
           <Button type="button" variant="outline" asChild>
             <Link href="/dashboard/lab">Cancel</Link>
           </Button>
-          <Button type="submit" disabled={isSubmitting}>
+          <Button type="submit" disabled={isSubmitting || (duplicateOrders.length > 0 && !value.allow_duplicate)}>
             {isSubmitting ? "Ordering..." : "Order Test"}
           </Button>
         </div>

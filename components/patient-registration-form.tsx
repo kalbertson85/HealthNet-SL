@@ -46,9 +46,11 @@ interface PatientRegistrationDraft {
 export function PatientRegistrationForm({
   companies,
   action,
+  publicCoverageLabel,
 }: {
   companies: CompanyOption[]
   action: (formData: FormData) => void | Promise<void>
+  publicCoverageLabel: string
 }) {
   const initialValue: PatientRegistrationDraft = {
     full_name: "",
@@ -208,19 +210,19 @@ export function PatientRegistrationForm({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="free_health_category">Free Health Care category</Label>
+                <Label htmlFor="free_health_category">{publicCoverageLabel} category</Label>
                 <select
                   id="free_health_category"
                   name="free_health_category"
-                  aria-label="Free Health Care category"
+                  aria-label={`${publicCoverageLabel} category`}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   value={value.free_health_category}
                   onChange={(e) => update("free_health_category", e.target.value)}
                 >
-                  <option value="none">Not Free Health Care</option>
-                  <option value="u5">Under 5 years</option>
-                  <option value="pregnant">Pregnant woman</option>
-                  <option value="lactating">Lactating mother</option>
+                  <option value="none">Not covered by {publicCoverageLabel.toLowerCase()}</option>
+                  <option value="u5">Child under 5 years</option>
+                  <option value="pregnant">Pregnant patient</option>
+                  <option value="lactating">Lactating patient</option>
                 </select>
               </div>
             </div>

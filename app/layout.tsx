@@ -1,11 +1,13 @@
-import type { Metadata, Viewport } from 'next'
-import { Analytics } from '@vercel/analytics/next'
-import './globals.css'
+import type { Metadata, Viewport } from "next"
+import { Analytics } from "@vercel/analytics/next"
+import { APP_BRAND_NAME, APP_TAGLINE } from "@/config/global"
+import { getGlobalSettings } from "@/lib/global-settings"
+import "./globals.css"
 
 export const metadata: Metadata = {
-  title: 'HealthNet-SL HMS',
-  description: 'Smarter Health Management for Stronger Care',
-  generator: 'HealthNet-SL HMS',
+  title: APP_BRAND_NAME,
+  description: APP_TAGLINE,
+  generator: APP_BRAND_NAME,
   icons: {
     icon: [
       {
@@ -32,13 +34,15 @@ export const viewport: Viewport = {
   initialScale: 1,
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const settings = await getGlobalSettings()
+
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang={settings.language} suppressHydrationWarning dir={settings.language === "ar" ? "rtl" : "ltr"}>
       <body className={`font-sans antialiased`} suppressHydrationWarning>
         {children}
         <Analytics />

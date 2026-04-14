@@ -25,4 +25,18 @@ describe("export route hardening", () => {
       expect(source).toMatch(/\.limit\(EXPORT_.*_LIMIT \+ 1\)/)
     })
   }
+
+  it("ensures API export routes enforce trusted origin/referer checks", () => {
+    const apiExportRoutes = EXPORT_ROUTE_PATHS.filter((routePath) => routePath.startsWith("app/api/export/"))
+    const violations: string[] = []
+
+    for (const routePath of apiExportRoutes) {
+      const source = readFileSync(join(process.cwd(), routePath), "utf8")
+      if (!source.includes("enforceTrustedOriginOrReferer(")) {
+        violations.push(`${routePath} is missing enforceTrustedOriginOrReferer`)
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
 })

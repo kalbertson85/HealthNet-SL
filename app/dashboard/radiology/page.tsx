@@ -9,6 +9,7 @@ import { TableCard } from "@/components/table-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
+import { getGlobalSettings } from "@/lib/global-settings"
 
 const RADIOLOGY_LIST_LIMIT = 50
 
@@ -30,6 +31,7 @@ export default async function RadiologyPage(props: {
   searchParams?: Promise<{ status?: string; priority?: string }>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const { user, profile } = await getSessionUserAndProfile()
 
@@ -244,7 +246,7 @@ export default async function RadiologyPage(props: {
                           )}
                           {req.visits?.is_free_health_care && (
                             <Badge variant="default" className="w-fit text-[10px] font-normal">
-                              Free Health Care visit
+                              {settings.publicCoverageLabel} visit
                             </Badge>
                           )}
                         </div>

@@ -5,6 +5,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { redirect } from "next/navigation"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface VisitRow {
   id: string
@@ -54,23 +56,52 @@ export default async function InvestigationsPage() {
   async function completeInvestigation(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
+    const { supabase } = await requireServerActionPermission("lab.manage")
+    const parsed = z
+      .object({
+        investigation_id: z.string().uuid(),
+        visit_id: z.string().uuid(),
+        result_notes: z.string().max(4000).optional(),
+      })
+      .safeParse({
+        investigation_id: formData.get("investigation_id"),
+        visit_id: formData.get("visit_id"),
+        result_notes: formData.get("result_notes"),
+      })
 
-    const investigationId = formData.get("investigation_id") as string
-    const visitId = formData.get("visit_id") as string
-    const resultNotes = (formData.get("result_notes") as string | null) ?? ""
+    if (!parsed.success) {
+      redirect("/dashboard/investigations")
+    }
+    const investigationId = parsed.data.investigation_id
+    const visitId = parsed.data.visit_id
+    const resultNotes = parsed.data.result_notes ?? ""
 
-    if (!investigationId || !visitId) {
+    const { data: currentInvestigation } = await supabase
+      .from("investigations")
+      .select("id, visit_id, status, notes")
+      .eq("id", investigationId)
+      .maybeSingle()
+    if (!currentInvestigation || (currentInvestigation.visit_id as string | null) !== visitId) {
+      redirect("/dashboard/investigations")
+    }
+    if ((currentInvestigation.status as string | null) === "completed") {
       redirect("/dashboard/investigations")
     }
 
-    await supabase
+    const beforeStatus = (currentInvestigation.status as string | null) ?? null
+    const beforeNotes = (currentInvestigation.notes as string | null) ?? null
+
+    const { error: investigationUpdateError } = await supabase
       .from("investigations")
       .update({
         notes: resultNotes,
         status: "completed",
       })
       .eq("id", investigationId)
+    if (investigationUpdateError) {
+      console.error("[v0] Failed to update investigation result:", investigationUpdateError)
+      redirect("/dashboard/investigations")
+    }
 
     // Check if all investigations for this visit are now completed
     const { data: remaining, error: remainingError } = await supabase
@@ -85,10 +116,20 @@ export default async function InvestigationsPage() {
     const allCompleted = (remaining || []).every((inv) => inv.status === "completed")
 
     if (allCompleted) {
-      await supabase
+      const { error: visitUpdateError } = await supabase
         .from("visits")
         .update({ visit_status: "doctor_review" })
         .eq("id", visitId)
+      if (visitUpdateError) {
+        await supabase
+          .from("investigations")
+          .update({
+            status: beforeStatus,
+            notes: beforeNotes,
+          })
+          .eq("id", investigationId)
+        redirect("/dashboard/investigations")
+      }
     }
 
     redirect("/dashboard/investigations")

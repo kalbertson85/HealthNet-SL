@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
 import { ExportPreviewCard } from "@/components/export-preview-card"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatNumber } from "@/lib/locale-format"
 
 interface FhcRow {
   id: string
@@ -74,7 +76,7 @@ function categoryLabel(cat: string): string {
       return "Lactating mothers"
     case "none":
     default:
-      return "Not FHC"
+      return "Not covered"
   }
 }
 
@@ -85,7 +87,9 @@ export default async function FreeHealthCareReportPage(props: {
   searchParams?: Promise<{ from?: string; to?: string; category?: string; status?: string; facility?: string; service_type?: string; page?: string }>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
+  const publicCoverageLabel = settings.publicCoverageLabel
 
   if (!user) {
     redirect("/auth/login")
@@ -296,17 +300,19 @@ export default async function FreeHealthCareReportPage(props: {
   return (
     <div className="space-y-8">
       <div className="space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight">Free Health Care Activity</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Public Coverage Activity</h1>
         <p className="text-muted-foreground text-sm">
-          Visits covered under Sierra Leone Free Health Care, summarised by category, age band, and outcome. Defaults to
-          the last 30 days if no dates are selected.
+          Visits covered under the configured public coverage program, summarised by category, age band, and outcome.
+          Defaults to the last 30 days if no dates are selected.
         </p>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>Filters</CardTitle>
-          <CardDescription>Adjust date range and focus on specific FHC categories or visit outcomes.</CardDescription>
+          <CardDescription>
+            Adjust date range and focus on specific {publicCoverageLabel.toLowerCase()} categories or visit outcomes.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form method="GET" className="grid gap-3 md:grid-cols-4 md:items-end text-sm">
@@ -336,7 +342,7 @@ export default async function FreeHealthCareReportPage(props: {
             </div>
             <div className="space-y-1">
               <label htmlFor="category" className="text-xs font-medium text-muted-foreground">
-                FHC category
+                {publicCoverageLabel} category
               </label>
               <select
                 id="category"
@@ -437,8 +443,8 @@ export default async function FreeHealthCareReportPage(props: {
       />
       {can(rbacUser, "admin.export") ? (
         <ExportPreviewCard
-          title="Export current FHC report view"
-          description="Apply the report filters, review the current FHC preview, then export that same report slice as CSV."
+          title={`Export current ${publicCoverageLabel.toLowerCase()} report view`}
+          description={`Apply the report filters, review the current ${publicCoverageLabel.toLowerCase()} preview, then export that same report slice as CSV.`}
           href={`/dashboard/reports/free-health-care/export?from=${encodeURIComponent(
             fromIso,
           )}&to=${encodeURIComponent(toIso)}&category=${encodeURIComponent(
@@ -447,26 +453,26 @@ export default async function FreeHealthCareReportPage(props: {
             facilityFilter,
           )}&service_type=${encodeURIComponent(serviceType)}`}
           previewCount={rows.length}
-          previewLabel="FHC visits match the current report filters"
+          previewLabel={`${publicCoverageLabel} visits match the current report filters`}
           limitNote="Exports honor the same date, category, status, facility, and service filters shown above."
         />
       ) : null}
 
       {visitsTruncated ? (
         <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Showing the first {MAX_FHC_VISITS_ROWS.toLocaleString()} visits for performance. Narrow date/service filters for complete detail.
+          Showing the first {formatNumber(MAX_FHC_VISITS_ROWS, settings)} visits for performance. Narrow date/service filters for complete detail.
         </div>
       ) : null}
 
       <Card>
         <CardHeader>
           <CardTitle>Summary by facility</CardTitle>
-          <CardDescription>Total FHC visits in the selected period by facility.</CardDescription>
+          <CardDescription>Total {publicCoverageLabel.toLowerCase()} visits in the selected period by facility.</CardDescription>
         </CardHeader>
         <CardContent>
           {facilitySummary.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No FHC visits in this period.
+              No {publicCoverageLabel.toLowerCase()} visits in this period.
               {hasActiveFilters ? (
                 <>
                   {" "}
@@ -483,7 +489,7 @@ export default async function FreeHealthCareReportPage(props: {
                 <thead>
                   <tr className="border-b text-left text-xs text-muted-foreground">
                     <th className="py-2 font-medium">Facility</th>
-                    <th className="py-2 font-medium text-right">Total FHC visits</th>
+                    <th className="py-2 font-medium text-right">Total {publicCoverageLabel} visits</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -504,12 +510,12 @@ export default async function FreeHealthCareReportPage(props: {
         <CardHeader>
           <CardTitle>Summary by category and age band</CardTitle>
           <CardDescription>
-            Counts of FHC visits in the selected period by Free Health Care category, age band, and current visit outcome.
+            Counts of {publicCoverageLabel.toLowerCase()} visits in the selected period by {publicCoverageLabel.toLowerCase()} category, age band, and current visit outcome.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {summaryRows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No Free Health Care visits recorded in the selected period.</p>
+            <p className="text-sm text-muted-foreground">No {publicCoverageLabel.toLowerCase()} visits recorded in the selected period.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -543,14 +549,14 @@ export default async function FreeHealthCareReportPage(props: {
 
       <Card>
         <CardHeader>
-          <CardTitle>Recent FHC visits</CardTitle>
+          <CardTitle>Recent {publicCoverageLabel.toLowerCase()} visits</CardTitle>
           <CardDescription>
-            Most recent Free Health Care visits with category, age band, and current status.
+            Most recent {publicCoverageLabel.toLowerCase()} visits with category, age band, and current status.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {totalRecentRows === 0 ? (
-            <p className="text-sm text-muted-foreground">No Free Health Care visits to show.</p>
+            <p className="text-sm text-muted-foreground">No {publicCoverageLabel.toLowerCase()} visits to show.</p>
           ) : (
             <div className="space-y-2 text-sm">
               {recentPageRows.map((row) => {

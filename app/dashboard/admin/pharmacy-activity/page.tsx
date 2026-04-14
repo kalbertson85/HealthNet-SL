@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
 
 interface PharmacyActivitySearchParams {
   q?: string
@@ -34,6 +36,7 @@ export default async function PharmacyActivityPage({
   searchParams?: Promise<PharmacyActivitySearchParams>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -127,14 +130,6 @@ export default async function PharmacyActivityPage({
     })
   }
 
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
-  }
-
   const renderPatient = (row: PharmacyPrescriptionRow) => {
     const p = row.patients
     if (!p) return "-"
@@ -158,7 +153,7 @@ export default async function PharmacyActivityPage({
               ? "Cancelled"
               : last.action
 
-    return `${label} · ${formatDateTime(last.created_at)}`
+    return `${label} · ${formatDateTime(last.created_at, settings)}`
   }
 
   return (
@@ -275,7 +270,7 @@ export default async function PharmacyActivityPage({
                 ) : (
                   rows.map((row) => (
                     <TableRow key={row.id} className="hover:bg-muted/50">
-                      <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at, settings)}</TableCell>
                       <TableCell className="text-xs">
                         <div className="flex flex-col gap-0.5">
                           <span className="font-medium text-foreground">{row.prescription_number}</span>

@@ -87,7 +87,7 @@ export function DashboardSidebar({ userRole }: DashboardSidebarProps) {
           <div className="relative h-full w-full overflow-hidden">
             <Image
               src="/healthnet-logo.png"
-              alt="HealthNet-SL HMS logo"
+              alt="HealthNet HMS logo"
               fill
               className="object-cover"
               priority

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
 
 const triageLevels = {
   red: { label: "Critical", color: "bg-red-600", textColor: "text-red-600", priority: 1, reassessMinutes: 10 },
@@ -26,6 +27,7 @@ const statusColors = {
 
 export default async function EmergencyPage() {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -226,7 +228,7 @@ export default async function EmergencyPage() {
                         </Badge>
                         {triage.visits?.is_free_health_care && (
                           <Badge variant="outline" className="text-[10px] font-normal">
-                            Free Health Care visit
+                            {settings.publicCoverageLabel} visit
                           </Badge>
                         )}
                         {waitTime > 60 && (

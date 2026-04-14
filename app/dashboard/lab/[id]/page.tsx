@@ -13,6 +13,10 @@ import { shouldSendSms, sendSms } from "@/lib/notifications/sms"
 import { FormHelpTip } from "@/components/form-help-tip"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 import { advanceVisitToDoctorReviewIfDiagnosticsComplete } from "@/lib/visit-flow"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate, formatDateTime } from "@/lib/locale-format"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 export default async function LabTestDetailPage(props: {
   params: Promise<{ id: string }>
@@ -20,6 +24,7 @@ export default async function LabTestDetailPage(props: {
 }) {
   const supabase = await createServerClient()
   const { id } = await props.params
+  const settings = await getGlobalSettings()
 
   const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
   const errorCode = resolvedSearchParams?.error
@@ -93,14 +98,6 @@ export default async function LabTestDetailPage(props: {
     }
   }
 
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
-  }
-
   const renderActor = (actorId: string) => {
     const actor = actorProfilesById.get(actorId)
     if (!actor) return actorId
@@ -113,32 +110,27 @@ export default async function LabTestDetailPage(props: {
   async function markSampleCollected() {
     "use server"
 
-    const supabase = await createServerClient()
+    const { supabase, user } = await requireServerActionPermission("lab.manage")
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    await supabase
+    const { error: sampleUpdateError } = await supabase
       .from("lab_tests")
       .update({ sample_collected_at: new Date().toISOString() })
       .eq("id", id)
+    if (sampleUpdateError) {
+      redirect(`/dashboard/lab/${id}?error=sample_update_failed`)
+    }
 
-    try {
-      await supabase.from("lab_audit_logs").insert({
-        lab_test_id: id,
-        actor_user_id: user.id,
-        action: "sample_collected",
-        old_status: labTest.status,
-        new_status: labTest.status,
-        notes: null,
-      })
-    } catch (auditError) {
-      console.error("[v0] Error logging lab sample collected:", auditError)
+    const { error: auditError } = await supabase.from("lab_audit_logs").insert({
+      lab_test_id: id,
+      actor_user_id: user.id,
+      action: "sample_collected",
+      old_status: labTest.status,
+      new_status: labTest.status,
+      notes: null,
+    })
+    if (auditError) {
+      await supabase.from("lab_tests").update({ sample_collected_at: labTest.sample_collected_at ?? null }).eq("id", id)
+      redirect(`/dashboard/lab/${id}?error=audit_log_failed`)
     }
 
     redirect(`/dashboard/lab/${id}`)
@@ -147,32 +139,27 @@ export default async function LabTestDetailPage(props: {
   async function markSampleReceived() {
     "use server"
 
-    const supabase = await createServerClient()
+    const { supabase, user } = await requireServerActionPermission("lab.manage")
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    await supabase
+    const { error: sampleUpdateError } = await supabase
       .from("lab_tests")
       .update({ sample_received_at: new Date().toISOString() })
       .eq("id", id)
+    if (sampleUpdateError) {
+      redirect(`/dashboard/lab/${id}?error=sample_update_failed`)
+    }
 
-    try {
-      await supabase.from("lab_audit_logs").insert({
-        lab_test_id: id,
-        actor_user_id: user.id,
-        action: "sample_received",
-        old_status: labTest.status,
-        new_status: labTest.status,
-        notes: null,
-      })
-    } catch (auditError) {
-      console.error("[v0] Error logging lab sample received:", auditError)
+    const { error: auditError } = await supabase.from("lab_audit_logs").insert({
+      lab_test_id: id,
+      actor_user_id: user.id,
+      action: "sample_received",
+      old_status: labTest.status,
+      new_status: labTest.status,
+      notes: null,
+    })
+    if (auditError) {
+      await supabase.from("lab_tests").update({ sample_received_at: labTest.sample_received_at ?? null }).eq("id", id)
+      redirect(`/dashboard/lab/${id}?error=audit_log_failed`)
     }
 
     redirect(`/dashboard/lab/${id}`)
@@ -181,20 +168,34 @@ export default async function LabTestDetailPage(props: {
   async function updateStatus(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const status = formData.get("status") as string
+    const { supabase, user } = await requireServerActionPermission("lab.manage")
+    const parsed = z
+      .object({
+        status: z.enum(["pending", "in_progress", "completed", "cancelled"]),
+      })
+      .safeParse({ status: formData.get("status") })
+    if (!parsed.success) {
+      redirect(`/dashboard/lab/${id}`)
+    }
+    const status = parsed.data.status
 
     const { data: before } = await supabase
       .from("lab_tests")
       .select("status")
       .eq("id", id)
       .maybeSingle()
+    if (!before) {
+      redirect("/dashboard/lab")
+    }
+    const beforeStatus = (before.status as string | null) ?? null
+    if (beforeStatus && ["completed", "cancelled"].includes(beforeStatus) && beforeStatus !== status) {
+      redirect(`/dashboard/lab/${id}`)
+    }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    await supabase.from("lab_tests").update({ status }).eq("id", id)
+    const { error: statusUpdateError } = await supabase.from("lab_tests").update({ status }).eq("id", id)
+    if (statusUpdateError) {
+      redirect(`/dashboard/lab/${id}?error=status_update_failed`)
+    }
 
     const visitId = (labTest as { visit_id?: string | null }).visit_id ?? null
     if (visitId && ["completed", "cancelled"].includes(status)) {
@@ -202,17 +203,17 @@ export default async function LabTestDetailPage(props: {
     }
 
     if (before && user) {
-      try {
-        await supabase.from("lab_audit_logs").insert({
-          lab_test_id: id,
-          actor_user_id: user.id,
-          action: "status_updated",
-          old_status: (before.status as string | null) ?? null,
-          new_status: status,
-          notes: null,
-        })
-      } catch (auditError) {
-        console.error("[v0] Error logging lab status update:", auditError)
+      const { error: auditError } = await supabase.from("lab_audit_logs").insert({
+        lab_test_id: id,
+        actor_user_id: user.id,
+        action: "status_updated",
+        old_status: beforeStatus,
+        new_status: status,
+        notes: null,
+      })
+      if (auditError) {
+        await supabase.from("lab_tests").update({ status: beforeStatus }).eq("id", id)
+        redirect(`/dashboard/lab/${id}?error=audit_log_failed`)
       }
     }
 
@@ -222,10 +223,7 @@ export default async function LabTestDetailPage(props: {
   async function enterResults(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { supabase, user } = await requireServerActionPermission("lab.manage")
 
     const interpretation = (formData.get("interpretation") as string | null) ?? ""
 
@@ -238,7 +236,12 @@ export default async function LabTestDetailPage(props: {
       redirect(`/dashboard/lab/${id}?error=invalid_interpretation`)
     }
 
-    await supabase
+    const beforeInterpretation = (labTest.interpretation as string | null) ?? null
+    const beforeResultsEnteredAt = (labTest.results_entered_at as string | null) ?? null
+    const beforeResultsEnteredBy = (labTest.results_entered_by as string | null) ?? null
+    const beforeStatus = (labTest.status as string | null) ?? null
+
+    const { error: resultUpdateError } = await supabase
       .from("lab_tests")
       .update({
         interpretation: trimmed,
@@ -247,6 +250,9 @@ export default async function LabTestDetailPage(props: {
         results_entered_by: user?.id,
       })
       .eq("id", id)
+    if (resultUpdateError) {
+      redirect(`/dashboard/lab/${id}?error=result_update_failed`)
+    }
 
     // Fetch lab test with patient info for logging and notifications
     const { data: updatedTest } = await supabase
@@ -260,24 +266,32 @@ export default async function LabTestDetailPage(props: {
 
     // Audit log for result entry (structured lab_audit_logs + global audit)
     if (user) {
-      try {
-        await supabase.from("lab_audit_logs").insert({
-          lab_test_id: id,
-          actor_user_id: user.id,
-          action: "result_entered",
-          old_status: labTest.status,
-          new_status: "completed",
-          notes: trimmed,
-          metadata: updatedTest
-            ? {
-                test_number: updatedTest.test_number,
-                test_type: updatedTest.test_type,
-                patient_id: updatedTest.patient_id,
-              }
-            : null,
-        })
-      } catch (auditError) {
-        console.error("[v0] Error logging lab result entry:", auditError)
+      const { error: auditError } = await supabase.from("lab_audit_logs").insert({
+        lab_test_id: id,
+        actor_user_id: user.id,
+        action: "result_entered",
+        old_status: beforeStatus,
+        new_status: "completed",
+        notes: trimmed,
+        metadata: updatedTest
+          ? {
+              test_number: updatedTest.test_number,
+              test_type: updatedTest.test_type,
+              patient_id: updatedTest.patient_id,
+            }
+          : null,
+      })
+      if (auditError) {
+        await supabase
+          .from("lab_tests")
+          .update({
+            interpretation: beforeInterpretation,
+            status: beforeStatus,
+            results_entered_at: beforeResultsEnteredAt,
+            results_entered_by: beforeResultsEnteredBy,
+          })
+          .eq("id", id)
+        redirect(`/dashboard/lab/${id}?error=audit_log_failed`)
       }
     }
 
@@ -330,6 +344,14 @@ export default async function LabTestDetailPage(props: {
     switch (errorCode) {
       case "invalid_interpretation":
         return "The interpretation text was empty or too long. Please review and try again."
+      case "sample_update_failed":
+        return "Sample state could not be updated."
+      case "status_update_failed":
+        return "Lab status update failed."
+      case "result_update_failed":
+        return "Lab result update failed."
+      case "audit_log_failed":
+        return "Lab action was rolled back because audit logging failed."
       default:
         return null
     }
@@ -444,7 +466,7 @@ export default async function LabTestDetailPage(props: {
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Order Date</p>
-              <p>{new Date(labTest.created_at).toLocaleDateString()}</p>
+              <p>{formatDate(labTest.created_at, settings)}</p>
             </div>
             <Separator />
             <div className="grid gap-4 md:grid-cols-2">
@@ -452,7 +474,7 @@ export default async function LabTestDetailPage(props: {
                 <p className="text-sm font-medium text-muted-foreground">Sample Collected</p>
                 <p className="text-sm">
                   {labTest.sample_collected_at
-                    ? new Date(labTest.sample_collected_at).toLocaleString()
+                    ? formatDateTime(labTest.sample_collected_at, settings)
                     : "Not recorded"}
                 </p>
                 {!labTest.sample_collected_at && (
@@ -467,7 +489,7 @@ export default async function LabTestDetailPage(props: {
                 <p className="text-sm font-medium text-muted-foreground">Sample Received in Lab</p>
                 <p className="text-sm">
                   {labTest.sample_received_at
-                    ? new Date(labTest.sample_received_at).toLocaleString()
+                    ? formatDateTime(labTest.sample_received_at, settings)
                     : "Not recorded"}
                 </p>
                 {!labTest.sample_received_at && (
@@ -516,7 +538,7 @@ export default async function LabTestDetailPage(props: {
                     {log.notes && <p className="line-clamp-2">Notes: {log.notes}</p>}
                     <p>By: {renderActor(log.actor_user_id)}</p>
                   </div>
-                  <div className="whitespace-nowrap text-right">{formatDateTime(log.created_at)}</div>
+                  <div className="whitespace-nowrap text-right">{formatDateTime(log.created_at, settings)}</div>
                 </div>
               ))}
             </div>
@@ -576,7 +598,7 @@ export default async function LabTestDetailPage(props: {
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Results Date</p>
-                <p>{labTest.results_entered_at ? new Date(labTest.results_entered_at).toLocaleDateString() : "N/A"}</p>
+                <p>{labTest.results_entered_at ? formatDate(labTest.results_entered_at, settings) : "N/A"}</p>
               </div>
               <Separator />
               <div>

@@ -244,20 +244,27 @@ export async function GET(request: NextRequest) {
   }
 
   const secret = process.env.MOBILE_MONEY_WEBHOOK_SECRET
+  const healthToken = process.env.MOBILE_MONEY_WEBHOOK_HEALTH_TOKEN
+  const providedToken = request.headers.get("x-webhook-health-token") || ""
+  const tokenMatches = Boolean(healthToken) && providedToken === healthToken
   const response = NextResponse.json(
     {
       ok: true,
       provider: WEBHOOK_PROVIDER,
-      configured: Boolean(secret),
-      timestampToleranceSeconds: WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
-      dedupe: {
-        persistentStoreConfigured: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
-      },
+      status: tokenMatches ? "detailed" : "basic",
+      configured: tokenMatches ? Boolean(secret) : undefined,
+      timestampToleranceSeconds: tokenMatches ? WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS : undefined,
+      dedupe: tokenMatches
+        ? {
+            persistentStoreConfigured: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+          }
+        : undefined,
     },
     { headers: NO_STORE_JSON_HEADERS },
   )
   logApiRequestComplete(request, "api.webhooks.mobile_money.health", logCtx, 200, {
-    configured: Boolean(secret),
+    configured: tokenMatches ? Boolean(secret) : "redacted",
+    details_disclosed: tokenMatches,
   })
   return response
 }

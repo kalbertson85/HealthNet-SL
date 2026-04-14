@@ -2,6 +2,7 @@ import Link from "next/link"
 import { Download } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { formatNumber, type GlobalSettingsInput } from "@/lib/locale-format"
 
 interface ExportPreviewCardProps {
   title: string
@@ -10,6 +11,7 @@ interface ExportPreviewCardProps {
   previewCount: number
   previewLabel: string
   limitNote?: string | null
+  settings?: GlobalSettingsInput
 }
 
 export function ExportPreviewCard({
@@ -19,6 +21,7 @@ export function ExportPreviewCard({
   previewCount,
   previewLabel,
   limitNote,
+  settings,
 }: ExportPreviewCardProps) {
   return (
     <Card>
@@ -29,7 +32,7 @@ export function ExportPreviewCard({
       <CardContent className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="space-y-1 text-sm">
           <p>
-            <span className="font-medium">{previewCount.toLocaleString()}</span> {previewLabel}
+            <span className="font-medium">{formatNumber(previewCount, settings)}</span> {previewLabel}
           </p>
           {limitNote ? <p className="text-xs text-muted-foreground">{limitNote}</p> : null}
         </div>

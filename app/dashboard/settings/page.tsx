@@ -2,12 +2,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { redirect } from "next/navigation"
-import { createServerClient } from "@/lib/supabase/server"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 async function changePassword(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
+  const { supabase } = await requireServerActionPermission("dashboard.view")
 
   const {
     data: { user },

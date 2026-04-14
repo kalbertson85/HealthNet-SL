@@ -9,18 +9,12 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { fetchRecordsVisitHandoff } from "@/lib/records/queries"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 import { buildFollowUpAppointmentHref } from "@/lib/patient-flow"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
 
 function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
   if (!relation) return null
   return Array.isArray(relation) ? (relation[0] ?? null) : relation
-}
-
-function formatDateTime(value: string) {
-  try {
-    return new Date(value).toLocaleString()
-  } catch {
-    return value
-  }
 }
 
 function formatAge(dob?: string | null) {
@@ -113,6 +107,7 @@ export const revalidate = 0
 export default async function RecordsVisitHandoffPage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createServerClient()
   const { user } = await getSessionUserAndProfile()
+  const settings = await getGlobalSettings()
 
   if (!user) {
     redirect("/auth/login")
@@ -165,7 +160,7 @@ export default async function RecordsVisitHandoffPage({ params }: { params: Prom
                 <div className="mt-1">
                   <Badge variant="outline">{visit.visit_status}</Badge>
                 </div>
-                <p className="mt-1 text-muted-foreground">Created {formatDateTime(visit.created_at)}</p>
+                <p className="mt-1 text-muted-foreground">Created {formatDateTime(visit.created_at, settings)}</p>
               </div>
               <div>
                 <p className="text-xs font-medium text-muted-foreground">Payer category</p>
@@ -179,7 +174,7 @@ export default async function RecordsVisitHandoffPage({ params }: { params: Prom
                 </p>
               </div>
               <div>
-                <p className="text-xs font-medium text-muted-foreground">Free Health Care</p>
+                <p className="text-xs font-medium text-muted-foreground">{settings.publicCoverageLabel}</p>
                 <p>{visit.is_free_health_care ? "Yes" : "No"}</p>
               </div>
               <div>

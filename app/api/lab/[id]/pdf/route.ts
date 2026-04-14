@@ -1,7 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server"
-import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { enforceTrustedOriginOrReferer } from "@/lib/http/request-security"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
+import { formatDate, formatDateTime } from "@/lib/locale-format"
+import { GLOBAL_SETTINGS_SELECT, type GlobalSettingsInput } from "@/lib/global-settings"
+import { requireRole, requireFacilityAccess, parseUuidParam, resolveAuthError } from "@/lib/auth-guard"
+import { ROLES } from "@/lib/utils"
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const limited = enforceFixedWindowRateLimit(request, {
@@ -11,26 +15,37 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   })
   if (limited) return limited
 
-  try {
-    // Enforce that only lab staff (and admins) can export lab results
-    const { supabase } = await requirePermission(request, "lab.manage")
+  const originGuard = enforceTrustedOriginOrReferer(request)
+  if (originGuard) return originGuard
 
-    const { id } = await context.params
+  try {
+    const { supabase, user } = await requireRole([ROLES.ADMIN, ROLES.FACILITY_ADMIN, ROLES.LAB_TECH, ROLES.DOCTOR])
+    const { id: rawId } = await context.params
+    const id = parseUuidParam(rawId, "lab test id")
 
     const { data: labTest, error } = await supabase
       .from("lab_tests")
-      .select(`*, patients(full_name, patient_number, date_of_birth, phone_number)`)
+      .select(`*, patients(full_name, patient_number, date_of_birth, phone_number), visits(facility_id)`)
       .eq("id", id)
       .maybeSingle()
 
     if (error || !labTest) {
       return new NextResponse("Lab test not found", { status: 404 })
     }
+    const visit = Array.isArray(labTest.visits) ? labTest.visits[0] : labTest.visits
+    requireFacilityAccess({ user, supabase }, (visit?.facility_id as string | null | undefined) ?? null)
 
-    const createdAt = labTest.created_at ? new Date(labTest.created_at).toLocaleString() : ""
-    const resultsDate = labTest.results_entered_at
-      ? new Date(labTest.results_entered_at).toLocaleString()
-      : ""
+    const { data: rawSettings } = await supabase
+      .from("hospital_settings")
+      .select(GLOBAL_SETTINGS_SELECT)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    const settings = (rawSettings || null) as GlobalSettingsInput
+
+    const createdAt = labTest.created_at ? formatDateTime(labTest.created_at, settings) : ""
+    const resultsDate = labTest.results_entered_at ? formatDateTime(labTest.results_entered_at, settings) : ""
 
     const lines = [
       "LAB RESULT",
@@ -42,7 +57,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       "",
       `Patient: ${labTest.patients?.full_name ?? ""}`,
       `Patient Number: ${labTest.patients?.patient_number ?? ""}`,
-      labTest.patients?.date_of_birth ? `Date of Birth: ${labTest.patients.date_of_birth}` : "",
+      labTest.patients?.date_of_birth ? `Date of Birth: ${formatDate(labTest.patients.date_of_birth, settings)}` : "",
       labTest.patients?.phone_number ? `Phone: ${labTest.patients.phone_number}` : "",
       "",
       `Ordered At: ${createdAt}`,
@@ -65,7 +80,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       },
     })
   } catch (error) {
-    const authResponse = toAuthErrorResponse(error, request)
+    const authResponse = resolveAuthError(error, request, (status, code, message) => apiError(status, code, message, request))
     if (authResponse) return authResponse
     console.error("[v0] Failed to export lab PDF", error)
     return new NextResponse("Internal Server Error", { status: 500 })

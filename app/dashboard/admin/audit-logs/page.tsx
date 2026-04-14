@@ -8,6 +8,8 @@ import { ArrowLeft } from "lucide-react"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { ROLES } from "@/lib/utils"
 import { fetchProfilesByIds } from "@/lib/admin/activity"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
 
 interface AdminAuditLogRow {
   id: string
@@ -38,6 +40,7 @@ const PAGE_SCAN_LIMIT = 1000
 
 export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -113,15 +116,6 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
   const profileMap = new Map<string, { name: string; email: string | null }>()
   for (const p of profiles || []) {
     profileMap.set(p.id as string, { name: (p.full_name as string) || "(No name)", email: (p.email as string) || null })
-  }
-
-  const formatDateTime = (value: string | null) => {
-    if (!value) return ""
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
   }
 
   const formatUser = (id: string | null | undefined) => {
@@ -282,7 +276,7 @@ export default async function AuditLogsPage({ searchParams }: AuditLogsPageProps
                   rows.map((log) => (
                     <TableRow key={log.id} className="hover:bg-muted/50">
                       <TableCell className="whitespace-nowrap text-xs">
-                        {formatDateTime(log.created_at)}
+                        {formatDateTime(log.created_at, settings)}
                       </TableCell>
                       <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">
                         {formatUser(log.actor_user_id)}

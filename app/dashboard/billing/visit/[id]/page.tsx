@@ -5,11 +5,16 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import Link from "next/link"
-import { getSessionUserAndProfile } from "@/app/actions/auth"
-import { assertVisitTransition, type VisitStatus } from "@/lib/visits"
+import { assertVisitTransition, parseVisitStatus } from "@/lib/visits"
 import { InvoiceLineItems } from "../InvoiceLineItems"
 import { FormHelpTip } from "@/components/form-help-tip"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency, formatDate } from "@/lib/locale-format"
+import { calculateCharge } from "@/lib/pricing-engine"
+import { logAuditEvent } from "@/lib/audit"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface LineItem {
   description: string
@@ -20,6 +25,11 @@ interface LineItem {
 
 interface RecommendedServiceItem extends LineItem {
   source: "admission" | "surgery" | "nursing"
+}
+
+interface TariffPreview {
+  description: string
+  amount: number
 }
 
 interface VisitPatient {
@@ -36,6 +46,7 @@ export default async function VisitBillingPage(props: {
   searchParams?: Promise<{ error?: string }>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { id: visitId } = await props.params
 
   const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
@@ -99,6 +110,7 @@ export default async function VisitBillingPage(props: {
   const defaultCompanyId = visit.assigned_company_id || patient?.company_id || null
   const defaultPayerType: "patient" | "company" =
     insuranceType && defaultCompanyId && isInsuranceValid ? "company" : "patient"
+  const pricingInsurerId = defaultPayerType === "company" ? defaultCompanyId : null
 
   const { data: existingInvoice } = await supabase
     .from("invoices")
@@ -137,14 +149,16 @@ export default async function VisitBillingPage(props: {
   const recommendedExtendedCareItems: RecommendedServiceItem[] = []
 
   if (admissionForVisit) {
-    const admissionWardRelation = (admissionForVisit as { wards?: { name?: string | null } | Array<{ name?: string | null }> | null }).wards
-    const admissionBedRelation = (admissionForVisit as { beds?: { bed_number?: string | null } | Array<{ bed_number?: string | null }> | null }).beds
-    const admissionWard = Array.isArray(admissionWardRelation) ? (admissionWardRelation[0] ?? null) : admissionWardRelation ?? null
-    const admissionBed = Array.isArray(admissionBedRelation) ? (admissionBedRelation[0] ?? null) : admissionBedRelation ?? null
+    const charge = await calculateCharge(supabase, "inpatient", 1, {
+      facilityId: (visit.facility_id as string | null) ?? null,
+      insurerId: pricingInsurerId,
+      startAt: (admissionForVisit as { admission_date?: string | null }).admission_date ?? null,
+      endAt: (admissionForVisit as { discharge_date?: string | null }).discharge_date ?? null,
+    })
     recommendedExtendedCareItems.push({
-      description: `Admission and bed allocation${admissionWard?.name ? ` (${admissionWard.name}` : ""}${admissionBed?.bed_number ? ` - Bed ${admissionBed.bed_number}` : admissionWard?.name ? ")" : ""}`,
-      quantity: 1,
-      unit_price: 0,
+      description: `Admission and bed allocation`,
+      quantity: charge.quantity,
+      unit_price: charge.unitPrice,
       item_type: "billable",
       source: "admission",
     })
@@ -153,15 +167,19 @@ export default async function VisitBillingPage(props: {
   for (const surgery of (surgeriesForVisit || []) as Array<{
     procedure_name?: string | null
     procedure_type?: string | null
-    status?: string | null
+    scheduled_at?: string | null
   }>) {
     const procedureName = (surgery.procedure_name || "Surgical procedure").trim()
     const procedureType = (surgery.procedure_type || "").trim()
-    const status = (surgery.status || "").trim()
+    const charge = await calculateCharge(supabase, "surgery", 1, {
+      facilityId: (visit.facility_id as string | null) ?? null,
+      insurerId: pricingInsurerId,
+      startAt: (surgery as { scheduled_at?: string | null }).scheduled_at ?? null,
+    })
     recommendedExtendedCareItems.push({
-      description: `${procedureName}${procedureType ? ` (${procedureType})` : ""}${status ? ` - ${status}` : ""}`,
-      quantity: 1,
-      unit_price: 0,
+      description: `${procedureName}${procedureType ? ` (${procedureType})` : ""}`,
+      quantity: charge.quantity,
+      unit_price: charge.unitPrice,
       item_type: "billable",
       source: "surgery",
     })
@@ -178,20 +196,30 @@ export default async function VisitBillingPage(props: {
     nursingProcedureCounts.set(procedure, (nursingProcedureCounts.get(procedure) || 0) + 1)
   }
   for (const [procedure, count] of nursingProcedureCounts.entries()) {
+    const charge = await calculateCharge(supabase, "nursing", count, {
+      facilityId: (visit.facility_id as string | null) ?? null,
+      insurerId: pricingInsurerId,
+      quantity: count,
+    })
     recommendedExtendedCareItems.push({
       description: `Nursing procedure: ${procedure.replace(/_/g, " ")}`,
-      quantity: count,
-      unit_price: 0,
+      quantity: charge.quantity,
+      unit_price: charge.unitPrice,
       item_type: "billable",
       source: "nursing",
     })
   }
 
   if (nursingNotes.length > 0) {
+    const charge = await calculateCharge(supabase, "nursing", 1, {
+      facilityId: (visit.facility_id as string | null) ?? null,
+      insurerId: pricingInsurerId,
+      quantity: 1,
+    })
     recommendedExtendedCareItems.push({
       description: `Nursing observation / ward monitoring`,
-      quantity: 1,
-      unit_price: 0,
+      quantity: charge.quantity,
+      unit_price: charge.unitPrice,
       item_type: "billable",
       source: "nursing",
     })
@@ -223,6 +251,16 @@ export default async function VisitBillingPage(props: {
     switch (errorCode) {
       case "visit_transition_invalid":
         return "This visit could not be advanced to Pharmacy because its current status does not allow that transition. Please refresh and confirm the visit is in the billing_pending stage before trying again."
+      case "invoice_items_save_failed":
+        return "Invoice items could not be saved. The previous line items were restored automatically."
+      case "invoice_update_failed":
+        return "The invoice update could not be completed."
+      case "visit_update_failed":
+        return "The visit status update failed after payment processing. Previous invoice values were restored."
+      case "audit_log_failed":
+        return "Payment could not be finalized because audit logging failed. Previous invoice values were restored."
+      case "transactional_dependency_unavailable":
+        return "This billing action requires transactional database RPCs that are not available yet. Please apply the latest SQL scripts."
       default:
         return null
     }
@@ -231,44 +269,70 @@ export default async function VisitBillingPage(props: {
   async function saveInvoice(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
+    const parsed = z
+      .object({
+        visit_id: z.string().uuid(),
+        payer_type: z.enum(["patient", "company"]).default("patient"),
+        company_id: z.string().uuid().optional(),
+      })
+      .safeParse({
+        visit_id: formData.get("visit_id"),
+        payer_type: formData.get("payer_type") ?? "patient",
+        company_id: formData.get("company_id") || undefined,
+      })
+    if (!parsed.success) {
+      redirect("/dashboard/billing")
     }
 
-    const visitId = formData.get("visit_id") as string
-    const payerType = ((formData.get("payer_type") as string | null) || "patient").trim() || "patient"
-    const companyId = ((formData.get("company_id") as string | null) || "").trim() || null
+    const visitId = parsed.data.visit_id
+    const payerType = parsed.data.payer_type
+    const companyId = parsed.data.company_id ?? null
+    if (payerType === "company" && !companyId) {
+      redirect(`/dashboard/billing/visit/${visitId}`)
+    }
 
     const descriptions = formData.getAll("item_description") as string[]
     const quantities = formData.getAll("item_quantity") as string[]
     const unitPrices = formData.getAll("item_unit_price") as string[]
     const itemTypes = formData.getAll("item_type") as string[]
 
+    const allowedItemTypes = new Set(["billable", "fhc_covered", "non_billable"])
     const items: LineItem[] = descriptions
       .map((description, index): LineItem => {
         const quantity = Number(quantities[index] || 0)
         const unit_price = Number(unitPrices[index] || 0)
-        const item_type = (itemTypes[index] as string | undefined) || "billable"
+        const rawItemType = (itemTypes[index] as string | undefined) || "billable"
+        const item_type = allowedItemTypes.has(rawItemType) ? rawItemType : "billable"
         return { description, quantity, unit_price, item_type }
       })
-      .filter((item) => item.description && item.quantity > 0 && item.unit_price >= 0)
+      .filter(
+        (item) =>
+          item.description &&
+          item.description.length <= 500 &&
+          item.quantity > 0 &&
+          item.quantity <= 1000000 &&
+          item.unit_price >= 0 &&
+          item.unit_price <= 1000000000,
+      )
 
     const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
 
-    // Ensure we have a patient for this visit, and check if this is a Free Health Care visit
+    // Ensure we have a patient for this visit, and check if this is a public-coverage visit
     const { data: visitRow } = await supabase
       .from("visits")
-      .select("patient_id, is_free_health_care")
+      .select("patient_id, is_free_health_care, visit_status")
       .eq("id", visitId)
       .maybeSingle()
 
     const patientId = (visitRow?.patient_id as string | null) ?? null
     const isFreeHealthCareVisit = Boolean(visitRow?.is_free_health_care)
+    const visitStatus = ((visitRow?.visit_status as string | null) ?? "").toLowerCase()
+    if (!visitRow || visitStatus === "completed" || visitStatus === "discharged") {
+      redirect(`/dashboard/billing/visit/${visitId}`)
+    }
 
-    // For Sierra Leone Free Health Care visits, we record economic prices in line items
+    // For public-coverage visits, we record economic prices in line items
     // but only bill for items that are not explicitly marked as FHC-covered.
     const billableSubtotal = items.reduce((sum, item) => {
       const item_type = (item.item_type as string | undefined) || "billable"
@@ -279,6 +343,14 @@ export default async function VisitBillingPage(props: {
     const total = isFreeHealthCareVisit ? billableSubtotal : subtotal
 
     let invoiceId: string | null = (existingInvoice?.id as string | null) ?? null
+    const invoiceBefore = existingInvoice
+      ? {
+          status: existingInvoice.status ?? null,
+          total_amount: Number(existingInvoice.total_amount ?? 0),
+          payer_type: existingInvoice.payer_type ?? null,
+          company_id: existingInvoice.company_id ?? null,
+        }
+      : null
     const payerValue = payerType === "company" ? "company" : "patient"
 
     if (!invoiceId) {
@@ -308,23 +380,43 @@ export default async function VisitBillingPage(props: {
 
       invoiceId = inserted.id as string
 
-      try {
-        await supabase.from("billing_audit_logs").insert({
-          invoice_id: invoiceId,
-          actor_user_id: user.id,
-          action: "created",
-          old_status: null,
-          new_status: inserted.status as string,
-          amount: inserted.total_amount as number,
-          metadata: {
-            source: "visit_billing",
-            visit_id: visitId,
-            payer_type: payerValue,
-          },
-        })
-      } catch (auditError) {
-        console.error("[v0] Error logging visit invoice creation:", auditError)
+      const { error: billingAuditError } = await supabase.from("billing_audit_logs").insert({
+        invoice_id: invoiceId,
+        actor_user_id: user.id,
+        action: "created",
+        old_status: null,
+        new_status: inserted.status as string,
+        amount: inserted.total_amount as number,
+        metadata: {
+          source: "visit_billing",
+          visit_id: visitId,
+          payer_type: payerValue,
+        },
+      })
+      if (billingAuditError) {
+        await supabase.from("invoices").delete().eq("id", invoiceId)
+        redirect(`/dashboard/billing/visit/${visitId}?error=audit_log_failed`)
       }
+
+      await logAuditEvent({
+        action: "billing.invoice_saved",
+        entityType: "invoice",
+        entityId: invoiceId,
+        user,
+        metadata: {
+          invoice_id: invoiceId,
+          patient_id: patientId,
+          visit_id: visitId,
+          source: "visit_billing",
+          line_item_count: items.length,
+        },
+        after: {
+          status: inserted.status as string,
+          total_amount: total,
+          payer_type: payerValue,
+          company_id: payerValue === "company" ? companyId : null,
+        },
+      })
     } else {
       const { error: updateError } = await supabase
         .from("invoices")
@@ -337,28 +429,62 @@ export default async function VisitBillingPage(props: {
 
       if (updateError) {
         console.error("[v0] Error updating invoice for visit:", updateError.message || updateError)
+        redirect(`/dashboard/billing/visit/${visitId}?error=invoice_update_failed`)
       } else {
-        try {
-          await supabase.from("billing_audit_logs").insert({
-            invoice_id: invoiceId,
-            actor_user_id: user.id,
-            action: "updated",
-            old_status: existingInvoice?.status ?? null,
-            new_status: existingInvoice?.status ?? null,
-            amount: total,
-            metadata: {
-              source: "visit_billing",
-              visit_id: visitId,
-              payer_type: payerValue,
-            },
-          })
-        } catch (auditError) {
-          console.error("[v0] Error logging visit invoice update:", auditError)
+        const { error: billingAuditError } = await supabase.from("billing_audit_logs").insert({
+          invoice_id: invoiceId,
+          actor_user_id: user.id,
+          action: "updated",
+          old_status: existingInvoice?.status ?? null,
+          new_status: existingInvoice?.status ?? null,
+          amount: total,
+          metadata: {
+            source: "visit_billing",
+            visit_id: visitId,
+            payer_type: payerValue,
+          },
+        })
+        if (billingAuditError) {
+          await supabase
+            .from("invoices")
+            .update({
+              total_amount: invoiceBefore?.total_amount ?? null,
+              payer_type: (invoiceBefore?.payer_type as string | null) ?? "patient",
+              company_id: (invoiceBefore?.company_id as string | null) ?? null,
+            })
+            .eq("id", invoiceId)
+          redirect(`/dashboard/billing/visit/${visitId}?error=audit_log_failed`)
         }
+
+        await logAuditEvent({
+          action: "billing.invoice_saved",
+          entityType: "invoice",
+          entityId: invoiceId,
+          user,
+          metadata: {
+            invoice_id: invoiceId,
+            patient_id: patientId,
+            visit_id: visitId,
+            source: "visit_billing",
+            line_item_count: items.length,
+          },
+          before: invoiceBefore,
+          after: {
+            status: existingInvoice?.status ?? null,
+            total_amount: total,
+            payer_type: payerValue,
+            company_id: payerValue === "company" ? companyId : null,
+          },
+        })
       }
     }
 
     if (invoiceId) {
+      const { data: previousInvoiceItems } = await supabase
+        .from("invoice_items")
+        .select("description, quantity, unit_price, amount, item_type")
+        .eq("invoice_id", invoiceId)
+
       // Replace invoice_items with the current set of line items
       const { error: deleteError } = await supabase
         .from("invoice_items")
@@ -367,6 +493,7 @@ export default async function VisitBillingPage(props: {
 
       if (deleteError) {
         console.error("[v0] Error clearing existing invoice items:", deleteError.message || deleteError)
+        redirect(`/dashboard/billing/visit/${visitId}?error=invoice_items_save_failed`)
       }
 
       if (items.length > 0) {
@@ -390,14 +517,52 @@ export default async function VisitBillingPage(props: {
         const { error: itemsError } = await supabase.from("invoice_items").insert(invoiceItemsPayload)
         if (itemsError) {
           console.error("[v0] Error inserting invoice items for visit:", itemsError.message || itemsError)
+
+          const fallbackRows = ((previousInvoiceItems || []) as Array<{
+            description: string | null
+            quantity: number | null
+            unit_price: number | null
+            amount: number | null
+            item_type: string | null
+          }>)
+            .filter((row) => row.description && Number(row.quantity) > 0)
+            .map((row) => ({
+              invoice_id: invoiceId as string,
+              description: String(row.description),
+              quantity: Number(row.quantity),
+              unit_price: Number(row.unit_price ?? 0),
+              amount: Number(row.amount ?? 0),
+              item_type: row.item_type || "billable",
+            }))
+
+          if (fallbackRows.length > 0) {
+            const { error: restoreError } = await supabase.from("invoice_items").insert(fallbackRows)
+            if (restoreError) {
+              console.error("[v0] Error restoring previous invoice items after failure:", restoreError.message || restoreError)
+            }
+          }
+
+          redirect(`/dashboard/billing/visit/${visitId}?error=invoice_items_save_failed`)
         }
       }
     }
 
     if (payerType === "company") {
-      await supabase.from("visits").update({ assigned_company_id: companyId }).eq("id", visitId)
+      const { error: visitCompanyError } = await supabase
+        .from("visits")
+        .update({ assigned_company_id: companyId })
+        .eq("id", visitId)
+      if (visitCompanyError) {
+        redirect(`/dashboard/billing/visit/${visitId}?error=invoice_update_failed`)
+      }
     } else {
-      await supabase.from("visits").update({ assigned_company_id: null }).eq("id", visitId)
+      const { error: visitCompanyError } = await supabase
+        .from("visits")
+        .update({ assigned_company_id: null })
+        .eq("id", visitId)
+      if (visitCompanyError) {
+        redirect(`/dashboard/billing/visit/${visitId}?error=invoice_update_failed`)
+      }
     }
 
     redirect(`/dashboard/billing/visit/${visitId}`)
@@ -406,13 +571,14 @@ export default async function VisitBillingPage(props: {
   async function markPaidAndSendToPharmacy(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
+    const parsed = z
+      .object({ visit_id: z.string().uuid() })
+      .safeParse({ visit_id: formData.get("visit_id") })
+    if (!parsed.success) {
+      redirect("/dashboard/billing")
     }
-    const visitId = formData.get("visit_id") as string
+    const visitId = parsed.data.visit_id
 
     const { data: invoiceBefore } = await supabase
       .from("invoices")
@@ -426,7 +592,7 @@ export default async function VisitBillingPage(props: {
       .eq("id", visitId)
       .maybeSingle()
 
-    const currentStatus = (beforeVisit?.visit_status as VisitStatus | null) ?? null
+    const currentStatus = parseVisitStatus(beforeVisit?.visit_status)
 
     if (!currentStatus) {
       console.error("[v0] Billing markPaidAndSendToPharmacy: missing current visit_status", { visitId })
@@ -434,7 +600,7 @@ export default async function VisitBillingPage(props: {
     }
 
     try {
-      assertVisitTransition(currentStatus as VisitStatus, "pharmacy_pending")
+      assertVisitTransition(currentStatus, "pharmacy_pending")
     } catch (err) {
       console.error("[v0] Invalid visit status transition (billing -> pharmacy_pending)", {
         visitId,
@@ -450,56 +616,67 @@ export default async function VisitBillingPage(props: {
       redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
     }
 
-    await supabase
-      .from("invoices")
-      .update({
-        paid_amount: invoiceBefore?.total_amount ?? 0,
-        status: "paid",
-        payment_date: new Date().toISOString(),
-      })
-      .eq("id", invoiceBefore?.id as string)
+    const rpcMarkPaidResult = await supabase.rpc("mark_visit_invoice_paid_transactional", {
+      p_visit_id: visitId,
+      p_next_visit_status: "pharmacy_pending",
+      p_actor_user_id: user.id,
+      p_audit_source: "visit_billing_mark_paid",
+    })
 
-    if (invoiceBefore) {
-      try {
-        await supabase.from("billing_audit_logs").insert({
-          invoice_id: invoiceBefore.id as string,
-          actor_user_id: user.id,
-          action: "status_changed",
-          old_status: (invoiceBefore.status as string | null) ?? null,
-          new_status: "paid",
-          amount: (invoiceBefore.total_amount as number | null) ?? null,
+    if (!rpcMarkPaidResult.error) {
+      const rpcData = (rpcMarkPaidResult.data || null) as { ok?: boolean; code?: string } | null
+      if (rpcData?.ok) {
+        await logAuditEvent({
+          action: "billing.invoice_paid",
+          entityType: "invoice",
+          entityId: invoiceBefore.id as string,
+          user,
           metadata: {
-            source: "visit_billing_mark_paid",
+            invoice_id: invoiceBefore.id as string,
             visit_id: visitId,
+            next_visit_status: "pharmacy_pending",
+          },
+          before: {
+            status: invoiceBefore.status ?? null,
+            paid_amount: Number(invoiceBefore.paid_amount ?? 0),
+          },
+          after: {
+            status: "paid",
+            paid_amount: Number(invoiceBefore.total_amount ?? 0),
           },
         })
-      } catch (auditError) {
-        console.error("[v0] Error logging visit invoice status change:", auditError)
+        redirect("/dashboard/billing")
       }
+
+      const code = String(rpcData?.code || "")
+      if (code === "invoice_not_found" || code === "visit_not_found" || code === "invalid_transition") {
+        redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
+      }
+      redirect(`/dashboard/billing/visit/${visitId}?error=invoice_update_failed`)
+    } else {
+      const rpcErrorCode = String((rpcMarkPaidResult.error as { code?: string } | null)?.code || "")
+      if (rpcErrorCode === "42883") {
+        redirect(`/dashboard/billing/visit/${visitId}?error=transactional_dependency_unavailable`)
+      }
+      redirect(`/dashboard/billing/visit/${visitId}?error=invoice_update_failed`)
     }
-
-    await supabase
-      .from("visits")
-      .update({ visit_status: "pharmacy_pending" })
-      .eq("id", visitId)
-
-    redirect("/dashboard/billing")
   }
 
   async function markPaidAndCompleteVisit(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
+    const parsed = z
+      .object({ visit_id: z.string().uuid() })
+      .safeParse({ visit_id: formData.get("visit_id") })
+    if (!parsed.success) {
+      redirect("/dashboard/billing")
     }
-    const visitId = formData.get("visit_id") as string
+    const visitId = parsed.data.visit_id
 
     const { data: invoiceBefore } = await supabase
       .from("invoices")
-      .select("id, total_amount, status")
+      .select("id, total_amount, paid_amount, status")
       .eq("visit_id", visitId)
       .maybeSingle()
 
@@ -509,13 +686,13 @@ export default async function VisitBillingPage(props: {
       .eq("id", visitId)
       .maybeSingle()
 
-    const currentStatus = (beforeVisit?.visit_status as VisitStatus | null) ?? null
+    const currentStatus = parseVisitStatus(beforeVisit?.visit_status)
     if (!currentStatus) {
       redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
     }
 
     try {
-      assertVisitTransition(currentStatus as VisitStatus, "completed")
+      assertVisitTransition(currentStatus, "completed")
     } catch (err) {
       console.error("[v0] Invalid visit status transition (billing -> completed)", {
         visitId,
@@ -530,25 +707,61 @@ export default async function VisitBillingPage(props: {
       redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
     }
 
-    await supabase
-      .from("invoices")
-      .update({
-        paid_amount: invoiceBefore.total_amount ?? 0,
-        status: "paid",
-        payment_date: new Date().toISOString(),
-      })
-      .eq("id", invoiceBefore.id as string)
+    const rpcMarkPaidResult = await supabase.rpc("mark_visit_invoice_paid_transactional", {
+      p_visit_id: visitId,
+      p_next_visit_status: "completed",
+      p_actor_user_id: user.id,
+      p_audit_source: "visit_billing_mark_complete",
+    })
 
-    await supabase
-      .from("visits")
-      .update({ visit_status: "completed" })
-      .eq("id", visitId)
+    if (!rpcMarkPaidResult.error) {
+      const rpcData = (rpcMarkPaidResult.data || null) as { ok?: boolean; code?: string } | null
+      if (rpcData?.ok) {
+        await logAuditEvent({
+          action: "billing.invoice_paid",
+          entityType: "invoice",
+          entityId: invoiceBefore.id as string,
+          user,
+          metadata: {
+            invoice_id: invoiceBefore.id as string,
+            visit_id: visitId,
+            next_visit_status: "completed",
+          },
+          before: {
+            status: invoiceBefore.status ?? null,
+            paid_amount: Number(invoiceBefore.paid_amount ?? 0),
+          },
+          after: {
+            status: "paid",
+            paid_amount: Number(invoiceBefore.total_amount ?? 0),
+          },
+        })
+        redirect("/dashboard/billing")
+      }
 
-    redirect("/dashboard/billing")
+      const code = String(rpcData?.code || "")
+      if (code === "invoice_not_found" || code === "visit_not_found" || code === "invalid_transition") {
+        redirect(`/dashboard/billing/visit/${visitId}?error=visit_transition_invalid`)
+      }
+      redirect(`/dashboard/billing/visit/${visitId}?error=invoice_update_failed`)
+    } else {
+      const rpcErrorCode = String((rpcMarkPaidResult.error as { code?: string } | null)?.code || "")
+      if (rpcErrorCode === "42883") {
+        redirect(`/dashboard/billing/visit/${visitId}?error=transactional_dependency_unavailable`)
+      }
+      redirect(`/dashboard/billing/visit/${visitId}?error=invoice_update_failed`)
+    }
   }
 
   const initialItems: LineItem[] =
     existingInvoiceItems.length > 0 ? existingInvoiceItems : suggestedExtendedCareItems.length > 0 ? suggestedExtendedCareItems : []
+
+  const tariffPreviews: TariffPreview[] = suggestedExtendedCareItems
+    .filter((item) => item.unit_price > 0)
+    .map((item) => ({
+      description: item.description,
+      amount: item.quantity * item.unit_price,
+    }))
 
   return (
     <div className="space-y-6">
@@ -584,7 +797,7 @@ export default async function VisitBillingPage(props: {
               )}
               {visit.is_free_health_care && (
                 <Badge variant="default" className="text-[11px] font-normal">
-                  Free Health Care visit
+                  {settings.publicCoverageLabel} visit
                 </Badge>
               )}
               {facility?.name && (
@@ -626,7 +839,7 @@ export default async function VisitBillingPage(props: {
               )}
               {insuranceExpiryStr && (
                 <p>
-                  Expiry: {new Date(insuranceExpiryStr).toLocaleDateString()} -
+                  Expiry: {formatDate(insuranceExpiryStr, settings, { style: "numeric" })} -
                   <span className={isInsuranceValid ? "text-emerald-700" : "text-amber-700 font-semibold"}>
                     {isInsuranceValid ? " Valid" : " Expired"}
                   </span>
@@ -655,8 +868,8 @@ export default async function VisitBillingPage(props: {
           </div>
           {visit.is_free_health_care && (
             <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-              This visit is registered under Sierra Leone Free Health Care. Follow FHC pricing rules and do not charge
-              the patient directly unless local policy requires exceptions.
+              This visit is registered under a public coverage program. Follow local coverage pricing rules and do not
+              charge the patient directly unless policy requires exceptions.
             </div>
           )}
           {visit.diagnosis && (
@@ -689,7 +902,19 @@ export default async function VisitBillingPage(props: {
           ) : null}
           {suggestedExtendedCareItems.length > 0 ? (
             <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-              Suggested extended-care charges found for this visit: {suggestedExtendedCareItems.length}. These items are preloaded into the invoice with zero price so billing can confirm and price them before saving.
+              Suggested extended-care charges found for this visit: {suggestedExtendedCareItems.length}. Tariff-based prices are preloaded when a matching tariff exists, and billing staff can override them before saving.
+            </div>
+          ) : null}
+          {tariffPreviews.length > 0 ? (
+            <div className="rounded-md border bg-muted/30 px-3 py-3 text-xs text-muted-foreground">
+              <p className="mb-2 font-medium text-foreground">Auto-calculated tariff preview</p>
+              <div className="space-y-1">
+                {tariffPreviews.map((item) => (
+                  <p key={item.description}>
+                    {item.description}: <span className="font-medium text-foreground">{formatCurrency(item.amount, settings)}</span>
+                  </p>
+                ))}
+              </div>
             </div>
           ) : null}
           {recommendedExtendedCareItems.length > 0 ? (
@@ -734,7 +959,7 @@ export default async function VisitBillingPage(props: {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               Invoice Line Items
-              <FormHelpTip text="Use one line per billable service, medicine, or exception. Free Health Care items are still recorded here for audit visibility, but covered items are zero-rated during save." />
+              <FormHelpTip text={`Use one line per billable service, medicine, or exception. ${settings.publicCoverageLabel} items are still recorded here for audit visibility, but covered items are zero-rated during save.`} />
             </CardTitle>
             <CardDescription>Services and medicines to charge for this visit.</CardDescription>
           </CardHeader>
@@ -796,9 +1021,9 @@ export default async function VisitBillingPage(props: {
                 {existingInvoice && (
                   <div className="mt-1 space-y-1 text-xs">
                     <p className="font-medium">
-                      Total: Le {Number(existingInvoice.total_amount || 0).toLocaleString()}
+                      Total: {formatCurrency(Number(existingInvoice.total_amount || 0), settings)}
                     </p>
-                    <p>Paid: Le {Number(existingInvoice.paid_amount || 0).toLocaleString()}</p>
+                    <p>Paid: {formatCurrency(Number(existingInvoice.paid_amount || 0), settings)}</p>
                     <p>Status: {existingInvoice.status || "pending"}</p>
                   </div>
                 )}

@@ -3,13 +3,22 @@ import { redirect } from "next/navigation"
 import { createServerClient } from "@/lib/supabase/server"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
-import { buildInsuranceBatchNumber, fetchEligibleInsuranceInvoices, groupInvoicesByPatient } from "@/lib/billing/insurance-batches"
+import {
+  buildInsuranceBatchNumber,
+  createInsuranceBillingBatchTransactional,
+  fetchEligibleInsuranceInvoices,
+  groupInvoicesByPatient,
+} from "@/lib/billing/insurance-batches"
 import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency } from "@/lib/locale-format"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface InsuranceBillingPageProps {
   searchParams: Promise<{ company_id?: string; from?: string; to?: string; status?: string }>
@@ -23,6 +32,7 @@ function parseDate(value: string | null, fallback: Date) {
 
 export default async function InsuranceBillingPage({ searchParams }: InsuranceBillingPageProps) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -49,18 +59,26 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
   async function createInsuranceBatch(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-    if (!user) {
-      redirect("/auth/login")
-    }
-    if (!can(user, "billing.manage")) {
-      redirect("/dashboard")
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
+    const parsed = z
+      .object({
+        company_id: z.string().uuid(),
+        from: z.string().trim().min(10).max(10),
+        to: z.string().trim().min(10).max(10),
+      })
+      .safeParse({
+        company_id: ((formData.get("company_id") as string | null) || "").trim(),
+        from: ((formData.get("from") as string | null) || "").trim(),
+        to: ((formData.get("to") as string | null) || "").trim(),
+      })
+
+    if (!parsed.success) {
+      redirect("/dashboard/billing/insurance")
     }
 
-    const companyId = ((formData.get("company_id") as string | null) || "").trim()
-    const from = ((formData.get("from") as string | null) || "").trim()
-    const to = ((formData.get("to") as string | null) || "").trim()
+    const companyId = parsed.data.company_id
+    const from = parsed.data.from
+    const to = parsed.data.to
     if (!companyId || !from || !to) {
       redirect("/dashboard/billing/insurance")
     }
@@ -76,43 +94,35 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
 
     const batchNumber = buildInsuranceBatchNumber()
     const totalAmount = eligibleInvoices.reduce((sum, invoice) => sum + invoice.balance, 0)
-
-    const { data: batch, error: batchError } = await supabase
-      .from("insurance_billing_batches")
-      .insert({
-        batch_number: batchNumber,
-        company_id: companyId,
-        from_date: from,
-        to_date: to,
-        status: "draft",
-        subtotal: totalAmount,
-        total_amount: totalAmount,
-        paid_amount: 0,
-        created_by: user.id,
+    let batchId: string
+    try {
+      batchId = await createInsuranceBillingBatchTransactional(supabase, {
+        batchNumber,
+        companyId,
+        fromDate: from,
+        toDate: to,
+        createdBy: user.id,
+        invoiceIds: eligibleInvoices.map((invoice) => invoice.id),
       })
-      .select("id")
-      .maybeSingle()
-
-    if (batchError || !batch?.id) {
-      console.error("[insurance-billing] Failed to create batch:", batchError?.message || batchError)
+    } catch (error) {
+      console.error("[insurance-billing] Failed to create batch transactionally:", error)
       redirect(`/dashboard/billing/insurance?company_id=${companyId}&from=${from}&to=${to}`)
     }
 
-    const { error: itemError } = await supabase.from("insurance_billing_batch_items").insert(
-      eligibleInvoices.map((invoice) => ({
-        batch_id: batch.id,
-        invoice_id: invoice.id,
-        patient_id: invoice.patient_id,
-        visit_id: invoice.visit_id,
-        amount: invoice.balance,
-      })),
-    )
-
-    if (itemError) {
-      console.error("[insurance-billing] Failed to create batch items:", itemError.message || itemError)
+    const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+      actor_user_id: user.id,
+      target_user_id: user.id,
+      action: "insurance_batch_create",
+      notes: `Batch ${batchNumber} for ${eligibleInvoices.length} invoice(s), total ${totalAmount}`,
+    })
+    if (auditError) {
+      await supabase.from("insurance_billing_batch_items").delete().eq("batch_id", batchId)
+      await supabase.from("invoices").update({ insurance_batch_id: null }).eq("insurance_batch_id", batchId)
+      await supabase.from("insurance_billing_batches").delete().eq("id", batchId)
+      redirect(`/dashboard/billing/insurance?company_id=${companyId}&from=${from}&to=${to}&error=audit_log_failed`)
     }
 
-    redirect(`/dashboard/billing/insurance/${batch.id}`)
+    redirect(`/dashboard/billing/insurance/${batchId}`)
   }
 
   const [{ data: companies }, { data: batchesRaw }] = await Promise.all([
@@ -158,6 +168,9 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
         <div className="flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
             <Link href="/dashboard/billing">Back to Billing</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/billing/insurance/reconciliation">Reconciliation</Link>
           </Button>
           <Button asChild variant="outline" size="sm">
             <Link href="/dashboard/reports/company-billing">Company billing report</Link>
@@ -229,7 +242,7 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
               </Card>
               <Card>
                 <CardHeader className="pb-2"><CardTitle className="text-sm">Grand total</CardTitle></CardHeader>
-                <CardContent><p className="text-2xl font-bold">Le {previewTotal.toLocaleString()}</p></CardContent>
+                <CardContent><p className="text-2xl font-bold">{formatCurrency(previewTotal, settings)}</p></CardContent>
               </Card>
             </div>
           ) : null}
@@ -251,7 +264,7 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
                           <p className="font-medium">{group.patientName}</p>
                           <p className="text-xs text-muted-foreground">{group.patientNumber}</p>
                         </div>
-                        <p className="text-sm font-semibold">Le {group.total.toLocaleString()}</p>
+                        <p className="text-sm font-semibold">{formatCurrency(group.total, settings)}</p>
                       </div>
                       {group.patientId && (!coverageMap.get(group.patientId) || coverageMap.get(group.patientId)?.relationshipLabel === "Unlinked") ? (
                         <p className="mt-2 text-xs text-amber-700">
@@ -262,7 +275,7 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
                         {group.invoices.map((invoice) => (
                           <div key={invoice.id} className="flex items-center justify-between gap-3">
                             <span>{invoice.invoice_number || invoice.id}</span>
-                            <span>Le {invoice.balance.toLocaleString()}</span>
+                            <span>{formatCurrency(invoice.balance, settings)}</span>
                           </div>
                         ))}
                       </div>
@@ -322,8 +335,8 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
                     </div>
                     <div className="flex items-center gap-3 text-sm">
                       <Badge variant={batch.status === "paid" ? "secondary" : "outline"}>{batch.status}</Badge>
-                      <span>Total: Le {Number(batch.total_amount || 0).toLocaleString()}</span>
-                      <span>Balance: Le {balance.toLocaleString()}</span>
+                      <span>Total: {formatCurrency(Number(batch.total_amount || 0), settings)}</span>
+                      <span>Balance: {formatCurrency(balance, settings)}</span>
                       <Button asChild size="sm" variant="outline">
                         <Link href={`/dashboard/billing/insurance/${batch.id}`}>Open</Link>
                       </Button>

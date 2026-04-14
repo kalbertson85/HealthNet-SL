@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { formatDateTime, type GlobalSettingsInput } from "@/lib/locale-format"
 
 interface StoredDraftEnvelope {
   savedAt?: number
@@ -32,15 +33,7 @@ const KNOWN_DRAFTS: KnownDraft[] = [
   { key: "draft:lab:new", title: "Lab order", description: "Resume unfinished lab test order.", href: "/dashboard/lab/new" },
 ]
 
-function formatSavedAt(savedAt: number) {
-  try {
-    return new Date(savedAt).toLocaleString()
-  } catch {
-    return "Unknown"
-  }
-}
-
-export function DraftResumePanel() {
+export function DraftResumePanel({ settings }: { settings?: GlobalSettingsInput }) {
   const [drafts, setDrafts] = useState<DraftEntry[]>([])
 
   useEffect(() => {
@@ -86,7 +79,7 @@ export function DraftResumePanel() {
             <div>
               <p className="font-medium">{draft.title}</p>
               <p className="text-sm text-muted-foreground">{draft.description}</p>
-              <p className="text-xs text-muted-foreground">Last saved {formatSavedAt(draft.savedAt)}</p>
+              <p className="text-xs text-muted-foreground">Last saved {formatDateTime(new Date(draft.savedAt), settings)}</p>
             </div>
             <div className="flex gap-2">
               <Button asChild size="sm" variant="outline">

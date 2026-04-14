@@ -5,6 +5,8 @@ import { can } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface CompanyEmployeesPageProps {
   params: Promise<{ id: string }>
@@ -78,25 +80,79 @@ export default async function CompanyEmployeesPage({ params, searchParams }: Com
   async function updateEmployeeInsurance(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-
-    const id = formData.get("employee_id") as string
-    const phone = ((formData.get("phone") as string | null) || "").trim() || null
-    const insuranceCardNumber = ((formData.get("insurance_card_number") as string | null) || "").trim() || null
-    const insuranceCardSerial = ((formData.get("insurance_card_serial") as string | null) || "").trim() || null
-    const insuranceExpiry = (formData.get("insurance_expiry_date") as string | null) || null
-    const status = ((formData.get("status") as string | null) || "").trim() || null
-
-    await supabase
-      .from("company_employees")
-      .update({
-        phone,
-        insurance_card_number: insuranceCardNumber,
-        insurance_card_serial: insuranceCardSerial,
-        insurance_expiry_date: insuranceExpiry,
-        status,
+    const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+    const parsed = z
+      .object({
+        employee_id: z.string().uuid(),
+        phone: z.string().trim().max(50).optional(),
+        insurance_card_number: z.string().trim().max(100).optional(),
+        insurance_card_serial: z.string().trim().max(100).optional(),
+        insurance_expiry_date: z.string().trim().optional(),
+        status: z.enum(["active", "expired", "missing"]).optional(),
       })
+      .safeParse({
+        employee_id: formData.get("employee_id"),
+        phone: formData.get("phone"),
+        insurance_card_number: formData.get("insurance_card_number"),
+        insurance_card_serial: formData.get("insurance_card_serial"),
+        insurance_expiry_date: formData.get("insurance_expiry_date"),
+        status: formData.get("status"),
+      })
+    if (!parsed.success) {
+      redirect(`/dashboard/settings/companies/${companyId}/employees`)
+    }
+    const id = parsed.data.employee_id
+    const phone = parsed.data.phone || null
+    const insuranceCardNumber = parsed.data.insurance_card_number || null
+    const insuranceCardSerial = parsed.data.insurance_card_serial || null
+    const insuranceExpiry = parsed.data.insurance_expiry_date || null
+    const status = parsed.data.status || null
+
+    const { data: existingEmployee, error: employeeFetchError } = await supabase
+      .from("company_employees")
+      .select("id, company_id, phone, insurance_card_number, insurance_card_serial, insurance_expiry_date, status")
       .eq("id", id)
+      .eq("company_id", companyId)
+      .maybeSingle()
+    if (employeeFetchError || !existingEmployee?.id) {
+      redirect(`/dashboard/settings/companies/${companyId}/employees?error=employee_not_found`)
+    }
+
+    const updatePayload = {
+      phone,
+      insurance_card_number: insuranceCardNumber,
+      insurance_card_serial: insuranceCardSerial,
+      insurance_expiry_date: insuranceExpiry,
+      status,
+    }
+    const { error: employeeUpdateError } = await supabase
+      .from("company_employees")
+      .update(updatePayload)
+      .eq("id", id)
+      .eq("company_id", companyId)
+    if (employeeUpdateError) {
+      redirect(`/dashboard/settings/companies/${companyId}/employees?error=employee_update_failed`)
+    }
+
+    const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+      actor_user_id: user.id,
+      target_user_id: user.id,
+      action: "company_employee_insurance_update",
+    })
+    if (auditError) {
+      await supabase
+        .from("company_employees")
+        .update({
+          phone: existingEmployee.phone,
+          insurance_card_number: existingEmployee.insurance_card_number,
+          insurance_card_serial: existingEmployee.insurance_card_serial,
+          insurance_expiry_date: existingEmployee.insurance_expiry_date,
+          status: existingEmployee.status,
+        })
+        .eq("id", id)
+        .eq("company_id", companyId)
+      redirect(`/dashboard/settings/companies/${companyId}/employees?error=audit_log_failed`)
+    }
 
     redirect(`/dashboard/settings/companies/${companyId}/employees`)
   }
@@ -104,25 +160,89 @@ export default async function CompanyEmployeesPage({ params, searchParams }: Com
   async function updateDependentInsurance(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-
-    const id = formData.get("dependent_id") as string
-    const relationship = ((formData.get("relationship") as string | null) || "").trim() || null
-    const insuranceCardNumber = ((formData.get("insurance_card_number") as string | null) || "").trim() || null
-    const insuranceCardSerial = ((formData.get("insurance_card_serial") as string | null) || "").trim() || null
-    const insuranceExpiry = (formData.get("insurance_expiry_date") as string | null) || null
-    const status = ((formData.get("status") as string | null) || "").trim() || null
-
-    await supabase
-      .from("employee_dependents")
-      .update({
-        relationship,
-        insurance_card_number: insuranceCardNumber,
-        insurance_card_serial: insuranceCardSerial,
-        insurance_expiry_date: insuranceExpiry,
-        status,
+    const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+    const parsed = z
+      .object({
+        dependent_id: z.string().uuid(),
+        relationship: z.string().trim().max(100).optional(),
+        insurance_card_number: z.string().trim().max(100).optional(),
+        insurance_card_serial: z.string().trim().max(100).optional(),
+        insurance_expiry_date: z.string().trim().optional(),
+        status: z.enum(["active", "expired", "missing"]).optional(),
       })
+      .safeParse({
+        dependent_id: formData.get("dependent_id"),
+        relationship: formData.get("relationship"),
+        insurance_card_number: formData.get("insurance_card_number"),
+        insurance_card_serial: formData.get("insurance_card_serial"),
+        insurance_expiry_date: formData.get("insurance_expiry_date"),
+        status: formData.get("status"),
+      })
+    if (!parsed.success) {
+      redirect(`/dashboard/settings/companies/${companyId}/employees`)
+    }
+
+    const id = parsed.data.dependent_id
+    const relationship = parsed.data.relationship || null
+    const insuranceCardNumber = parsed.data.insurance_card_number || null
+    const insuranceCardSerial = parsed.data.insurance_card_serial || null
+    const insuranceExpiry = parsed.data.insurance_expiry_date || null
+    const status = parsed.data.status || null
+
+    const { data: existingDependent, error: dependentFetchError } = await supabase
+      .from("employee_dependents")
+      .select(
+        "id, employee_id, relationship, insurance_card_number, insurance_card_serial, insurance_expiry_date, status",
+      )
       .eq("id", id)
+      .maybeSingle()
+    if (dependentFetchError || !existingDependent?.id) {
+      redirect(`/dashboard/settings/companies/${companyId}/employees?error=dependent_not_found`)
+    }
+
+    const { data: parentEmployee, error: parentEmployeeError } = await supabase
+      .from("company_employees")
+      .select("id")
+      .eq("id", existingDependent.employee_id)
+      .eq("company_id", companyId)
+      .maybeSingle()
+    if (parentEmployeeError || !parentEmployee?.id) {
+      redirect(`/dashboard/settings/companies/${companyId}/employees?error=dependent_not_found`)
+    }
+
+    const updatePayload = {
+      relationship,
+      insurance_card_number: insuranceCardNumber,
+      insurance_card_serial: insuranceCardSerial,
+      insurance_expiry_date: insuranceExpiry,
+      status,
+    }
+    const { error: dependentUpdateError } = await supabase
+      .from("employee_dependents")
+      .update(updatePayload)
+      .eq("id", id)
+    if (dependentUpdateError) {
+      redirect(`/dashboard/settings/companies/${companyId}/employees?error=dependent_update_failed`)
+    }
+
+    const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+      actor_user_id: user.id,
+      target_user_id: user.id,
+      action: "company_dependent_insurance_update",
+    })
+    if (auditError) {
+      await supabase
+        .from("employee_dependents")
+        .update({
+          relationship: existingDependent.relationship,
+          insurance_card_number: existingDependent.insurance_card_number,
+          insurance_card_serial: existingDependent.insurance_card_serial,
+          insurance_expiry_date: existingDependent.insurance_expiry_date,
+          status: existingDependent.status,
+        })
+        .eq("id", id)
+      redirect(`/dashboard/settings/companies/${companyId}/employees?error=audit_log_failed`)
+    }
 
     redirect(`/dashboard/settings/companies/${companyId}/employees`)
   }

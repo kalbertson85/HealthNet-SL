@@ -7,6 +7,8 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { ArrowLeft, Search } from "lucide-react"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 import {
   ensureTodayVisitForRecords,
   fetchTodaysVisitsByPatientIds,
@@ -75,13 +77,14 @@ export default async function RecordsPage(props: {
   async function ensureVisit(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-
-    const patientId = (formData.get("patient_id") as string | null) ?? null
-
-    if (!patientId) {
+    const { supabase } = await requireServerActionPermission("patients.create")
+    const parsed = z
+      .object({ patient_id: z.string().uuid() })
+      .safeParse({ patient_id: formData.get("patient_id") })
+    if (!parsed.success) {
       redirect("/dashboard/records?error=missing_patient")
     }
+    const patientId = parsed.data.patient_id
 
     const result = await ensureTodayVisitForRecords(supabase, patientId)
     if (!result.ok) {
@@ -200,6 +203,11 @@ export default async function RecordsPage(props: {
                     <Button asChild size="sm" variant="outline">
                       <Link href={`/dashboard/records/patient-card/${p.id}`} prefetch={false}>
                         Print patient card
+                      </Link>
+                    </Button>
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/dashboard/records/history/${p.id}`} prefetch={false}>
+                        View history
                       </Link>
                     </Button>
                     <Button asChild size="sm" variant="ghost">

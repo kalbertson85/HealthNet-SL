@@ -16,6 +16,8 @@ import {
   fetchTopCompanies,
   parseReportDate,
 } from "@/lib/reports/queries"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency } from "@/lib/locale-format"
 
 function ReportSummaryFallback() {
   return (
@@ -49,6 +51,7 @@ function FhcSectionFallback() {
 async function ReportsSummarySection({ fromIso, toIso, fromParam, toParam }: { fromIso: string; toIso: string; fromParam: string; toParam: string }) {
   const sectionPerf = startPageRenderTimer("dashboard.reports.summary", { slowThresholdMs: 1200 })
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   try {
     const { monthlyRevenue, paidInvoiceRows, newPatientsCount, completedVisitsCount, pendingLabTestsCount, source } =
@@ -64,7 +67,7 @@ async function ReportsSummarySection({ fromIso, toIso, fromParam, toParam }: { f
 
     return (
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Revenue" value={`Le ${monthlyRevenue.toLocaleString()}`} description={`Paid invoices from ${fromParam} to ${toParam}`} icon={<FileText className="h-4 w-4 text-muted-foreground" />} />
+        <StatCard title="Revenue" value={formatCurrency(monthlyRevenue, settings)} description={`Paid invoices from ${fromParam} to ${toParam}`} icon={<FileText className="h-4 w-4 text-muted-foreground" />} />
         <StatCard title="New Patients" value={newPatientsCount.count ?? 0} description={`Registered from ${fromParam} to ${toParam}`} icon={<Users className="h-4 w-4 text-muted-foreground" />} />
         <StatCard title="Completed Visits" value={completedVisitsCount.count ?? 0} description={`Finished visits from ${fromParam} to ${toParam}`} icon={<Activity className="h-4 w-4 text-muted-foreground" />} />
         <StatCard title="Pending Lab Tests" value={pendingLabTestsCount.count ?? 0} description="Awaiting results" icon={<CalendarRange className="h-4 w-4 text-muted-foreground" />} />
@@ -79,6 +82,7 @@ async function ReportsSummarySection({ fromIso, toIso, fromParam, toParam }: { f
 async function TopCompaniesSection({ fromIso, toIso }: { fromIso: string; toIso: string }) {
   const sectionPerf = startPageRenderTimer("dashboard.reports.top_companies", { slowThresholdMs: 1200 })
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   try {
     const { companyInvoiceRows, topCompanies, source } = await fetchTopCompanies(supabase, fromIso, toIso)
@@ -96,7 +100,7 @@ async function TopCompaniesSection({ fromIso, toIso }: { fromIso: string; toIso:
           <thead>
             <tr className="border-b text-left text-xs text-muted-foreground">
               <th className="py-2 font-medium">Company</th>
-              <th className="py-2 font-medium text-right">Outstanding (Le)</th>
+              <th className="py-2 font-medium text-right">Outstanding</th>
               <th className="py-2 font-medium text-right">Actions</th>
             </tr>
           </thead>
@@ -111,7 +115,7 @@ async function TopCompaniesSection({ fromIso, toIso }: { fromIso: string; toIso:
               topCompanies.map(([companyId, entry]) => (
                 <tr key={companyId} className="border-b last:border-0">
                   <td className="py-2 text-sm">{entry.name}</td>
-                  <td className="py-2 text-right text-sm">{entry.outstanding.toLocaleString()}</td>
+                  <td className="py-2 text-right text-sm">{formatCurrency(entry.outstanding, settings)}</td>
                   <td className="py-2 text-right text-xs">
                     <Button asChild size="sm" variant="outline">
                       <Link href={`/dashboard/billing?company_id=${companyId}`}>Open company billing view</Link>
@@ -133,6 +137,8 @@ async function TopCompaniesSection({ fromIso, toIso }: { fromIso: string; toIso:
 async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; toParam: string }) {
   const sectionPerf = startPageRenderTimer("dashboard.reports.fhc", { slowThresholdMs: 1200 })
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
+  const publicCoverageLabel = settings.publicCoverageLabel
   const startOfRangeIso = `${fromParam}T00:00:00.000Z`
   const endOfRangeIso = `${toParam}T23:59:59.999Z`
 
@@ -165,24 +171,27 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
         ) : null}
 
         <StatCard
-          title="FHC economic cost (month)"
-          value={`Le ${economicCostTotal.toLocaleString()}`}
-          description="Economic value of FHC-covered items this month"
+          title={`${publicCoverageLabel} economic cost (month)`}
+          value={formatCurrency(economicCostTotal, settings)}
+          description={`Economic value of ${publicCoverageLabel.toLowerCase()} items this month`}
           icon={<FileText className="h-4 w-4 text-muted-foreground" />}
         />
 
-        <TableCard title="FHC economic cost by facility (month)" description="Economic value of FHC-covered items this month by facility.">
+        <TableCard
+          title={`${publicCoverageLabel} economic cost by facility (month)`}
+          description={`Economic value of ${publicCoverageLabel.toLowerCase()} items this month by facility.`}
+        >
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
                 <th className="py-2 font-medium">Facility</th>
-                <th className="py-2 font-medium text-right">FHC economic cost (Le)</th>
+                <th className="py-2 font-medium text-right">{publicCoverageLabel} economic cost</th>
               </tr>
             </thead>
             <tbody>
               {costByFacility.length === 0 ? (
                 <tr>
-                  <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No FHC-covered items recorded this month.</td>
+                  <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No {publicCoverageLabel.toLowerCase()} items recorded this month.</td>
                 </tr>
               ) : (
                 costByFacility.map((entry) => (
@@ -196,7 +205,7 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
                         entry.name
                       )}
                     </td>
-                    <td className="py-2 text-right text-sm">{entry.amount.toLocaleString()}</td>
+                    <td className="py-2 text-right text-sm">{formatCurrency(entry.amount, settings)}</td>
                   </tr>
                 ))
               )}
@@ -209,20 +218,23 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
           </div>
         </TableCard>
 
-        <TableCard title="FHC care-path coverage by facility (month)" description="For FHC visits this month: admissions, surgery, and nursing notes by facility.">
+        <TableCard
+          title={`${publicCoverageLabel} care-path coverage by facility (month)`}
+          description={`For ${publicCoverageLabel.toLowerCase()} visits this month: admissions, surgery, and nursing notes by facility.`}
+        >
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
                 <th className="py-2 font-medium">Facility</th>
-                <th className="py-2 font-medium text-right">FHC admissions</th>
-                <th className="py-2 font-medium text-right">FHC surgeries</th>
-                <th className="py-2 font-medium text-right">FHC nursing notes</th>
+                <th className="py-2 font-medium text-right">{publicCoverageLabel} admissions</th>
+                <th className="py-2 font-medium text-right">{publicCoverageLabel} surgeries</th>
+                <th className="py-2 font-medium text-right">{publicCoverageLabel} nursing notes</th>
               </tr>
             </thead>
             <tbody>
               {carePathByFacility.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-4 text-center text-xs text-muted-foreground">No FHC care-path activity recorded this month.</td>
+                  <td colSpan={4} className="py-4 text-center text-xs text-muted-foreground">No {publicCoverageLabel.toLowerCase()} care-path activity recorded this month.</td>
                 </tr>
               ) : (
                 carePathByFacility.map((entry) => (
@@ -239,18 +251,21 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
         </TableCard>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <TableCard title="Radiology FHC visits by facility (month)" description="Free Health Care radiology requests this month by facility.">
+        <TableCard
+          title={`Radiology ${publicCoverageLabel.toLowerCase()} visits by facility (month)`}
+          description={`${publicCoverageLabel} radiology requests this month by facility.`}
+        >
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-xs text-muted-foreground">
                   <th className="py-2 font-medium">Facility</th>
-                  <th className="py-2 font-medium text-right">FHC radiology requests</th>
+                  <th className="py-2 font-medium text-right">{publicCoverageLabel} radiology requests</th>
                 </tr>
               </thead>
               <tbody>
                 {radiologyByFacility.length === 0 ? (
                   <tr>
-                    <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No FHC radiology requests recorded this month.</td>
+                    <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No {publicCoverageLabel.toLowerCase()} radiology requests recorded this month.</td>
                   </tr>
                 ) : (
                   radiologyByFacility.map((entry) => (
@@ -264,18 +279,21 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
             </table>
           </TableCard>
 
-          <TableCard title="Lab FHC tests by facility (month)" description="Free Health Care lab tests this month by facility.">
+        <TableCard
+          title={`Lab ${publicCoverageLabel.toLowerCase()} tests by facility (month)`}
+          description={`${publicCoverageLabel} lab tests this month by facility.`}
+        >
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-xs text-muted-foreground">
                   <th className="py-2 font-medium">Facility</th>
-                  <th className="py-2 font-medium text-right">FHC lab tests</th>
+                  <th className="py-2 font-medium text-right">{publicCoverageLabel} lab tests</th>
                 </tr>
               </thead>
               <tbody>
                 {labByFacility.length === 0 ? (
                   <tr>
-                    <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No FHC lab tests recorded this month.</td>
+                    <td colSpan={2} className="py-4 text-center text-xs text-muted-foreground">No {publicCoverageLabel.toLowerCase()} lab tests recorded this month.</td>
                   </tr>
                 ) : (
                   labByFacility.map((entry) => (
@@ -290,12 +308,15 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
           </TableCard>
         </div>
 
-        <TableCard title="FHC admissions by facility (month)" description="Inpatient admissions linked to FHC visits this month by facility.">
+        <TableCard
+          title={`${publicCoverageLabel} admissions by facility (month)`}
+          description={`Inpatient admissions linked to ${publicCoverageLabel.toLowerCase()} visits this month by facility.`}
+        >
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
                 <th className="py-2 font-medium">Facility</th>
-                <th className="py-2 font-medium text-right">Total FHC admissions</th>
+                <th className="py-2 font-medium text-right">Total {publicCoverageLabel} admissions</th>
                 <th className="py-2 font-medium text-right">Currently admitted</th>
                 <th className="py-2 font-medium text-right">Discharged</th>
               </tr>
@@ -303,7 +324,7 @@ async function FhcAnalyticsSection({ fromParam, toParam }: { fromParam: string; 
             <tbody>
               {admissionsByFacility.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-4 text-center text-xs text-muted-foreground">No FHC-linked admissions recorded this month.</td>
+                  <td colSpan={4} className="py-4 text-center text-xs text-muted-foreground">No {publicCoverageLabel.toLowerCase()} linked admissions recorded this month.</td>
                 </tr>
               ) : (
                 admissionsByFacility.map((entry) => (

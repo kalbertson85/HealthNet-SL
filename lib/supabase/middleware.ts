@@ -4,6 +4,8 @@ import type { SessionUserLike } from "@/lib/utils"
 import { normalizeRole, ensureCan, PermissionError, type PermissionKey } from "@/lib/utils"
 import { apiError } from "@/lib/http/api"
 
+const IDLE_TIMEOUT_COOKIE = "hms_idle_last_seen"
+
 /**
  * Updates the user session in proxy by refreshing tokens and handling auth state.
  * This function should be called in your proxy.ts file.
@@ -61,6 +63,36 @@ export async function updateSession(request: NextRequest, requestHeaders?: Heade
   } = await supabase.auth.getSession()
   const user = session?.user ?? null
 
+  const idleTimeoutMinutes = Number.parseInt(process.env.HMS_IDLE_TIMEOUT_MINUTES || "0", 10)
+  const idleTimeoutMs = Number.isFinite(idleTimeoutMinutes) && idleTimeoutMinutes > 0 ? idleTimeoutMinutes * 60_000 : 0
+
+  if (isProtectedPath && user && idleTimeoutMs > 0) {
+    const now = Date.now()
+    const lastSeenRaw = request.cookies.get(IDLE_TIMEOUT_COOKIE)?.value ?? ""
+    const lastSeen = Number.parseInt(lastSeenRaw, 10)
+
+    if (Number.isFinite(lastSeen) && now - lastSeen > idleTimeoutMs) {
+      const url = request.nextUrl.clone()
+      url.pathname = "/auth/login"
+      url.searchParams.set("reason", "timeout")
+      const timeoutResponse = NextResponse.redirect(url)
+      timeoutResponse.cookies.delete(IDLE_TIMEOUT_COOKIE)
+      request.cookies
+        .getAll()
+        .filter((cookie) => cookie.name.includes("-auth-token"))
+        .forEach((cookie) => timeoutResponse.cookies.delete(cookie.name))
+      return timeoutResponse
+    }
+
+    supabaseResponse.cookies.set(IDLE_TIMEOUT_COOKIE, String(now), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: idleTimeoutMinutes * 60,
+    })
+  }
+
   // Redirect unauthenticated users to login page
   if (
     request.nextUrl.pathname !== "/" &&
@@ -83,6 +115,13 @@ export async function updateSession(request: NextRequest, requestHeaders?: Heade
 export interface AuthContext {
   supabase: ReturnType<typeof createServerClient>
   user: SessionUserLike | null
+}
+
+type AuthProfileRow = {
+  id?: string
+  role?: string | null
+  facility_id?: string | null
+  status?: string | null
 }
 
 export async function getAuthContext(request: NextRequest): Promise<AuthContext> {
@@ -109,15 +148,32 @@ export async function getAuthContext(request: NextRequest): Promise<AuthContext>
     return { supabase, user: null }
   }
 
-  const { data: profile } = await supabase
+  let profile: AuthProfileRow | null = null
+  const profileWithStatus = await supabase
     .from("profiles")
-    .select("id, role, facility_id")
+    .select("id, role, facility_id, status")
     .eq("id", user.id)
     .maybeSingle()
+
+  if (profileWithStatus.error) {
+    const fallbackProfile = await supabase
+      .from("profiles")
+      .select("id, role, facility_id")
+      .eq("id", user.id)
+      .maybeSingle()
+    profile = (fallbackProfile.data as AuthProfileRow | null) ?? null
+  } else {
+    profile = (profileWithStatus.data as AuthProfileRow | null) ?? null
+  }
 
   const authMetadata = (user as { app_metadata?: { role?: string | null }; user_metadata?: { role?: string | null } }).app_metadata
   const userMetadata = (user as { user_metadata?: { role?: string | null } }).user_metadata
   const role = normalizeRole(profile?.role ?? authMetadata?.role ?? userMetadata?.role ?? user.role ?? null)
+  const status = String(profile?.status ?? "active").toLowerCase()
+
+  if (status !== "active") {
+    throw new PermissionError(403, "Forbidden: account is not active")
+  }
 
   return {
     supabase,

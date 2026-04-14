@@ -17,4 +17,16 @@ ALTER TABLE visits
 
 CREATE INDEX IF NOT EXISTS idx_visits_facility_id ON visits(facility_id);
 
+ALTER TABLE facilities ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view facilities" ON facilities;
+DROP POLICY IF EXISTS "Admins can manage facilities" ON facilities;
+
+CREATE POLICY "Authenticated staff can view facilities" ON facilities
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Admins can manage facilities" ON facilities
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
 COMMIT;

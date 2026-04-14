@@ -6,6 +6,7 @@ export type VisitStatus =
   | "pharmacy_pending"
   | "admitted"
   | "completed"
+  | "discharged"
 
 const ALLOWED_TRANSITIONS: Record<VisitStatus, VisitStatus[]> = {
   doctor_pending: ["lab_pending", "billing_pending", "admitted"],
@@ -15,6 +16,15 @@ const ALLOWED_TRANSITIONS: Record<VisitStatus, VisitStatus[]> = {
   pharmacy_pending: ["completed"],
   admitted: ["completed"],
   completed: [],
+  discharged: [],
+}
+
+const KNOWN_VISIT_STATUSES = new Set<VisitStatus>(Object.keys(ALLOWED_TRANSITIONS) as VisitStatus[])
+
+export function parseVisitStatus(value: unknown): VisitStatus | null {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  if (!normalized) return null
+  return KNOWN_VISIT_STATUSES.has(normalized as VisitStatus) ? (normalized as VisitStatus) : null
 }
 
 export function canTransitionVisitStatus(from: VisitStatus, to: VisitStatus): boolean {

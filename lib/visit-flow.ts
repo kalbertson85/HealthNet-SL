@@ -18,7 +18,7 @@ export async function resolveFacilityIdByCode(supabase: SupabaseLike, code: stri
 export async function ensureActiveVisitForPatient(
   supabase: SupabaseLike,
   patientId: string,
-  opts?: { facilityCode?: string | null; status?: string },
+  opts?: { facilityCode?: string | null; facilityId?: string | null; status?: string },
 ): Promise<string | null> {
   const startOfDay = new Date()
   startOfDay.setHours(0, 0, 0, 0)
@@ -26,10 +26,12 @@ export async function ensureActiveVisitForPatient(
   const visitsQuery = supabase.from("visits") as {
     select: (query: string) => {
       eq: (column: string, value: string) => {
-        gte: (column: string, value: string) => {
-          order: (column: string, options: { ascending: boolean }) => {
-            limit: (count: number) => {
-              maybeSingle: () => Promise<{ data: { id?: string | null } | null }>
+        eq: (column: string, value: string) => {
+          gte: (column: string, value: string) => {
+            order: (column: string, options: { ascending: boolean }) => {
+              limit: (count: number) => {
+                maybeSingle: () => Promise<{ data: { id?: string | null } | null }>
+              }
             }
           }
         }
@@ -50,10 +52,27 @@ export async function ensureActiveVisitForPatient(
     }
   }
 
-  const { data: existingVisit } = await visitsQuery
+  const targetFacilityId = opts?.facilityId ?? (opts?.facilityCode ? await resolveFacilityIdByCode(supabase, opts.facilityCode) : null)
+
+  let existingVisitQuery = (visitsQuery
     .select("id")
-    .eq("patient_id", patientId)
-    .gte("created_at", startOfDay.toISOString())
+    .eq("patient_id", patientId) as unknown as {
+      eq: (column: string, value: string) => unknown
+      gte: (column: string, value: string) => unknown
+      order: (column: string, options: { ascending: boolean }) => unknown
+      limit: (count: number) => { maybeSingle: () => Promise<{ data: { id?: string | null } | null }> }
+    })
+
+  if (targetFacilityId) {
+    existingVisitQuery = existingVisitQuery.eq("facility_id", targetFacilityId) as typeof existingVisitQuery
+  }
+
+  const { data: existingVisit } = await (existingVisitQuery
+    .gte("created_at", startOfDay.toISOString()) as {
+    order: (column: string, options: { ascending: boolean }) => {
+      limit: (count: number) => { maybeSingle: () => Promise<{ data: { id?: string | null } | null }> }
+    }
+  })
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle()
@@ -71,8 +90,7 @@ export async function ensureActiveVisitForPatient(
   const freeHealthCategory = (patient?.free_health_category as string | null) ?? "none"
   const isFreeHealthCare = freeHealthCategory !== "none"
   const payerCategory = isFreeHealthCare ? "fhc" : companyId ? "company" : "self_pay"
-  const facilityCode = opts?.facilityCode ?? "opd"
-  const facilityId = facilityCode ? await resolveFacilityIdByCode(supabase, facilityCode) : null
+  const facilityId = targetFacilityId
 
   const { data: inserted, error } = await visitsQuery
     .insert({

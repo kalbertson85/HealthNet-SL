@@ -5,6 +5,7 @@ import { Activity, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { APP_BRAND_NAME } from "@/config/global"
 
 export default function SignUpPage() {
   return (
@@ -15,13 +16,13 @@ export default function SignUpPage() {
             <Activity className="h-12 w-12 text-blue-600" />
           </div>
           <CardTitle className="text-2xl">Account Access</CardTitle>
-          <CardDescription>HealthNet-SL accounts are provisioned by hospital administrators.</CardDescription>
+          <CardDescription>{APP_BRAND_NAME} accounts are provisioned by facility administrators.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Alert>
             <ShieldCheck className="h-4 w-4" />
             <AlertDescription>
-              Self sign-up is disabled for security. Request an account from your hospital administrator.
+              Self sign-up is disabled for security. Request an account from your facility administrator.
             </AlertDescription>
           </Alert>
 

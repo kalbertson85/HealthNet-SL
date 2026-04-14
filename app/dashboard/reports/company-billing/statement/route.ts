@@ -1,9 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
+import { formatCurrency, formatDate, formatFacilityAddress, type GlobalSettingsInput } from "@/lib/locale-format"
+import { ROLES } from "@/lib/utils"
 
 const PAGE_MARGIN = 36
 const ROW_HEIGHT = 18
@@ -18,21 +20,6 @@ function parseDateParam(value: string | null, fallback: Date) {
   return Number.isNaN(parsed.getTime()) ? fallback : parsed
 }
 
-function formatCurrency(value: number) {
-  return `Le ${new Intl.NumberFormat("en-SL", { maximumFractionDigits: 0 }).format(value)}`
-}
-
-function formatDate(value: string | null) {
-  if (!value) return ""
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(parsed)
-}
-
 export async function GET(request: NextRequest) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "company_billing_statement_pdf",
@@ -42,7 +29,10 @@ export async function GET(request: NextRequest) {
   if (limited) return limited
 
   try {
-    const { supabase } = await requirePermission(request, "reports.view")
+    const { supabase, user } = await requirePermission(request, "admin.export")
+    if (user?.role !== ROLES.ADMIN) {
+      return apiError(403, "forbidden", "Forbidden: only admin can export company billing statements", request)
+    }
     const { searchParams } = new URL(request.url)
     const companyId = (searchParams.get("company_id") || "").trim()
     if (!companyId) {
@@ -73,7 +63,7 @@ export async function GET(request: NextRequest) {
         .order("created_at", { ascending: true }),
       supabase
         .from("hospital_settings")
-        .select("hospital_name, address, phone, email")
+        .select("hospital_name, address, address_line_1, address_line_2, city, state_or_province, postal_code, country, phone, email, currency_code, locale, timezone, date_format, time_format, language")
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle(),
@@ -119,7 +109,7 @@ export async function GET(request: NextRequest) {
       const paid = Number(invoice.paid_amount ?? 0)
       const balance = Math.max(total - paid, 0)
       return {
-        date: formatDate(invoice.created_at || null),
+        date: formatDate(invoice.created_at || null, settings as GlobalSettingsInput),
         beneficiary: patient?.full_name || coverage?.beneficiaryName || "Unknown patient",
         patientNumber: patient?.patient_number || "-",
         relationship: coverage?.relationshipLabel || "Unlinked",
@@ -163,7 +153,7 @@ export async function GET(request: NextRequest) {
 
     draw((settings?.hospital_name || "Hospital").trim(), PAGE_MARGIN, 14, bold)
     y -= 18
-    for (const line of [settings?.address, settings?.phone ? `Tel: ${settings.phone}` : null, settings?.email ? `Email: ${settings.email}` : null].filter(Boolean) as string[]) {
+    for (const line of [formatFacilityAddress(settings as GlobalSettingsInput), settings?.phone ? `Tel: ${settings.phone}` : null, settings?.email ? `Email: ${settings.email}` : null].filter(Boolean) as string[]) {
       draw(line, PAGE_MARGIN, 9, regular, MUTED)
       y -= 12
     }
@@ -178,12 +168,12 @@ export async function GET(request: NextRequest) {
     }
 
     y -= 8
-    draw(`Period: ${formatDate(fromIso)} to ${formatDate(toIso)}`, PAGE_MARGIN, 10, bold)
+    draw(`Period: ${formatDate(fromIso, settings as GlobalSettingsInput)} to ${formatDate(toIso, settings as GlobalSettingsInput)}`, PAGE_MARGIN, 10, bold)
     y -= 14
     draw(`Patients/beneficiaries: ${rows.length}`, PAGE_MARGIN, 9, regular, MUTED)
-    draw(`Billed: ${formatCurrency(totalBilled)}`, 220, 9, regular, MUTED)
-    draw(`Paid: ${formatCurrency(totalPaid)}`, 360, 9, regular, MUTED)
-    draw(`Outstanding: ${formatCurrency(totalOutstanding)}`, 470, 9, regular, MUTED)
+    draw(`Billed: ${formatCurrency(totalBilled, settings as GlobalSettingsInput)}`, 220, 9, regular, MUTED)
+    draw(`Paid: ${formatCurrency(totalPaid, settings as GlobalSettingsInput)}`, 360, 9, regular, MUTED)
+    draw(`Outstanding: ${formatCurrency(totalOutstanding, settings as GlobalSettingsInput)}`, 470, 9, regular, MUTED)
     y -= 20
 
     const columns = [

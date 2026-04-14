@@ -10,6 +10,7 @@ import { ArrowLeft } from "lucide-react"
 import { FormHelpTip } from "@/components/form-help-tip"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 import { advanceVisitToDoctorReviewIfDiagnosticsComplete } from "@/lib/visit-flow"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 export default async function RadiologyRequestDetailPage(props: {
   params: Promise<{ id: string }>
@@ -115,7 +116,7 @@ export default async function RadiologyRequestDetailPage(props: {
   async function updateStatus(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
+    const { supabase, user } = await requireServerActionPermission("lab.manage")
     const status = formData.get("status") as string
 
     const { data: before } = await supabase
@@ -123,10 +124,6 @@ export default async function RadiologyRequestDetailPage(props: {
       .select("status")
       .eq("id", id)
       .maybeSingle()
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
 
     await supabase.from("radiology_requests").update({ status }).eq("id", id)
 
@@ -156,10 +153,7 @@ export default async function RadiologyRequestDetailPage(props: {
   async function enterResults(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { supabase, user } = await requireServerActionPermission("lab.manage")
 
     const interpretation = (formData.get("interpretation") as string | null) ?? ""
 

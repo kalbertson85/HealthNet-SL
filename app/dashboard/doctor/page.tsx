@@ -7,8 +7,11 @@ import { Badge } from "@/components/ui/badge"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
-import { assertVisitTransition, type VisitStatus } from "@/lib/visits"
+import { assertVisitTransition, parseVisitStatus } from "@/lib/visits"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface VisitRow {
   id: string
@@ -47,6 +50,7 @@ export default async function DoctorPage(props: {
   searchParams?: Promise<{ error?: string }>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const { user } = await getSessionUserAndProfile()
 
@@ -101,6 +105,8 @@ export default async function DoctorPage(props: {
     switch (errorCode) {
       case "visit_transition_invalid":
         return "This visit could not be moved because its current status does not allow that action. Please refresh and confirm the visit is in the expected stage before trying again."
+      case "workflow_save_failed":
+        return "The doctor update could not be completed safely. No partial workflow changes were kept."
       default:
         return null
     }
@@ -337,14 +343,22 @@ export default async function DoctorPage(props: {
   async function updateVisit(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
+    const { supabase, user } = await requireServerActionPermission("prescriptions.manage")
 
-    const visitId = formData.get("visit_id") as string
-    const mode = formData.get("mode") as string
+    const parsedAction = z
+      .object({
+        visitId: z.string().uuid(),
+        mode: z.enum(["initial", "review"]),
+      })
+      .safeParse({
+        visitId: formData.get("visit_id"),
+        mode: formData.get("mode"),
+      })
 
-    if (!visitId || !mode) {
+    if (!parsedAction.success) {
       redirect("/dashboard/doctor")
     }
+    const { visitId, mode } = parsedAction.data
 
     if (mode === "initial") {
       const diagnosis = (formData.get("diagnosis") as string | null) ?? ""
@@ -361,7 +375,7 @@ export default async function DoctorPage(props: {
         .eq("id", visitId)
         .maybeSingle()
 
-      const currentStatus = (beforeVisit?.visit_status as VisitStatus | null) ?? null
+      const currentStatus = parseVisitStatus(beforeVisit?.visit_status)
 
       if (!currentStatus) {
         console.error("[v0] Doctor updateVisit(initial): missing current visit_status", { visitId })
@@ -370,7 +384,7 @@ export default async function DoctorPage(props: {
 
       if (investigationType) {
         try {
-          assertVisitTransition(currentStatus as VisitStatus, "lab_pending")
+          assertVisitTransition(currentStatus, "lab_pending")
         } catch (err) {
           console.error("[v0] Invalid visit status transition (doctor initial -> lab_pending)", {
             visitId,
@@ -381,10 +395,7 @@ export default async function DoctorPage(props: {
           redirect("/dashboard/doctor?error=visit_transition_invalid")
         }
 
-        const {
-          data: investigationRows,
-          error: investigationError,
-        } = await supabase
+        const { data: investigationRows, error: investigationError } = await supabase
           .from("investigations")
           .insert({
             visit_id: visitId,
@@ -395,40 +406,39 @@ export default async function DoctorPage(props: {
           .select("id")
           .maybeSingle()
 
-        if (investigationError) {
+        if (investigationError || !investigationRows?.id) {
           console.error("[v0] Error creating investigation from doctor workflow:", investigationError)
+          redirect("/dashboard/doctor?error=workflow_save_failed")
         }
 
         // For imaging investigations, also create a structured radiology request
         const isImaging = ["xray", "mri", "ultrasound"].includes(investigationType)
+        const createdInvestigationId = investigationRows.id as string
 
         if (isImaging && investigationRows?.id && beforeVisit?.patient_id) {
-          const {
-            data: { user: actingUser },
-          } = await supabase.auth.getUser()
-
-          if (!actingUser) {
-            redirect("/auth/login")
-          }
-
           try {
-            await supabase.from("radiology_requests").insert({
+            const { error: radiologyInsertError } = await supabase.from("radiology_requests").insert({
               investigation_id: investigationRows.id,
               visit_id: visitId,
               patient_id: beforeVisit.patient_id as string,
-              doctor_id: actingUser.id,
+              doctor_id: user.id,
               modality: investigationType,
               study_type: investigationType,
               priority: "routine",
               status: "pending",
               clinical_notes: investigationNotes,
             })
+            if (radiologyInsertError) {
+              throw radiologyInsertError
+            }
           } catch (radiologyError) {
             console.error("[v0] Error creating radiology request from doctor workflow:", radiologyError)
+            await supabase.from("investigations").delete().eq("id", createdInvestigationId)
+            redirect("/dashboard/doctor?error=workflow_save_failed")
           }
         }
 
-        await supabase
+        const { error: visitUpdateError } = await supabase
           .from("visits")
           .update({
             diagnosis,
@@ -439,9 +449,17 @@ export default async function DoctorPage(props: {
             visit_status: "lab_pending",
           })
           .eq("id", visitId)
+        if (visitUpdateError) {
+          console.error("[v0] Error updating visit from doctor workflow:", visitUpdateError)
+          if (isImaging) {
+            await supabase.from("radiology_requests").delete().eq("investigation_id", createdInvestigationId)
+          }
+          await supabase.from("investigations").delete().eq("id", createdInvestigationId)
+          redirect("/dashboard/doctor?error=workflow_save_failed")
+        }
       } else {
         try {
-          assertVisitTransition(currentStatus as VisitStatus, "billing_pending")
+          assertVisitTransition(currentStatus, "billing_pending")
         } catch (err) {
           console.error("[v0] Invalid visit status transition (doctor initial -> billing_pending)", {
             visitId,
@@ -452,7 +470,7 @@ export default async function DoctorPage(props: {
           redirect("/dashboard/doctor?error=visit_transition_invalid")
         }
 
-        await supabase
+        const { error: visitUpdateError } = await supabase
           .from("visits")
           .update({
             diagnosis,
@@ -463,6 +481,10 @@ export default async function DoctorPage(props: {
             visit_status: "billing_pending",
           })
           .eq("id", visitId)
+        if (visitUpdateError) {
+          console.error("[v0] Error updating visit from doctor workflow:", visitUpdateError)
+          redirect("/dashboard/doctor?error=workflow_save_failed")
+        }
       }
     }
 
@@ -480,7 +502,7 @@ export default async function DoctorPage(props: {
         .eq("id", visitId)
         .maybeSingle()
 
-      const currentStatus = (beforeVisit?.visit_status as VisitStatus | null) ?? null
+      const currentStatus = parseVisitStatus(beforeVisit?.visit_status)
 
       if (!currentStatus) {
         console.error("[v0] Doctor updateVisit(review): missing current visit_status", { visitId })
@@ -488,7 +510,7 @@ export default async function DoctorPage(props: {
       }
 
       try {
-        assertVisitTransition(currentStatus as VisitStatus, "billing_pending")
+        assertVisitTransition(currentStatus, "billing_pending")
       } catch (err) {
         console.error("[v0] Invalid visit status transition (doctor review -> billing_pending)", {
           visitId,
@@ -499,7 +521,7 @@ export default async function DoctorPage(props: {
         redirect("/dashboard/doctor?error=visit_transition_invalid")
       }
 
-      await supabase
+      const { error: visitUpdateError } = await supabase
         .from("visits")
         .update({
           diagnosis,
@@ -511,6 +533,10 @@ export default async function DoctorPage(props: {
           visit_status: "billing_pending",
         })
         .eq("id", visitId)
+      if (visitUpdateError) {
+        console.error("[v0] Error updating review visit from doctor workflow:", visitUpdateError)
+        redirect("/dashboard/doctor?error=workflow_save_failed")
+      }
     }
 
     redirect("/dashboard/doctor")
@@ -583,7 +609,7 @@ export default async function DoctorPage(props: {
                       <Badge variant="outline">doctor_pending</Badge>
                       {visit.is_free_health_care && (
                         <Badge variant="default" className="text-[10px] font-normal">
-                          Free Health Care visit
+                          {settings.publicCoverageLabel} visit
                         </Badge>
                       )}
                       {visit.facilities?.name && (
@@ -763,7 +789,7 @@ export default async function DoctorPage(props: {
                       <Badge variant="outline">doctor_review</Badge>
                       {visit.is_free_health_care && (
                         <Badge variant="default" className="text-[10px] font-normal">
-                          Free Health Care visit
+                          {settings.publicCoverageLabel} visit
                         </Badge>
                       )}
                       {visit.facilities?.name && (
@@ -914,7 +940,7 @@ export default async function DoctorPage(props: {
                   <Badge variant="outline" className="text-[11px]">admitted</Badge>
                   {adm.visits?.is_free_health_care && (
                     <Badge variant="default" className="text-[10px] font-normal">
-                      Free Health Care visit
+                      {settings.publicCoverageLabel} visit
                     </Badge>
                   )}
                   {adm.visits?.facilities?.name && (

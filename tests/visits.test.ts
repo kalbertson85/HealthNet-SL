@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { canTransitionVisitStatus, assertVisitTransition, type VisitStatus } from "../lib/visits"
+import { canTransitionVisitStatus, assertVisitTransition, parseVisitStatus, type VisitStatus } from "../lib/visits"
 
 describe("visit status transitions", () => {
   const allowed: Array<[VisitStatus, VisitStatus]> = [
@@ -23,6 +23,7 @@ describe("visit status transitions", () => {
       ["lab_pending", "billing_pending"],
       ["billing_pending", "doctor_pending"],
       ["completed", "doctor_pending"],
+      ["discharged", "doctor_pending"],
     ]
 
     for (const [from, to] of invalid) {
@@ -53,5 +54,12 @@ describe("visit status transitions", () => {
     // e.g. cannot jump directly from doctor_pending to doctor_review
     expect(canTransitionVisitStatus("doctor_pending", "doctor_review")).toBe(false)
     expect(() => assertVisitTransition("doctor_pending", "doctor_review")).toThrow()
+  })
+
+  it("parses known visit statuses and rejects unknown values", () => {
+    expect(parseVisitStatus(" billing_pending ")).toBe("billing_pending")
+    expect(parseVisitStatus("DISCHARGED")).toBe("discharged")
+    expect(parseVisitStatus("")).toBeNull()
+    expect(parseVisitStatus("legacy_unknown")).toBeNull()
   })
 })

@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { DashboardPageShell } from "@/components/dashboard-page-shell"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime, formatNumber } from "@/lib/locale-format"
 
 export const revalidate = 0
 const DEFAULT_PAGE_SIZE = 50
@@ -52,6 +54,7 @@ export default async function WebhookEventsPage(props: {
   }
 
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const searchParams = props.searchParams ? await props.searchParams : {}
   const currentPage = Math.max(1, Number.parseInt((searchParams.page || "1").trim(), 10) || 1)
   const pageSize = Math.min(
@@ -157,7 +160,7 @@ export default async function WebhookEventsPage(props: {
                 ) : (
                   accepted.map((row) => (
                     <TableRow key={`${row.provider}:${row.event_id}:${row.created_at}`}>
-                      <TableCell className="whitespace-nowrap">{new Date(row.created_at).toLocaleString()}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatDateTime(row.created_at, settings)}</TableCell>
                       <TableCell>{row.provider}</TableCell>
                       <TableCell className="font-mono text-xs">{row.event_id}</TableCell>
                     </TableRow>
@@ -192,7 +195,7 @@ export default async function WebhookEventsPage(props: {
                 ) : (
                   rejected.map((row, index) => (
                     <TableRow key={`${row.occurred_at}:${index}`}>
-                      <TableCell className="whitespace-nowrap">{new Date(row.occurred_at).toLocaleString()}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatDateTime(row.occurred_at, settings)}</TableCell>
                       <TableCell>{row.metadata?.reason || "unknown"}</TableCell>
                       <TableCell className="font-mono text-xs">{row.metadata?.fingerprint || "-"}</TableCell>
                     </TableRow>
@@ -230,10 +233,10 @@ export default async function WebhookEventsPage(props: {
               ) : (
                 mutated.map((row, index) => (
                   <TableRow key={`${row.occurred_at}:${index}`}>
-                    <TableCell className="whitespace-nowrap">{new Date(row.occurred_at).toLocaleString()}</TableCell>
+                    <TableCell className="whitespace-nowrap">{formatDateTime(row.occurred_at, settings)}</TableCell>
                     <TableCell className="font-mono text-xs">{row.resource_id || "-"}</TableCell>
                     <TableCell className="font-mono text-xs">{row.metadata?.event_id || "-"}</TableCell>
-                    <TableCell>{typeof row.metadata?.amount === "number" ? row.metadata.amount.toLocaleString() : "-"}</TableCell>
+                    <TableCell>{typeof row.metadata?.amount === "number" ? formatNumber(row.metadata.amount, settings) : "-"}</TableCell>
                     <TableCell>{`${row.metadata?.old_status || "unknown"} -> ${row.metadata?.new_status || "unknown"}`}</TableCell>
                   </TableRow>
                 ))

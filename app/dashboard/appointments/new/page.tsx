@@ -5,6 +5,8 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { shouldSendSms, sendSms } from "@/lib/notifications/sms"
 import { AppointmentForm } from "@/components/appointment-form"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 export default async function NewAppointmentPage({
   searchParams,
@@ -47,17 +49,30 @@ export default async function NewAppointmentPage({
   async function createAppointment(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
+    const { supabase, user } = await requireServerActionPermission("appointments.manage")
+    const parsed = z
+      .object({
+        patient_id: z.string().uuid(),
+        doctor_id: z.string().uuid(),
+        appointment_date: z.string().min(1),
+        appointment_time: z.string().min(1),
+        reason: z.string().trim().max(2000).optional(),
+        notes: z.string().trim().max(5000).optional(),
+      })
+      .safeParse({
+        patient_id: formData.get("patient_id"),
+        doctor_id: formData.get("doctor_id"),
+        appointment_date: formData.get("appointment_date"),
+        appointment_time: formData.get("appointment_time"),
+        reason: formData.get("reason"),
+        notes: formData.get("notes"),
+      })
+    if (!parsed.success) {
+      redirect("/dashboard/appointments/new?error=invalid_datetime")
     }
 
-    const appointmentDate = (formData.get("appointment_date") as string | null) ?? ""
-    const appointmentTime = (formData.get("appointment_time") as string | null) ?? ""
+    const appointmentDate = parsed.data.appointment_date
+    const appointmentTime = parsed.data.appointment_time
 
     if (!appointmentDate || !appointmentTime) {
       console.error("[v0] Cannot create appointment: missing date or time", {
@@ -79,12 +94,12 @@ export default async function NewAppointmentPage({
     }
 
     const appointmentData = {
-      patient_id: formData.get("patient_id") as string,
-      doctor_id: formData.get("doctor_id") as string,
+      patient_id: parsed.data.patient_id,
+      doctor_id: parsed.data.doctor_id,
       appointment_date: appointmentDate,
       appointment_time: appointmentTime,
-      reason: formData.get("reason") as string,
-      notes: formData.get("notes") as string,
+      reason: parsed.data.reason ?? "",
+      notes: parsed.data.notes ?? "",
       status: "scheduled",
       created_by: user.id,
     }
@@ -93,21 +108,21 @@ export default async function NewAppointmentPage({
 
     if (error) {
       console.error("[v0] Error creating appointment:", error)
-      throw error
+      redirect("/dashboard/appointments/new?error=create_failed")
     }
 
-    try {
-      await supabase.from("appointment_audit_logs").insert({
-        appointment_id: data.id,
-        actor_user_id: user.id,
-        patient_id: appointmentData.patient_id,
-        doctor_id: appointmentData.doctor_id,
-        action: "created",
-        old_status: null,
-        new_status: appointmentData.status,
-      })
-    } catch (auditError) {
-      console.error("[v0] Error logging appointment creation:", auditError)
+    const { error: auditError } = await supabase.from("appointment_audit_logs").insert({
+      appointment_id: data.id,
+      actor_user_id: user.id,
+      patient_id: appointmentData.patient_id,
+      doctor_id: appointmentData.doctor_id,
+      action: "created",
+      old_status: null,
+      new_status: appointmentData.status,
+    })
+    if (auditError) {
+      await supabase.from("appointments").delete().eq("id", data.id)
+      redirect("/dashboard/appointments/new?error=audit_log_failed")
     }
 
     // Optional SMS appointment reminder to patient
@@ -138,6 +153,10 @@ export default async function NewAppointmentPage({
         return "Please provide both an appointment date and time."
       case "invalid_date":
         return "Appointment date must be today or later."
+      case "create_failed":
+        return "Appointment could not be created."
+      case "audit_log_failed":
+        return "Appointment creation was rolled back because audit logging failed."
       default:
         return null
     }

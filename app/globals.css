@@ -4,7 +4,7 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* HealthNet-SL HMS light theme */
+  /* HealthNet HMS light theme */
   --background: #f5f6fa;
   --foreground: #333333;
   --card: #ffffff;

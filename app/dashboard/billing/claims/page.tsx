@@ -7,6 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency, formatDate } from "@/lib/locale-format"
 
 export const revalidate = 0
 const CLAIMS_LIST_LIMIT = 100
@@ -35,6 +37,7 @@ interface ClaimsPageSearchParams {
 
 export default async function ClaimsPage(props: { searchParams: Promise<ClaimsPageSearchParams> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const { user, profile } = await getSessionUserAndProfile()
 
@@ -155,14 +158,14 @@ export default async function ClaimsPage(props: { searchParams: Promise<ClaimsPa
                         </div>
                       </TableCell>
                       <TableCell>{companyName}</TableCell>
-                      <TableCell>Le {Number(claim.claimed_amount || 0).toLocaleString()}</TableCell>
-                      <TableCell>Le {Number(claim.approved_amount || 0).toLocaleString()}</TableCell>
+                      <TableCell>{formatCurrency(Number(claim.claimed_amount || 0), settings)}</TableCell>
+                      <TableCell>{formatCurrency(Number(claim.approved_amount || 0), settings)}</TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(claim.status)} className="capitalize text-[11px]">
                           {claim.status}
                         </Badge>
                       </TableCell>
-                      <TableCell>{new Date(claim.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell>{formatDate(claim.created_at, settings, { style: "numeric" })}</TableCell>
                     </TableRow>
                   )
                 })}

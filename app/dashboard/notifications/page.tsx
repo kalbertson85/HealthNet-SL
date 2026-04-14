@@ -18,6 +18,10 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 const PAGE_SIZE = 40
 const PAGE_SCAN_LIMIT = 400
@@ -48,32 +52,37 @@ interface LiveAlertItem {
 
 async function markAsRead(notificationId: string) {
   "use server"
-  const supabase = await createServerClient()
+  const { supabase, user } = await requireServerActionPermission("dashboard.view")
+  const parsed = z.string().uuid().safeParse(notificationId)
+  if (!parsed.success) return
 
-  await supabase
+  const { error } = await supabase
     .from("notifications")
     .update({ is_read: true, read_at: new Date().toISOString() })
-    .eq("id", notificationId)
+    .eq("id", parsed.data)
+    .eq("user_id", user.id)
+  if (error) {
+    redirect("/dashboard/notifications?error=mark_read_failed")
+  }
 }
 
 async function markAllAsRead() {
   "use server"
-  const supabase = await createServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const { supabase, user } = await requireServerActionPermission("dashboard.view")
 
-  if (!user) return
-
-  await supabase
+  const { error } = await supabase
     .from("notifications")
     .update({ is_read: true, read_at: new Date().toISOString() })
     .eq("user_id", user.id)
     .eq("is_read", false)
+  if (error) {
+    redirect("/dashboard/notifications?error=mark_all_read_failed")
+  }
 }
 
-export default async function NotificationsPage(props: { searchParams?: Promise<{ page?: string }> }) {
+export default async function NotificationsPage(props: { searchParams?: Promise<{ page?: string; error?: string }> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -83,6 +92,7 @@ export default async function NotificationsPage(props: { searchParams?: Promise<
   const sp = props.searchParams ? await props.searchParams : undefined
   const parsedPage = Number.parseInt(sp?.page || "1", 10)
   const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1
+  const pageError = (sp?.error || "").trim()
   const from = (currentPage - 1) * PAGE_SIZE
   const to = from + PAGE_SIZE
   const scanCapReached = to >= PAGE_SCAN_LIMIT
@@ -208,6 +218,13 @@ export default async function NotificationsPage(props: { searchParams?: Promise<
 
   return (
     <div className="space-y-6">
+      {pageError ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {pageError === "mark_read_failed" && "Unable to mark notification as read."}
+          {pageError === "mark_all_read_failed" && "Unable to mark all notifications as read."}
+          {!["mark_read_failed", "mark_all_read_failed"].includes(pageError) && "Unable to update notifications."}
+        </div>
+      ) : null}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Notifications</h1>
@@ -282,14 +299,14 @@ export default async function NotificationsPage(props: { searchParams?: Promise<
             </Card>
           ) : (
             unreadNotifications.map((notification) => (
-              <NotificationCard key={notification.id} notification={notification} />
+              <NotificationCard key={notification.id} notification={notification} settings={settings} />
             ))
           )}
         </TabsContent>
 
         <TabsContent value="all" className="space-y-4">
           {notifications?.map((notification) => (
-            <NotificationCard key={notification.id} notification={notification} />
+            <NotificationCard key={notification.id} notification={notification} settings={settings} />
           ))}
         </TabsContent>
 
@@ -303,7 +320,7 @@ export default async function NotificationsPage(props: { searchParams?: Promise<
             </Card>
           ) : (
             readNotifications.map((notification) => (
-              <NotificationCard key={notification.id} notification={notification} />
+              <NotificationCard key={notification.id} notification={notification} settings={settings} />
             ))
           )}
         </TabsContent>
@@ -336,7 +353,13 @@ interface NotificationItem {
   created_at: string
 }
 
-function NotificationCard({ notification }: { notification: NotificationItem }) {
+function NotificationCard({
+  notification,
+  settings,
+}: {
+  notification: NotificationItem
+  settings: Awaited<ReturnType<typeof getGlobalSettings>>
+}) {
   const Icon = typeIcons[notification.type as keyof typeof typeIcons] || Bell
   const priorityColor = priorityColors[notification.priority as keyof typeof priorityColors] || priorityColors.normal
 
@@ -359,7 +382,7 @@ function NotificationCard({ notification }: { notification: NotificationItem }) 
               <CardDescription>{notification.message}</CardDescription>
               <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
                 <Clock className="h-3 w-3" />
-                {new Date(notification.created_at).toLocaleString()}
+                {formatDateTime(notification.created_at, settings)}
               </div>
             </div>
           </div>

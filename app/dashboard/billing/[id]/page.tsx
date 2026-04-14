@@ -10,8 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
-import { getSessionUserAndProfile } from "@/app/actions/auth"
-import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency, formatDate, formatDateTime } from "@/lib/locale-format"
+import { logAuditEvent } from "@/lib/audit"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface BillingAuditRow {
   id: string
@@ -38,6 +41,7 @@ function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
 
 export default async function InvoiceDetailPage(props: { params: Promise<{ id: string }> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { id } = await props.params
 
   if (id === "new") {
@@ -49,7 +53,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
       .from("invoices")
       .select(`
         id, invoice_number, status, total_amount, paid_amount, created_at, payment_date, payment_method,
-        payer_type, visit_id, notes,
+        payer_type, patient_id, visit_id, notes,
         patients(full_name, patient_number, phone_number)
       `)
       .eq("id", id)
@@ -120,13 +124,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
     }
   }
 
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
-  }
+  const formatAuditTimestamp = (value: string) => formatDateTime(value, settings)
 
   const renderActor = (actorId: string) => {
     const actor = actorProfilesById.get(actorId)
@@ -140,48 +138,76 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
   async function recordPayment(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user, profile } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
-    if (!can(rbacUser, "billing.manage")) {
-      redirect("/dashboard")
-    }
-
-    const paymentAmount = Number.parseFloat(formData.get("amount") as string)
-    const paymentMethod = formData.get("payment_method") as string
-
-    const newPaidAmount = Number(invoiceRecord.paid_amount || 0) + paymentAmount
-    const newStatus =
-      newPaidAmount >= Number(invoiceRecord.total_amount) ? "paid" : newPaidAmount > 0 ? "partial" : "pending"
-
-    await supabase
-      .from("invoices")
-      .update({
-        paid_amount: newPaidAmount,
-        status: newStatus,
-        payment_date: newStatus === "paid" ? new Date().toISOString() : invoiceRecord.payment_date,
-        payment_method: paymentMethod,
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
+    const parsed = z
+      .object({
+        amount: z.coerce.number().positive(),
+        payment_method: z.string().trim().min(1).max(100),
       })
-      .eq("id", id)
+      .safeParse({
+        amount: formData.get("amount"),
+        payment_method: formData.get("payment_method"),
+      })
+    if (!parsed.success) {
+      redirect(`/dashboard/billing/${id}`)
+    }
+    const paymentAmount = parsed.data.amount
+    const paymentMethod = parsed.data.payment_method
 
-    try {
-      await supabase.from("billing_audit_logs").insert({
+    const rpcResult = await supabase.rpc("record_invoice_payment_transactional", {
+      p_invoice_id: id,
+      p_payment_amount: paymentAmount,
+      p_payment_method: paymentMethod,
+      p_actor_user_id: user.id,
+    })
+
+    if (rpcResult.error) {
+      const rpcErrorCode = String((rpcResult.error as { code?: string } | null)?.code || "")
+      if (rpcErrorCode === "42883") {
+        redirect(`/dashboard/billing/${id}`)
+      }
+      redirect(`/dashboard/billing/${id}`)
+    }
+
+    const rpcData = (rpcResult.data || null) as
+      | {
+          ok?: boolean
+          code?: string
+          old_status?: string | null
+          new_status?: string | null
+          old_paid_amount?: number | null
+          new_paid_amount?: number | null
+          old_payment_method?: string | null
+          new_payment_method?: string | null
+        }
+      | null
+    if (!rpcData?.ok) {
+      redirect(`/dashboard/billing/${id}`)
+    }
+
+    await logAuditEvent({
+      action: "billing.payment_recorded",
+      entityType: "invoice",
+      entityId: id,
+      user,
+      metadata: {
         invoice_id: id,
-        actor_user_id: user.id,
-        action: "payment_recorded",
-        old_status: invoiceRecord.status,
-        new_status: newStatus,
-        amount: paymentAmount,
-        metadata: { payment_method: paymentMethod },
-      })
-    } catch (auditError) {
-      console.error("[v0] Error logging invoice payment:", auditError)
-    }
+        patient_id: invoiceRecord.patient_id ?? null,
+        visit_id: invoiceRecord.visit_id ?? null,
+        payment_method: paymentMethod,
+        payment_amount: paymentAmount,
+      },
+      before: {
+        status: rpcData.old_status ?? null,
+        paid_amount: Number(rpcData.old_paid_amount ?? 0),
+        payment_method: rpcData.old_payment_method ?? null,
+      },
+      after: {
+        status: rpcData.new_status ?? null,
+        paid_amount: Number(rpcData.new_paid_amount ?? 0),
+        payment_method: rpcData.new_payment_method ?? paymentMethod,
+      },
+    })
 
     redirect(`/dashboard/billing/${id}`)
   }
@@ -189,83 +215,68 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
   async function updateClaimStatus(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user, profile } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
+    const parsed = z
+      .object({
+        invoice_id: z.string().uuid(),
+        new_status: z.enum(["prepared", "submitted", "paid", "rejected"]),
+      })
+      .safeParse({
+        invoice_id: formData.get("invoice_id"),
+        new_status: formData.get("new_status"),
+      })
+    if (!parsed.success) {
+      redirect(`/dashboard/billing/${id}`)
     }
+    const invoiceId = parsed.data.invoice_id
+    const newStatus = parsed.data.new_status
 
-    const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
-    if (!can(rbacUser, "billing.manage")) {
-      redirect("/dashboard")
-    }
+    const rpcResult = await supabase.rpc("update_invoice_claim_status_transactional", {
+      p_invoice_id: invoiceId,
+      p_new_status: newStatus,
+      p_actor_user_id: user.id,
+    })
 
-    const invoiceId = formData.get("invoice_id") as string
-    const newStatus = (formData.get("new_status") as string | null)?.toLowerCase().trim() || null
-
-    if (!invoiceId || !newStatus) {
+    if (rpcResult.error) {
+      console.error("[billing] claim status RPC failed:", rpcResult.error)
       redirect(`/dashboard/billing/${id}`)
     }
 
-    const { data: currentInvoice } = await supabase
-      .from("invoices")
-      .select("id, payer_type, company_id, total_amount, claim_id")
-      .eq("id", invoiceId)
-      .maybeSingle()
-
-    if (!currentInvoice) {
+    const rpcData = (rpcResult.data || null) as
+      | {
+          ok?: boolean
+          code?: string
+          claim_id?: string | null
+          old_status?: string | null
+          new_status?: string | null
+          claimed_amount?: number | null
+          patient_id?: string | null
+          visit_id?: string | null
+          company_id?: string | null
+        }
+      | null
+    if (!rpcData?.ok || !rpcData.claim_id) {
       redirect(`/dashboard/billing/${id}`)
     }
 
-    if ((currentInvoice.payer_type as string | null) !== "company" || !currentInvoice.company_id) {
-      // Only company-paid invoices can have insurance claims
-      redirect(`/dashboard/billing/${id}`)
-    }
-
-    const claimedAmount = Number(currentInvoice.total_amount || 0)
-
-    const { data: existing } = await supabase
-      .from("insurance_claims")
-      .select("id")
-      .eq("invoice_id", invoiceId)
-      .maybeSingle()
-
-    let claimId: string | null = (existing?.id as string | null) ?? null
-
-    if (!claimId) {
-      const { data: inserted, error: insertError } = await supabase
-        .from("insurance_claims")
-        .insert({
-          invoice_id: invoiceId,
-          company_id: currentInvoice.company_id as string,
-          claimed_amount: claimedAmount,
-          status: newStatus,
-        })
-        .select("id")
-        .maybeSingle()
-
-      if (insertError || !inserted) {
-        console.error("[billing] Error creating insurance claim:", insertError?.message || insertError)
-        redirect(`/dashboard/billing/${id}`)
-      }
-
-      claimId = inserted.id as string
-    } else {
-      const { error: updateError } = await supabase
-        .from("insurance_claims")
-        .update({ status: newStatus })
-        .eq("id", claimId)
-
-      if (updateError) {
-        console.error("[billing] Error updating insurance claim status:", updateError.message || updateError)
-      }
-    }
-
-    await supabase
-      .from("invoices")
-      .update({ claim_status: newStatus, claim_id: claimId })
-      .eq("id", invoiceId)
+    await logAuditEvent({
+      action: "insurance.claim_status_changed",
+      entityType: "insurance_claim",
+      entityId: rpcData.claim_id,
+      user,
+      metadata: {
+        invoice_id: invoiceId,
+        patient_id: rpcData.patient_id ?? invoiceRecord.patient_id ?? null,
+        visit_id: rpcData.visit_id ?? invoiceRecord.visit_id ?? null,
+        company_id: rpcData.company_id ?? null,
+      },
+      before: {
+        status: rpcData.old_status ?? null,
+      },
+      after: {
+        status: rpcData.new_status ?? newStatus,
+      },
+    })
 
     redirect(`/dashboard/billing/${id}`)
   }
@@ -317,7 +328,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
             <CardTitle>Total Amount</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">Le {Number(invoice.total_amount).toLocaleString()}</p>
+            <p className="text-3xl font-bold">{formatCurrency(Number(invoice.total_amount), settings)}</p>
           </CardContent>
         </Card>
 
@@ -326,7 +337,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
             <CardTitle>Payment</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold text-green-600">Le {Number(invoice.paid_amount || 0).toLocaleString()}</p>
+            <p className="text-3xl font-bold text-green-600">{formatCurrency(Number(invoice.paid_amount || 0), settings)}</p>
           </CardContent>
         </Card>
 
@@ -335,7 +346,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
             <CardTitle>Balance Due</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold text-orange-600">Le {balance.toLocaleString()}</p>
+            <p className="text-3xl font-bold text-orange-600">{formatCurrency(balance, settings)}</p>
           </CardContent>
         </Card>
 
@@ -351,10 +362,10 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
                     Status: <span className="font-medium capitalize">{existingClaim.status}</span>
                   </p>
                   <p>
-                    Claimed: Le {Number(existingClaim.claimed_amount || invoice.total_amount || 0).toLocaleString()}
+                    Claimed: {formatCurrency(Number(existingClaim.claimed_amount || invoice.total_amount || 0), settings)}
                   </p>
                   {existingClaim.approved_amount != null && (
-                    <p>Approved: Le {Number(existingClaim.approved_amount).toLocaleString()}</p>
+                    <p>Approved: {formatCurrency(Number(existingClaim.approved_amount), settings)}</p>
                   )}
                   <div className="flex flex-wrap gap-2 pt-1 text-xs">
                     <form action={updateClaimStatus}>
@@ -430,11 +441,11 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
                         </p>
                       )}
                       {log.amount != null && (
-                        <p>Amount: Le {Number(log.amount).toLocaleString()}</p>
+                        <p>Amount: {formatCurrency(Number(log.amount), settings)}</p>
                       )}
                       <p>By: {renderActor(log.actor_user_id)}</p>
                     </div>
-                    <div className="whitespace-nowrap text-right">{formatDateTime(log.created_at)}</div>
+                    <div className="whitespace-nowrap text-right">{formatAuditTimestamp(log.created_at)}</div>
                   </div>
                 ))}
               </div>
@@ -471,12 +482,12 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Invoice Date</p>
-              <p>{new Date(invoice.created_at).toLocaleDateString()}</p>
+              <p>{formatDate(invoice.created_at, settings, { style: "numeric" })}</p>
             </div>
             {invoice.payment_date && (
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Payment Date</p>
-                <p>{new Date(invoice.payment_date).toLocaleDateString()}</p>
+                <p>{formatDate(invoice.payment_date, settings, { style: "numeric" })}</p>
               </div>
             )}
             {invoice.payment_method && (
@@ -508,8 +519,8 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
                 <TableRow key={item.id}>
                   <TableCell>{item.description}</TableCell>
                   <TableCell className="text-right">{item.quantity}</TableCell>
-                  <TableCell className="text-right">Le {Number(item.unit_price).toLocaleString()}</TableCell>
-                  <TableCell className="text-right">Le {Number(item.amount).toLocaleString()}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(Number(item.unit_price), settings)}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(Number(item.amount), settings)}</TableCell>
                 </TableRow>
               ))}
               <TableRow>
@@ -517,7 +528,7 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
                   Total
                 </TableCell>
                 <TableCell className="text-right font-bold">
-                  Le {Number(invoice.total_amount).toLocaleString()}
+                  {formatCurrency(Number(invoice.total_amount), settings)}
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -544,9 +555,9 @@ export default async function InvoiceDetailPage(props: { params: Promise<{ id: s
             <form action={recordPayment} className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="amount">Payment Amount (Le) *</Label>
+                  <Label htmlFor="amount">Payment Amount ({settings.currencyCode}) *</Label>
                   <Input id="amount" name="amount" type="number" min="0" max={balance} step="0.01" required />
-                  <p className="text-sm text-muted-foreground">Maximum: Le {balance.toLocaleString()}</p>
+                  <p className="text-sm text-muted-foreground">Maximum: {formatCurrency(balance, settings)}</p>
                 </div>
 
                 <div className="space-y-2">

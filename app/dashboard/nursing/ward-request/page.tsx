@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface VisitOption {
   id: string
@@ -47,8 +49,10 @@ interface WardRequestInsertItem {
 
 export const revalidate = 0
 
-export default async function NursingWardRequestPage() {
+export default async function NursingWardRequestPage(props: { searchParams?: Promise<{ error?: string }> }) {
   const supabase = await createServerClient()
+  const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
+  const errorCode = resolvedSearchParams?.error
 
   const { user } = await getSessionUserAndProfile()
 
@@ -79,19 +83,24 @@ export default async function NursingWardRequestPage() {
   async function createWardRequest(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const wardName = ((formData.get("ward_name") as string | null) ?? "").trim()
-    const visitId = (formData.get("visit_id") as string | null) ?? null
-    const notes = ((formData.get("notes") as string | null) ?? "").trim() || null
-    if (!wardName || !visitId) {
+    const { supabase, user } = await requireServerActionPermission("inpatient.manage")
+    const parsedHeader = z
+      .object({
+        ward_name: z.string().trim().min(1).max(120),
+        visit_id: z.string().uuid(),
+        notes: z.string().trim().max(2000).optional(),
+      })
+      .safeParse({
+        ward_name: formData.get("ward_name"),
+        visit_id: formData.get("visit_id"),
+        notes: formData.get("notes"),
+      })
+    if (!parsedHeader.success) {
       redirect("/dashboard/nursing/ward-request")
     }
+    const wardName = parsedHeader.data.ward_name
+    const visitId = parsedHeader.data.visit_id
+    const notes = parsedHeader.data.notes || null
 
     // Look up patient_id from visit
     const { data: visitRow } = await supabase
@@ -130,19 +139,26 @@ export default async function NursingWardRequestPage() {
       const route = ((formData.get(`route_${i}`) as string | null) ?? "").trim() || null
       const duration = ((formData.get(`duration_${i}`) as string | null) ?? "").trim() || null
 
-      if (!medId || !qtyRaw) continue
+      const lineParsed = z
+        .object({
+          medication_id: z.string().uuid(),
+          quantity_requested: z.coerce.number().int().min(1).max(1000000),
+        })
+        .safeParse({
+          medication_id: medId,
+          quantity_requested: qtyRaw,
+        })
 
-      const qty = Number.parseInt(qtyRaw, 10)
-      if (!Number.isFinite(qty) || qty <= 0) continue
+      if (!lineParsed.success) continue
 
       itemsToInsert.push({
         request_id: newRequest.id as string,
-        medication_id: medId,
+        medication_id: lineParsed.data.medication_id,
         dose,
         frequency,
         route,
         duration,
-        quantity_requested: qty,
+        quantity_requested: lineParsed.data.quantity_requested,
       })
     }
 
@@ -152,13 +168,31 @@ export default async function NursingWardRequestPage() {
       redirect("/dashboard/nursing/ward-request")
     }
 
-    await supabase.from("ward_medication_request_items").insert(itemsToInsert)
+    const { error: itemsInsertError } = await supabase.from("ward_medication_request_items").insert(itemsToInsert)
+    if (itemsInsertError) {
+      await supabase.from("ward_medication_requests").delete().eq("id", newRequest.id as string)
+      redirect("/dashboard/nursing/ward-request?error=items_save_failed")
+    }
 
     redirect("/dashboard/nursing")
   }
 
+  const errorMessage = (() => {
+    switch (errorCode) {
+      case "items_save_failed":
+        return "Ward request was rolled back because medication items could not be saved."
+      default:
+        return null
+    }
+  })()
+
   return (
     <div className="space-y-6">
+      {errorMessage && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {errorMessage}
+        </div>
+      )}
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-balance text-3xl font-bold tracking-tight">New ward medication request</h1>

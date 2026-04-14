@@ -9,6 +9,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 export const revalidate = 0
 
@@ -35,6 +39,7 @@ interface MedicationOption {
 
 export default async function ControlledDrugsPage() {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const { user, profile } = await getSessionUserAndProfile()
 
@@ -70,35 +75,39 @@ export default async function ControlledDrugsPage() {
   async function recordEntry(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user, profile } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const rbacUser = { id: user.id, role: (profile as { role?: string | null } | null)?.role ?? user.role ?? null }
-    if (!can(rbacUser, "pharmacy.manage")) {
-      redirect("/dashboard")
-    }
-
-    const medicationId = (formData.get("medication_id") as string | null) ?? null
-    const transactionType = (formData.get("transaction_type") as string | null) ?? null
-    const quantityRaw = (formData.get("quantity") as string | null) ?? null
-    const wardName = ((formData.get("ward_name") as string | null) ?? "").trim() || null
-    const dose = ((formData.get("dose") as string | null) ?? "").trim() || null
-    const route = ((formData.get("route") as string | null) ?? "").trim() || null
-    const reason = ((formData.get("reason") as string | null) ?? "").trim() || null
-    const prescriptionNumber = ((formData.get("prescription_number") as string | null) ?? "").trim() || null
-
-    if (!medicationId || !transactionType || !quantityRaw) {
+    const { supabase, user } = await requireServerActionPermission("pharmacy.manage")
+    const parsed = z
+      .object({
+        medication_id: z.string().uuid(),
+        transaction_type: z.enum(["issue", "return", "adjustment"]),
+        quantity: z.coerce.number().int().min(1).max(1000000),
+        ward_name: z.string().trim().max(120).optional(),
+        dose: z.string().trim().max(120).optional(),
+        route: z.string().trim().max(120).optional(),
+        reason: z.string().trim().max(1000).optional(),
+        prescription_number: z.string().trim().max(100).optional(),
+      })
+      .safeParse({
+        medication_id: formData.get("medication_id"),
+        transaction_type: formData.get("transaction_type"),
+        quantity: formData.get("quantity"),
+        ward_name: formData.get("ward_name"),
+        dose: formData.get("dose"),
+        route: formData.get("route"),
+        reason: formData.get("reason"),
+        prescription_number: formData.get("prescription_number"),
+      })
+    if (!parsed.success) {
       redirect("/dashboard/pharmacy/controlled-drugs")
     }
-
-    const quantity = Number.parseInt(quantityRaw, 10)
-    if (!Number.isFinite(quantity) || quantity === 0) {
-      redirect("/dashboard/pharmacy/controlled-drugs")
-    }
+    const medicationId = parsed.data.medication_id
+    const transactionType = parsed.data.transaction_type
+    const quantity = parsed.data.quantity
+    const wardName = parsed.data.ward_name || null
+    const dose = parsed.data.dose || null
+    const route = parsed.data.route || null
+    const reason = parsed.data.reason || null
+    const prescriptionNumber = parsed.data.prescription_number || null
 
     let patientId: string | null = null
     let visitId: string | null = null
@@ -142,7 +151,9 @@ export default async function ControlledDrugsPage() {
 
     balanceAfter = newBalance
 
-    const { error: insertError } = await supabase.from("controlled_drug_register").insert({
+    const { data: insertedRegisterEntry, error: insertError } = await supabase
+      .from("controlled_drug_register")
+      .insert({
       medication_id: medicationId,
       transaction_type: transactionType,
       quantity,
@@ -157,9 +168,11 @@ export default async function ControlledDrugsPage() {
       administered_by: user.id,
       recorded_at: new Date().toISOString(),
     })
+      .select("id")
+      .single()
 
-    if (insertError) {
-      console.error("[pharmacy] Error inserting controlled drug register entry:", insertError.message || insertError)
+    if (insertError || !insertedRegisterEntry?.id) {
+      console.error("[pharmacy] Error inserting controlled drug register entry:", insertError?.message || insertError)
       redirect("/dashboard/pharmacy/controlled-drugs")
     }
 
@@ -184,10 +197,48 @@ export default async function ControlledDrugsPage() {
         const currentQty = Number(stockRow.quantity_on_hand ?? 0)
         const newQty = Math.max(0, currentQty + delta)
 
-        await supabase
+        const { error: stockUpdateError } = await supabase
           .from("medication_stock")
           .update({ quantity_on_hand: newQty })
           .eq("id", stockRow.id as string)
+        if (stockUpdateError) {
+          await supabase.from("controlled_drug_register").delete().eq("id", insertedRegisterEntry.id as string)
+          redirect("/dashboard/pharmacy/controlled-drugs")
+        }
+
+        const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+          actor_user_id: user.id,
+          target_user_id: user.id,
+          action: "controlled_drug_register_create",
+          notes: `Controlled drug ${transactionType} of ${quantity} for medication ${medicationId}`,
+        })
+        if (auditError) {
+          await supabase.from("medication_stock").update({ quantity_on_hand: currentQty }).eq("id", stockRow.id as string)
+          await supabase.from("controlled_drug_register").delete().eq("id", insertedRegisterEntry.id as string)
+          redirect("/dashboard/pharmacy/controlled-drugs")
+        }
+      } else {
+        const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+          actor_user_id: user.id,
+          target_user_id: user.id,
+          action: "controlled_drug_register_create",
+          notes: `Controlled drug ${transactionType} of ${quantity} for medication ${medicationId} (no stock row found)`,
+        })
+        if (auditError) {
+          await supabase.from("controlled_drug_register").delete().eq("id", insertedRegisterEntry.id as string)
+          redirect("/dashboard/pharmacy/controlled-drugs")
+        }
+      }
+    } else {
+      const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+        actor_user_id: user.id,
+        target_user_id: user.id,
+        action: "controlled_drug_register_create",
+        notes: `Controlled drug ${transactionType} of ${quantity} for medication ${medicationId}`,
+      })
+      if (auditError) {
+        await supabase.from("controlled_drug_register").delete().eq("id", insertedRegisterEntry.id as string)
+        redirect("/dashboard/pharmacy/controlled-drugs")
       }
     }
 
@@ -325,7 +376,7 @@ export default async function ControlledDrugsPage() {
 
                   return (
                     <TableRow key={entry.id}>
-                      <TableCell>{new Date(entry.recorded_at).toLocaleString()}</TableCell>
+                      <TableCell>{formatDateTime(entry.recorded_at, settings)}</TableCell>
                       <TableCell>{medParts.join(" ") || "Unknown"}</TableCell>
                       <TableCell className="capitalize">{entry.transaction_type}</TableCell>
                       <TableCell>{entry.quantity}</TableCell>

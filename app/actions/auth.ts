@@ -35,13 +35,13 @@ const getSessionUserAndProfileCached = cache(async (): Promise<{
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, full_name, role, status")
+    .select("id, full_name, role, facility_id, status")
     .eq("id", user.id)
     .maybeSingle()
 
   // If the staff account is blocked, sign out and treat as no active session
-  const status = (profile as { status?: string | null } | null)?.status || "active"
-  if (status && status !== "active") {
+  const status = ((profile as { status?: string | null } | null)?.status || "active").toLowerCase()
+  if (status !== "active") {
     await supabase.auth.signOut()
     redirect("/auth/login?blocked=1")
   }
@@ -55,14 +55,14 @@ const getSessionUserAndProfileCached = cache(async (): Promise<{
       id: user.id,
       email: user.email,
       role: normalizedRole,
-      facility_id: null,
+      facility_id: profile?.facility_id ?? null,
     },
     profile: profile
       ? {
           id: profile.id,
           full_name: profile.full_name,
           role: normalizedRole,
-          facility_id: null,
+          facility_id: profile.facility_id ?? null,
           status,
         }
       : null,

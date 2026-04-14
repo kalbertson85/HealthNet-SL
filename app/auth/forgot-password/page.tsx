@@ -108,8 +108,15 @@ export default function ForgotPasswordPage() {
         setCooldownRemaining(COOLDOWN_MS)
       }
 
-      // Best-effort logging of reset-start event for audit/monitoring
-      void supabase.from("password_reset_events").insert({ email: normalizedEmail })
+      // Best-effort logging of reset-start event for audit/monitoring without exposing the table to the browser.
+      void fetch("/api/auth/password-reset-audit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-requested-with": "XMLHttpRequest",
+        },
+        body: JSON.stringify({ email: normalizedEmail }),
+      })
     } catch (e) {
       if (e instanceof Error) {
         setError(e.message || "Unable to start password reset.")

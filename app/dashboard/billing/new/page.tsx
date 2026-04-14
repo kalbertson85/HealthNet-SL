@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState, useMemo } from "react"
+import { useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -10,10 +10,11 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Plus, Trash2, ArrowLeft } from "lucide-react"
 import Link from "next/link"
-import { createClient } from "@/lib/supabase/client"
 import { FormDraftStatus } from "@/components/form-draft-status"
 import { FormHelpTip } from "@/components/form-help-tip"
 import { useLocalDraft } from "@/lib/use-local-draft"
+import { DEFAULT_GLOBAL_SETTINGS } from "@/config/global"
+import { formatCurrency } from "@/lib/locale-format"
 
 interface InvoiceItem {
   description: string
@@ -24,6 +25,7 @@ interface InvoiceItem {
 
 interface InvoiceDraft {
   patientId: string
+  visitId: string
   notes: string
   items: InvoiceItem[]
 }
@@ -32,10 +34,9 @@ export default function NewInvoicePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  const supabase = useMemo(() => createClient(), [])
-
   const initialDraft: InvoiceDraft = {
     patientId: searchParams.get("patient_id") || "",
+    visitId: searchParams.get("visit_id") || "",
     notes: "",
     items: [{ description: "", quantity: 1, unit_price: 0, amount: 0 }],
   }
@@ -69,74 +70,34 @@ export default function NewInvoicePage() {
     setIsSubmitting(true)
 
     try {
-      // Generate a simple human-readable invoice number
-      const generatedInvoiceNumber = `INV-${Date.now().toString().slice(-6)}`
+      const response = await fetch("/api/billing/invoices", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          patient_number: draft.patientId.trim(),
+          visit_id: draft.visitId.trim() || undefined,
+          notes: draft.notes || "",
+          items: draft.items.map((item) => ({
+            description: item.description,
+            quantity: Number(item.quantity || 0),
+            unit_price: Number(item.unit_price || 0),
+          })),
+        }),
+      })
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-      if (!user) {
-        router.push("/auth/login")
-        return
-      }
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; invoice_id?: string; error?: { message?: string } }
+        | null
 
-      // Look up patient by patient_number (PT- style identifier) and use UUID id for invoice
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("id, patient_number")
-        .eq("patient_number", draft.patientId)
-        .maybeSingle()
-
-      if (patientError) {
-        throw patientError
-      }
-
-      if (!patient) {
-        throw new Error("No patient found with that patient number.")
-      }
-
-      // Create invoice using the resolved patient UUID
-      const { data: invoice, error: invoiceError } = await supabase
-        .from("invoices")
-        .insert({
-          invoice_number: generatedInvoiceNumber,
-          patient_id: patient.id,
-          total_amount: totalAmount,
-          paid_amount: 0,
-          notes: draft.notes,
-          status: "pending",
-          created_by: user.id,
-        })
-        .select()
-        .single()
-
-      if (invoiceError) throw invoiceError
-
-      // Create invoice items
-      const invoiceItems = draft.items.map((item) => ({
-        invoice_id: invoice.id,
-        ...item,
-      }))
-
-      const { error: itemsError } = await supabase.from("invoice_items").insert(invoiceItems)
-
-      if (itemsError) throw itemsError
-
-      try {
-        await supabase.from("billing_audit_logs").insert({
-          invoice_id: invoice.id,
-          actor_user_id: user.id,
-          action: "created",
-          old_status: null,
-          new_status: "pending",
-          amount: totalAmount,
-        })
-      } catch (auditError) {
-        console.error("[v0] Error logging invoice creation:", auditError)
+      if (!response.ok || !payload?.ok || !payload.invoice_id) {
+        const message = payload?.error?.message || "Failed to create invoice."
+        throw new Error(message)
       }
 
       resetDraft()
-      router.push(`/dashboard/billing/${invoice.id}`)
+      router.push(`/dashboard/billing/${payload.invoice_id}`)
     } catch (error) {
       console.error(
         "[v0] Error creating invoice:",
@@ -185,6 +146,21 @@ export default function NewInvoicePage() {
                 onChange={(e) => setDraft({ ...draft, patientId: e.target.value })}
                 placeholder="Enter patient number (e.g., PT-000123)"
                 required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-1">
+                <Label htmlFor="visit_id">Visit ID</Label>
+                <FormHelpTip text="Optional: link this invoice to a specific visit. Leave blank to use/create the active visit for this patient." />
+              </div>
+              <Input
+                id="visit_id"
+                value={draft.visitId}
+                onChange={(e) => setDraft({ ...draft, visitId: e.target.value })}
+                readOnly={Boolean(searchParams.get("visit_id"))}
+                className={searchParams.get("visit_id") ? "bg-muted/30" : ""}
+                placeholder="Visit UUID"
               />
             </div>
 
@@ -259,7 +235,7 @@ export default function NewInvoicePage() {
 
                   <div className="space-y-2">
                     <div className="flex items-center gap-1">
-                      <Label>Unit Price (Le) *</Label>
+                      <Label>Unit Price ({DEFAULT_GLOBAL_SETTINGS.currencyCode}) *</Label>
                       <FormHelpTip text="Enter the price per unit in Leone. Total amount is calculated automatically." />
                     </div>
                     <Input
@@ -274,7 +250,7 @@ export default function NewInvoicePage() {
 
                   <div className="space-y-2 md:col-span-4">
                     <Label>Amount</Label>
-                    <p className="text-lg font-bold">Le {item.amount.toLocaleString()}</p>
+                    <p className="text-lg font-bold">{formatCurrency(item.amount)}</p>
                   </div>
                 </div>
               </div>
@@ -283,7 +259,7 @@ export default function NewInvoicePage() {
             <div className="flex justify-end border-t pt-4">
               <div className="text-right">
                 <p className="text-sm text-muted-foreground">Total Amount</p>
-                <p className="text-2xl font-bold">Le {totalAmount.toLocaleString()}</p>
+                <p className="text-2xl font-bold">{formatCurrency(totalAmount)}</p>
               </div>
             </div>
           </CardContent>

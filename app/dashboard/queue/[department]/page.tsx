@@ -5,9 +5,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
-import { assertQueueTransition, type QueueStatus } from "@/lib/queues"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
-import { ensureActiveVisitForPatient } from "@/lib/visit-flow"
+import { OfflineSyncStatus } from "@/components/offline-sync-status"
+import { OfflineQueueActionButton } from "@/components/offline-queue-action-button"
 
 const DEPARTMENT_QUEUE_LIMIT = 200
 
@@ -41,250 +41,6 @@ const statusColors = {
   in_progress: "bg-blue-500",
   completed: "bg-green-500",
   cancelled: "bg-red-500",
-}
-
-async function callNext(department: string) {
-  "use server"
-  const supabase = await createServerClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  // Get next waiting patient
-  const { data: nextQueue } = await supabase
-    .from("queues")
-    .select("id, status, queue_number")
-    .eq("department", department)
-    .eq("status", "waiting")
-    .order("priority", { ascending: false })
-    .order("check_in_time", { ascending: true })
-    .limit(1)
-    .single()
-
-  if (!nextQueue) {
-    return
-  }
-
-  const currentStatus = (nextQueue.status as QueueStatus | null) ?? null
-
-  if (!currentStatus) {
-    console.error("[v0] Queue callNext: missing current status", { department, id: nextQueue.id })
-    redirect(`/dashboard/queue/${department}?error=queue_action_invalid`)
-  }
-
-  try {
-    assertQueueTransition(currentStatus as QueueStatus, "in_progress")
-  } catch (err) {
-    console.error("[v0] Invalid queue status transition (callNext)", {
-      department,
-      id: nextQueue.id,
-      from: currentStatus,
-      to: "in_progress",
-      error: err instanceof Error ? err.message : String(err),
-    })
-    redirect(`/dashboard/queue/${department}?error=queue_action_invalid`)
-  }
-
-  await supabase
-    .from("queues")
-    .update({
-      status: "in_progress",
-      called_time: new Date().toISOString(),
-    })
-    .eq("id", nextQueue.id)
-
-  await supabase.from("queue_audit_logs").insert({
-    queue_id: nextQueue.id,
-    action: "call_next",
-    old_status: currentStatus,
-    new_status: "in_progress",
-    actor_user_id: user?.id ?? null,
-  })
-
-  await supabase
-    .from("queue_settings")
-    .update({ current_serving: nextQueue.queue_number })
-    .eq("department", department)
-}
-
-async function completeQueue(queueId: string) {
-  "use server"
-  const supabase = await createServerClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  const { data: existing } = await supabase
-    .from("queues")
-    .select("id, status, department")
-    .eq("id", queueId)
-    .maybeSingle()
-
-  const department = (existing?.department as string | null) ?? null
-  const currentStatus = (existing?.status as QueueStatus | null) ?? null
-
-  if (!existing || !department || !currentStatus) {
-    console.error("[v0] Queue completeQueue: missing current status or department", { queueId })
-    redirect("/dashboard/queue?error=queue_action_invalid")
-  }
-
-  try {
-    assertQueueTransition(currentStatus as QueueStatus, "completed")
-  } catch (err) {
-    console.error("[v0] Invalid queue status transition (complete)", {
-      queueId,
-      from: currentStatus,
-      to: "completed",
-      error: err instanceof Error ? err.message : String(err),
-    })
-    redirect(`/dashboard/queue/${department}?error=queue_action_invalid`)
-  }
-
-  await supabase
-    .from("queues")
-    .update({
-      status: "completed",
-      completed_time: new Date().toISOString(),
-    })
-    .eq("id", queueId)
-
-  await supabase.from("queue_audit_logs").insert({
-    queue_id: queueId,
-    action: "complete",
-    old_status: currentStatus,
-    new_status: "completed",
-    actor_user_id: user?.id ?? null,
-  })
-}
-
-async function cancelQueue(queueId: string) {
-  "use server"
-  const supabase = await createServerClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  const { data: existing } = await supabase
-    .from("queues")
-    .select("id, status, department")
-    .eq("id", queueId)
-    .maybeSingle()
-
-  const department = (existing?.department as string | null) ?? null
-  const currentStatus = (existing?.status as QueueStatus | null) ?? null
-
-  if (!existing || !department || !currentStatus) {
-    console.error("[v0] Queue cancelQueue: missing current status or department", { queueId })
-    redirect("/dashboard/queue?error=queue_action_invalid")
-  }
-
-  try {
-    assertQueueTransition(currentStatus as QueueStatus, "cancelled")
-  } catch (err) {
-    console.error("[v0] Invalid queue status transition (cancel)", {
-      queueId,
-      from: currentStatus,
-      to: "cancelled",
-      error: err instanceof Error ? err.message : String(err),
-    })
-    redirect(`/dashboard/queue/${department}?error=queue_action_invalid`)
-  }
-
-  await supabase
-    .from("queues")
-    .update({
-      status: "cancelled",
-    })
-    .eq("id", queueId)
-
-  await supabase.from("queue_audit_logs").insert({
-    queue_id: queueId,
-    action: "cancel",
-    old_status: currentStatus,
-    new_status: "cancelled",
-    actor_user_id: user?.id ?? null,
-  })
-}
-
-async function startOrContinueVisitFromQueue(queueId: string) {
-  "use server"
-  const supabase = await createServerClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    redirect("/auth/login")
-  }
-
-  const { data: queue } = await supabase
-    .from("queues")
-    .select("id, patient_id, department, visit_id")
-    .eq("id", queueId)
-    .maybeSingle()
-
-  if (!queue) {
-    console.error("[v0] startOrContinueVisitFromQueue: queue not found", { queueId })
-    redirect("/dashboard/queue?error=queue_action_invalid")
-  }
-
-  const department = queue.department as string | null
-  const patientId = queue.patient_id as string | null
-
-  if (!department || !patientId) {
-    console.error("[v0] startOrContinueVisitFromQueue: missing department or patient_id", { queueId })
-    redirect("/dashboard/queue?error=queue_action_invalid")
-  }
-
-  // Only OPD queues are expected to start/continue doctor visits
-  if (department !== "opd") {
-    redirect(`/dashboard/queue/${department}`)
-  }
-
-  let visitId = (queue.visit_id as string | null) ?? null
-
-  try {
-    if (!visitId) {
-      // Reuse an existing visit for this patient created today, if any
-      const startOfDay = new Date()
-      startOfDay.setHours(0, 0, 0, 0)
-
-      const { data: existingVisit } = await supabase
-        .from("visits")
-        .select("id, visit_status")
-        .eq("patient_id", patientId)
-        .gte("created_at", startOfDay.toISOString())
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle()
-
-      if (existingVisit) {
-        visitId = existingVisit.id as string
-      } else {
-        // Pull Free Health Care and company assignment from patient so billing can default correctly later
-        visitId = await ensureActiveVisitForPatient(supabase, patientId, { facilityCode: "opd" })
-        if (!visitId) {
-          console.error("[v0] Error creating visit from OPD queue: no inserted row")
-          redirect("/dashboard/queue?error=queue_action_invalid")
-        }
-      }
-
-      // Persist the link back to this queue row
-      await supabase
-        .from("queues")
-        .update({ visit_id: visitId })
-        .eq("id", queueId)
-    }
-  } catch (err) {
-    console.error("[v0] Unexpected error in startOrContinueVisitFromQueue:", err)
-    redirect("/dashboard/queue?error=queue_action_invalid")
-  }
-
-  redirect(`/dashboard/records/visit/${visitId}`)
 }
 
 export default async function DepartmentQueuePage(props: {
@@ -359,12 +115,15 @@ export default async function DepartmentQueuePage(props: {
             {waitingQueues.length} waiting • {inProgressQueues.length} in progress
           </p>
         </div>
-        <form action={callNext.bind(null, department)}>
-          <Button type="submit" size="lg" disabled={waitingQueues.length === 0}>
-            Call Next Patient
-          </Button>
-        </form>
+        <OfflineQueueActionButton
+          payload={{ type: "call_next", department }}
+          label="Call Next Patient"
+          size="lg"
+          disabled={waitingQueues.length === 0}
+        />
       </div>
+
+      <OfflineSyncStatus />
 
       <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
         Work this queue from top to bottom: call the next patient, complete active work when finished, and cancel only
@@ -443,16 +202,19 @@ export default async function DepartmentQueuePage(props: {
                     <Badge className={statusColors.in_progress}>In Progress</Badge>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <form action={completeQueue.bind(null, queue.id)} className="flex-1">
-                      <Button type="submit" size="sm" className="w-full">
-                        Complete
-                      </Button>
-                    </form>
-                    <form action={cancelQueue.bind(null, queue.id)} className="flex-1">
-                      <Button type="submit" size="sm" variant="outline" className="w-full">
-                        Cancel
-                      </Button>
-                    </form>
+                    <OfflineQueueActionButton
+                      payload={{ type: "complete", queueId: queue.id }}
+                      label="Complete"
+                      size="sm"
+                      className="w-full"
+                    />
+                    <OfflineQueueActionButton
+                      payload={{ type: "cancel", queueId: queue.id }}
+                      label="Cancel"
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                    />
                   </div>
                 </div>
               )})
@@ -508,11 +270,12 @@ export default async function DepartmentQueuePage(props: {
                   </div>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     {department === "opd" && (
-                      <form action={startOrContinueVisitFromQueue.bind(null, queue.id)} className="flex-1">
-                        <Button type="submit" size="sm" className="w-full">
-                          Start/Continue Visit
-                        </Button>
-                      </form>
+                      <OfflineQueueActionButton
+                        payload={{ type: "start_visit", queueId: queue.id }}
+                        label="Start/Continue Visit"
+                        size="sm"
+                        className="w-full"
+                      />
                     )}
                     {(department === "opd" || department === "emergency") && (
                       <div className="flex-1">
@@ -532,11 +295,13 @@ export default async function DepartmentQueuePage(props: {
                         </Button>
                       </div>
                     )}
-                    <form action={cancelQueue.bind(null, queue.id)} className="flex-1">
-                      <Button type="submit" size="sm" variant="outline" className="w-full">
-                        Cancel
-                      </Button>
-                    </form>
+                    <OfflineQueueActionButton
+                      payload={{ type: "cancel", queueId: queue.id }}
+                      label="Cancel"
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                    />
                   </div>
                 </div>
               )})

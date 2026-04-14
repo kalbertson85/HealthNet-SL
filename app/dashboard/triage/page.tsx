@@ -9,6 +9,9 @@ import { ArrowLeft } from "lucide-react"
 import { redirect } from "next/navigation"
 import { ensureQueueEntryForVisit } from "@/lib/visit-flow"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface PatientSummary {
   id: string
@@ -48,6 +51,7 @@ export default async function TriagePage(props: {
   searchParams?: Promise<{ error?: string }>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
   const errorCode = resolvedSearchParams?.error
@@ -58,6 +62,10 @@ export default async function TriagePage(props: {
         return "Some values in the triage form were invalid. Please check vitals and triage level and try again."
       case "unauthorized":
         return "You must be signed in as staff to record triage information."
+      case "triage_save_failed":
+        return "Triage details could not be saved."
+      case "audit_log_failed":
+        return "Triage update was rolled back because audit logging failed."
       default:
         return null
     }
@@ -162,7 +170,7 @@ export default async function TriagePage(props: {
   async function saveTriage(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
+    const { supabase, user } = await requireServerActionPermission("queue.manage")
 
     const visitId = (formData.get("visit_id") as string | null) ?? null
     const patientId = (formData.get("patient_id") as string | null) ?? null
@@ -173,9 +181,15 @@ export default async function TriagePage(props: {
     const pulseRaw = (formData.get("pulse") as string | null) ?? ""
     const weightRaw = (formData.get("weight_kg") as string | null) ?? ""
 
-    if (!visitId || !patientId) {
+    const idCheck = z.object({
+      visitId: z.string().uuid(),
+      patientId: z.string().uuid(),
+    }).safeParse({ visitId, patientId })
+    if (!idCheck.success) {
       redirect("/dashboard/triage?error=validation")
     }
+    const validatedVisitId = idCheck.data.visitId
+    const validatedPatientId = idCheck.data.patientId
 
     const allowedPriorities = ["emergency", "urgent", "routine"] as const
     if (!priority || !allowedPriorities.includes(priority as (typeof allowedPriorities)[number])) {
@@ -206,17 +220,24 @@ export default async function TriagePage(props: {
       redirect("/dashboard/triage?error=validation")
     }
 
-    const { data: authData, error: authError } = await supabase.auth.getUser()
-    if (authError || !authData?.user) {
-      redirect("/dashboard/triage?error=unauthorized")
+    const { data: visitRecord } = await supabase
+      .from("visits")
+      .select("id, patient_id, visit_status")
+      .eq("id", validatedVisitId)
+      .maybeSingle()
+    if (!visitRecord || (visitRecord.patient_id as string | null) !== validatedPatientId) {
+      redirect("/dashboard/triage?error=validation")
+    }
+    if (["completed", "discharged"].includes(((visitRecord.visit_status as string | null) ?? "").toLowerCase())) {
+      redirect("/dashboard/triage?error=validation")
     }
 
-    const actorId = authData.user.id
+    const actorId = user.id
 
     const { data: existingTriage, error: existingError } = await supabase
       .from("triage_assessments")
-      .select("id, triage_priority")
-      .eq("visit_id", visitId)
+      .select("id, triage_priority, bp, temperature_c, spo2, pulse, weight_kg, assessed_by")
+      .eq("visit_id", validatedVisitId)
       .maybeSingle()
 
     if (existingError && existingError.code !== "PGRST116") {
@@ -233,8 +254,8 @@ export default async function TriagePage(props: {
       const { data: inserted, error: insertError } = await supabase
         .from("triage_assessments")
         .insert({
-          patient_id: patientId,
-          visit_id: visitId,
+          patient_id: validatedPatientId,
+          visit_id: validatedVisitId,
           triage_priority: priority,
           bp: bpRaw || null,
           temperature_c: temperatureValue,
@@ -248,7 +269,7 @@ export default async function TriagePage(props: {
 
       if (insertError || !inserted) {
         console.error("[triage] Error inserting triage assessment:", insertError?.message || insertError)
-        redirect("/dashboard/triage?error=validation")
+        redirect("/dashboard/triage?error=triage_save_failed")
       }
 
       triageId = inserted.id as string
@@ -268,13 +289,13 @@ export default async function TriagePage(props: {
           weight_kg: weightValue,
           assessed_by: actorId,
         })
-        .eq("id", existingTriage.id)
+      .eq("id", existingTriage.id)
         .select("id, triage_priority")
         .single()
 
       if (updateError || !updated) {
         console.error("[triage] Error updating triage assessment:", updateError?.message || updateError)
-        redirect("/dashboard/triage?error=validation")
+        redirect("/dashboard/triage?error=triage_save_failed")
       }
 
       triageId = updated.id as string
@@ -293,12 +314,29 @@ export default async function TriagePage(props: {
 
     if (auditError) {
       console.error("[triage] Error inserting triage audit log:", auditError.message || auditError)
+      if (!existingTriage) {
+        await supabase.from("triage_assessments").delete().eq("id", triageId)
+      } else {
+        await supabase
+          .from("triage_assessments")
+          .update({
+            triage_priority: existingTriage.triage_priority,
+            bp: existingTriage.bp,
+            temperature_c: existingTriage.temperature_c,
+            spo2: existingTriage.spo2,
+            pulse: existingTriage.pulse,
+            weight_kg: existingTriage.weight_kg,
+            assessed_by: existingTriage.assessed_by,
+          })
+          .eq("id", existingTriage.id)
+      }
+      redirect("/dashboard/triage?error=audit_log_failed")
     }
 
     const queuePriority = priority === "emergency" ? "emergency" : priority === "urgent" ? "urgent" : "normal"
     await ensureQueueEntryForVisit(supabase, {
-      patientId,
-      visitId,
+      patientId: validatedPatientId,
+      visitId: validatedVisitId,
       department: "opd",
       priority: queuePriority,
       notes: `Triage priority: ${priority}`,
@@ -381,7 +419,7 @@ export default async function TriagePage(props: {
                       <Badge variant="outline">{visit.visit_status}</Badge>
                       {visit.is_free_health_care && (
                         <Badge variant="default" className="text-[10px] font-normal">
-                          Free Health Care visit
+                          {settings.publicCoverageLabel} visit
                         </Badge>
                       )}
                       {visit.facilities?.name && (

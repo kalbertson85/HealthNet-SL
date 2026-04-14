@@ -15,6 +15,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { FormDraftStatus } from "@/components/form-draft-status"
 import { FormHelpTip } from "@/components/form-help-tip"
 import { useLocalDraft } from "@/lib/use-local-draft"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { findMedicationAllergyMatches } from "@/lib/clinical-safety"
 
 interface MedicationItem {
   medication_name: string
@@ -38,6 +40,12 @@ interface PrescriptionDraft {
   newMedicineName: string
 }
 
+interface PatientSafetyRecord {
+  id: string
+  full_name: string | null
+  allergies: string | null
+}
+
 export default function NewPrescriptionPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -57,6 +65,8 @@ export default function NewPrescriptionPage() {
   const [isLoadingCatalogue, setIsLoadingCatalogue] = useState(true)
   const [isAddingMedicine, setIsAddingMedicine] = useState(false)
   const [isCreatingMedicine, setIsCreatingMedicine] = useState(false)
+  const [patientSafetyRecord, setPatientSafetyRecord] = useState<PatientSafetyRecord | null>(null)
+  const [isLoadingPatientSafety, setIsLoadingPatientSafety] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -79,6 +89,50 @@ export default function NewPrescriptionPage() {
       cancelled = true
     }
   }, [supabase])
+
+  useEffect(() => {
+    const identifier = draft.patientId.trim()
+    if (!identifier) {
+      setPatientSafetyRecord(null)
+      return
+    }
+
+    let cancelled = false
+    setIsLoadingPatientSafety(true)
+
+    const loadPatientSafety = async () => {
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      const { data, error } = await supabase
+        .from("patients")
+        .select("id, full_name, allergies")
+        .eq(uuidRegex.test(identifier) ? "id" : "patient_number", identifier)
+        .maybeSingle()
+
+      if (cancelled) return
+      if (error) {
+        console.error("[v0] Error loading patient allergy profile:", error.message || error)
+        setPatientSafetyRecord(null)
+      } else {
+        setPatientSafetyRecord((data as PatientSafetyRecord | null) ?? null)
+      }
+      setIsLoadingPatientSafety(false)
+    }
+
+    void loadPatientSafety()
+
+    return () => {
+      cancelled = true
+    }
+  }, [draft.patientId, supabase])
+
+  const allergyMatches = useMemo(
+    () =>
+      findMedicationAllergyMatches(
+        patientSafetyRecord?.allergies,
+        draft.medications.map((medication) => medication.medication_name),
+      ),
+    [draft.medications, patientSafetyRecord?.allergies],
+  )
 
   const addMedication = () => {
     setDraft({
@@ -106,26 +160,24 @@ export default function NewPrescriptionPage() {
 
     setIsCreatingMedicine(true)
     try {
-      const { data, error } = await supabase
-        .from("medications")
-        .insert({
-          name,
-          dosage_form: "unspecified",
-          strength: "",
-          unit: "unit",
-          category: "Uncategorized",
-          unit_price: 0,
-        })
-        .select("id, name")
-        .single()
+      const response = await fetch("/api/medications", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name }),
+      })
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; medication?: MedicationOption; error?: { message?: string } }
+        | null
 
-      if (error || !data) {
-        console.error("[v0] Error quick-adding medication:", error || new Error("No data returned"))
+      if (!response.ok || !payload?.ok || !payload.medication) {
+        console.error("[v0] Error quick-adding medication:", payload?.error?.message || "No data returned")
         return
       }
 
       setCatalogue((prev) => {
-        const next = [...prev, data as MedicationOption]
+        const next = [...prev, payload.medication as MedicationOption]
         next.sort((a, b) => a.name.localeCompare(b.name))
         return next
       })
@@ -157,76 +209,40 @@ export default function NewPrescriptionPage() {
     setIsSubmitting(true)
 
     try {
-      // Generate a simple human-readable prescription number
-      const generatedPrescriptionNumber = `RX-${Date.now().toString().slice(-6)}`
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-      if (!user) {
-        router.push("/auth/login")
-        return
+      if (allergyMatches.length > 0) {
+        throw new Error(`Prescription blocked due to recorded allergy match: ${allergyMatches.join(", ")}`)
       }
 
-      const identifier = draft.patientId.trim()
+      const response = await fetch("/api/prescriptions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          patient_identifier: draft.patientId.trim(),
+          visit_id: draft.visitId.trim(),
+          notes: draft.notes || "",
+          medications: draft.medications.map((med) => ({
+            medication_name: med.medication_name,
+            dosage: med.dosage,
+            frequency: med.frequency,
+            duration: med.duration,
+            quantity: Number(med.quantity || 0),
+            instructions: med.instructions || "",
+          })),
+        }),
+      })
 
-      // Support either a raw patient UUID (patient_id) or a PT- style patient_number in the same field
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; prescription_id?: string; error?: { message?: string } }
+        | null
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("id, patient_number")
-        .eq(uuidRegex.test(identifier) ? "id" : "patient_number", identifier)
-        .maybeSingle()
-
-      if (patientError) {
-        throw patientError
-      }
-
-      if (!patient) {
-        throw new Error("No patient found with that patient number.")
-      }
-
-      // Create prescription (table currently does not have a medications column)
-      const { data: prescription, error: prescriptionError } = await supabase
-        .from("prescriptions")
-        .insert({
-          patient_id: patient.id,
-          visit_id: draft.visitId || null,
-          doctor_id: user.id,
-          prescription_number: generatedPrescriptionNumber,
-          notes: draft.notes,
-          status: "pending",
-        })
-        .select()
-        .single()
-
-      if (prescriptionError) throw prescriptionError
-
-      // Create prescription items
-      const items = draft.medications.map((med) => ({
-        prescription_id: prescription.id,
-        ...med,
-      }))
-
-      const { error: itemsError } = await supabase.from("prescription_items").insert(items)
-
-      if (itemsError) throw itemsError
-
-      try {
-        await supabase.from("pharmacy_audit_logs").insert({
-          prescription_id: prescription.id,
-          actor_user_id: user.id,
-          action: "created",
-          old_status: null,
-          new_status: "pending",
-          notes: draft.notes || null,
-        })
-      } catch (auditError) {
-        console.error("[v0] Error logging prescription creation:", auditError)
+      if (!response.ok || !payload?.ok || !payload.prescription_id) {
+        throw new Error(payload?.error?.message || "Failed to create prescription.")
       }
 
       resetDraft()
-      router.push(`/dashboard/prescriptions/${prescription.id}`)
+      router.push(`/dashboard/prescriptions/${payload.prescription_id}`)
     } catch (error) {
       console.error("[v0] Error creating prescription:", error instanceof Error ? error.message : error)
       alert("Error creating prescription. Please try again.")
@@ -275,15 +291,21 @@ export default function NewPrescriptionPage() {
               />
             </div>
 
-            {draft.visitId ? (
-              <div className="space-y-2">
-                <Label htmlFor="visit_id" className="flex items-center gap-1">
-                  Linked Visit
-                  <FormHelpTip text="This prescription will be tied to the active visit so pharmacy and billing continue the same encounter." />
-                </Label>
-                <Input id="visit_id" value={draft.visitId} readOnly className="bg-muted/30" />
-              </div>
-            ) : null}
+            <div className="space-y-2">
+              <Label htmlFor="visit_id" className="flex items-center gap-1">
+                Visit ID *
+                <FormHelpTip text="Every prescription must be linked to an active visit. Start from queue/doctor flow or paste the visit ID." />
+              </Label>
+              <Input
+                id="visit_id"
+                value={draft.visitId}
+                onChange={(e) => setDraft({ ...draft, visitId: e.target.value })}
+                readOnly={Boolean(searchParams.get("visit_id"))}
+                className={searchParams.get("visit_id") ? "bg-muted/30" : ""}
+                placeholder="Enter visit UUID"
+                required
+              />
+            </div>
 
             <div className="space-y-2">
               <div className="flex items-center gap-1">
@@ -298,6 +320,25 @@ export default function NewPrescriptionPage() {
                 rows={3}
               />
             </div>
+
+            {patientSafetyRecord?.allergies ? (
+              <Alert variant={allergyMatches.length > 0 ? "destructive" : "default"}>
+                <AlertDescription>
+                  Recorded allergies for {patientSafetyRecord.full_name || "this patient"}: {patientSafetyRecord.allergies}
+                  {allergyMatches.length > 0
+                    ? ` Prescription submission is blocked because the selected medicines match: ${allergyMatches.join(", ")}.`
+                    : " No direct match was detected against the currently selected medicines."}
+                </AlertDescription>
+              </Alert>
+            ) : draft.patientId ? (
+              <Alert>
+                <AlertDescription>
+                  {isLoadingPatientSafety
+                    ? "Checking the patient allergy profile..."
+                    : "No allergy record was found for this patient. Confirm this before finalizing the prescription."}
+                </AlertDescription>
+              </Alert>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -463,7 +504,7 @@ export default function NewPrescriptionPage() {
           <Button type="button" variant="outline" asChild>
             <Link href="/dashboard/prescriptions">Cancel</Link>
           </Button>
-          <Button type="submit" disabled={isSubmitting}>
+          <Button type="submit" disabled={isSubmitting || allergyMatches.length > 0}>
             {isSubmitting ? "Creating..." : "Create Prescription"}
           </Button>
         </div>

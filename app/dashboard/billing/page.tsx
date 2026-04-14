@@ -11,6 +11,8 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
 import { ExportPreviewCard } from "@/components/export-preview-card"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency, formatDate } from "@/lib/locale-format"
 
 const BILLING_INVOICE_LIMIT = 50
 
@@ -32,6 +34,7 @@ interface BillingPageSearchParams {
 
 export default async function BillingPage(props: { searchParams: Promise<BillingPageSearchParams> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const { user } = await getSessionUserAndProfile()
 
@@ -279,15 +282,15 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
           <div className="grid gap-4 md:grid-cols-3">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Total Invoiced</p>
-              <p className="text-2xl font-bold">Le {totalInvoiced.toLocaleString()}</p>
+              <p className="text-2xl font-bold">{formatCurrency(totalInvoiced, settings)}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Total Paid</p>
-              <p className="text-2xl font-bold text-emerald-600">Le {totalPaid.toLocaleString()}</p>
+              <p className="text-2xl font-bold text-emerald-600">{formatCurrency(totalPaid, settings)}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Outstanding / Overdue</p>
-              <p className="text-base font-semibold">Le {totalOutstanding.toLocaleString()}</p>
+              <p className="text-base font-semibold">{formatCurrency(totalOutstanding, settings)}</p>
               <p className="text-xs text-muted-foreground">{overdueCount} overdue invoice{overdueCount === 1 ? "" : "s"}</p>
             </div>
           </div>
@@ -328,10 +331,10 @@ export default async function BillingPage(props: { searchParams: Promise<Billing
                             )}
                           </div>
                         </TableCell>
-                        <TableCell>{new Date(invoice.created_at).toLocaleDateString()}</TableCell>
-                        <TableCell>Le {Number(invoice.total_amount).toLocaleString()}</TableCell>
-                        <TableCell>Le {Number(invoice.paid_amount || 0).toLocaleString()}</TableCell>
-                        <TableCell>Le {balance.toLocaleString()}</TableCell>
+                        <TableCell>{formatDate(invoice.created_at, settings, { style: "numeric" })}</TableCell>
+                        <TableCell>{formatCurrency(Number(invoice.total_amount), settings)}</TableCell>
+                        <TableCell>{formatCurrency(Number(invoice.paid_amount || 0), settings)}</TableCell>
+                        <TableCell>{formatCurrency(balance, settings)}</TableCell>
                         <TableCell>
                           <Badge variant={getStatusColor(invoice.status)}>{invoice.status}</Badge>
                         </TableCell>

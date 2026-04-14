@@ -6,10 +6,10 @@ import { Separator } from "@/components/ui/separator"
 import { Edit, FileText, Calendar, Pill, ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { PatientPhotoCapture } from "@/components/PatientPhotoCapture"
-import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { ensureActiveVisitForPatient, ensureQueueEntryForVisit } from "@/lib/visit-flow"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 import { buildFollowUpAppointmentHref } from "@/lib/patient-flow"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 interface PatientDetailRecord {
   id: string
@@ -34,11 +34,15 @@ interface PatientDetailRecord {
 
 export default async function PatientDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>
+  searchParams?: Promise<{ error?: string }>
 }) {
   const supabase = await createServerClient()
   const { id } = await params
+  const sp = searchParams ? await searchParams : undefined
+  const errorCode = (sp?.error || "").trim()
   const patientBaseSelect =
     "id, full_name, patient_number, company_id, free_health_category, national_id, gender, date_of_birth, blood_group, phone_number, email, address, emergency_contact_name, emergency_contact_phone, next_of_kin, allergies, medical_history"
 
@@ -104,28 +108,31 @@ export default async function PatientDetailPage({
   async function startVisit() {
     "use server"
 
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
+    const { supabase } = await requireServerActionPermission("queue.manage")
 
     const patientId = patientRecord.id as string
 
-    try {
-      const visitId = await ensureActiveVisitForPatient(supabase, patientId, { facilityCode: "opd" })
-      if (visitId) {
-        await ensureQueueEntryForVisit(supabase, {
-          patientId,
-          visitId,
-          department: "opd",
-          priority: "normal",
-          notes: "Started from patient profile",
-        })
-      }
-    } catch (error) {
-      console.error("[v0] Error starting visit for patient:", error)
+    const visitId = await ensureActiveVisitForPatient(supabase, patientId, { facilityCode: "opd" })
+    if (!visitId) {
+      redirect(`/dashboard/patients/${patientId}?error=start_visit_failed`)
+    }
+    await ensureQueueEntryForVisit(supabase, {
+      patientId,
+      visitId,
+      department: "opd",
+      priority: "normal",
+      notes: "Started from patient profile",
+    })
+    const { data: queueEntry } = await supabase
+      .from("queues")
+      .select("id")
+      .eq("visit_id", visitId)
+      .eq("department", "opd")
+      .in("status", ["waiting", "in_progress"])
+      .limit(1)
+      .maybeSingle()
+    if (!queueEntry?.id) {
+      redirect(`/dashboard/patients/${patientId}?error=start_visit_failed`)
     }
 
     redirect("/dashboard/triage")
@@ -133,6 +140,11 @@ export default async function PatientDetailPage({
 
   return (
     <div className="space-y-8">
+      {errorCode === "start_visit_failed" ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          Unable to start visit for this patient. No queue transition was completed.
+        </div>
+      ) : null}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Button asChild variant="outline" size="sm">

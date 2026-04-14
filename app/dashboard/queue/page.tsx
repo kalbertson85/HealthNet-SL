@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
+import { getGlobalSettings } from "@/lib/global-settings"
 
 const ACTIVE_QUEUE_LIMIT = 300
 
@@ -121,6 +122,7 @@ export default async function QueuePage(props: {
   searchParams?: Promise<{ status?: string; error?: string }>
 }) {
   const supabase = await createServerClient()
+  const globalSettings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -153,7 +155,7 @@ export default async function QueuePage(props: {
     .limit(ACTIVE_QUEUE_LIMIT)
 
   // Fetch queue settings
-  const { data: settings } = await supabase
+  const { data: queueSettings } = await supabase
     .from("queue_settings")
     .select("department, average_service_time, current_serving")
 
@@ -162,7 +164,7 @@ export default async function QueuePage(props: {
     const deptQueues = queues?.filter((q) => q.department === dept.id) || []
     const waiting = deptQueues.filter((q) => q.status === "waiting").length
     const inProgress = deptQueues.filter((q) => q.status === "in_progress").length
-    const setting = settings?.find((s) => s.department === dept.id)
+    const setting = queueSettings?.find((s) => s.department === dept.id)
 
     return {
       ...dept,
@@ -360,7 +362,7 @@ export default async function QueuePage(props: {
                     </Badge>
                     {visit?.is_free_health_care && (
                       <Badge variant="outline" className="text-[10px] font-normal">
-                        Free Health Care visit
+                                  {globalSettings.publicCoverageLabel} visit
                       </Badge>
                     )}
                     {queue.priority !== "normal" && (

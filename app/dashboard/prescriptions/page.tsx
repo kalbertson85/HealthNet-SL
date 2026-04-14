@@ -12,6 +12,8 @@ import { ReportFilterSummary } from "@/components/report-filter-summary"
 import { ExportPreviewCard } from "@/components/export-preview-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate } from "@/lib/locale-format"
 
 const PRESCRIPTION_LIST_LIMIT = 50
 
@@ -33,6 +35,7 @@ interface PrescriptionsPageSearchParams {
 
 export default async function PrescriptionsPage(props: { searchParams?: Promise<PrescriptionsPageSearchParams> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const searchParams = props.searchParams ? await props.searchParams : undefined
   const query = (searchParams?.q || "").trim().toLowerCase()
   const statusFilter = (searchParams?.status || "all").trim().toLowerCase()
@@ -159,6 +162,7 @@ export default async function PrescriptionsPage(props: { searchParams?: Promise<
               previewCount={filteredPrescriptions.length}
               previewLabel="prescriptions are visible in the current preview"
               limitNote="Exports honor prescription search and status filters and return up to 5,000 rows."
+              settings={settings}
             />
           ) : null}
 
@@ -192,7 +196,7 @@ export default async function PrescriptionsPage(props: { searchParams?: Promise<
                         </div>
                       </TableCell>
                       <TableCell>Dr. {prescription.profiles?.full_name}</TableCell>
-                      <TableCell>{new Date(prescription.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell>{formatDate(prescription.created_at, settings)}</TableCell>
                       <TableCell>
                         <Badge variant={getStatusColor(prescription.status)}>{prescription.status}</Badge>
                       </TableCell>

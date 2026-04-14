@@ -7,6 +7,7 @@ import { DashboardPageShell } from "@/components/dashboard-page-shell"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { Database, FileText } from "lucide-react"
+import { fetchDataConsistencyCounts } from "@/lib/data-consistency"
 
 export default async function AdminPage() {
   const supabase = await createServerClient()
@@ -20,9 +21,10 @@ export default async function AdminPage() {
     redirect("/dashboard")
   }
 
-  const [{ count: patientsCount }, { count: invoicesCount }] = await Promise.all([
+  const [{ count: patientsCount }, { count: invoicesCount }, consistency] = await Promise.all([
     supabase.from("patients").select("*", { count: "exact", head: true }),
     supabase.from("invoices").select("*", { count: "exact", head: true }),
+    fetchDataConsistencyCounts(supabase as unknown as Parameters<typeof fetchDataConsistencyCounts>[0]),
   ])
 
   return (
@@ -99,6 +101,9 @@ export default async function AdminPage() {
               <Button asChild size="sm" variant="outline">
                 <Link href="/dashboard/admin/webhook-events">Webhook events monitor</Link>
               </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/dashboard/admin/data-cleanup">Data cleanup</Link>
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -150,6 +155,49 @@ export default async function AdminPage() {
             <Button asChild size="sm" variant="outline">
               <Link href="/dashboard/admin/users">Manage users</Link>
             </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-5 w-5 text-muted-foreground" />
+              Workflow Integrity Monitor
+            </CardTitle>
+            <CardDescription>
+              Live checks for missing billing, dispensing backlogs, and insurance batch inconsistencies.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>
+              Visits without billing: {consistency.visits_without_billing}
+              <br />
+              Open prescriptions not dispensed: {consistency.open_prescriptions_without_dispense}
+              <br />
+              Prescriptions without items: {consistency.prescriptions_without_items}
+              <br />
+              Invoices without items: {consistency.invoices_without_items}
+              <br />
+              Queue in progress without visit: {consistency.queue_in_progress_without_visit}
+              <br />
+              Insurance batches missing totals: {consistency.insurance_batches_without_totals}
+              <br />
+              Insurance batches with amount mismatch: {consistency.insurance_batches_with_mismatch}
+              <br />
+              Discharged admissions missing summary: {consistency.discharged_admissions_missing_summary}
+            </p>
+            <p className="text-xs">
+              Source: {consistency.source}
+              {consistency.truncated ? " (truncated fallback scan)" : ""}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild size="sm" variant="outline">
+                <Link href="/api/admin/data-consistency">Open JSON metrics</Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/dashboard/admin/data-cleanup">Open data cleanup</Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

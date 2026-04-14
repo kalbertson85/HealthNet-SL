@@ -10,6 +10,10 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { uploadHospitalLogo } from "@/lib/storage"
 import { createHash } from "crypto"
+import { GLOBAL_SETTINGS_SELECT } from "@/lib/global-settings"
+import { normalizeGlobalSettings, type GlobalSettingsInput } from "@/lib/locale-format"
+import { HospitalBrandingForm } from "@/components/hospital-branding-form"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 interface ProfileRow {
   id: string
@@ -23,6 +27,8 @@ interface SystemSettingsRow {
   audit_logs_enabled: boolean | null
   audit_log_retention_days: number | null
 }
+
+type HospitalSettingsRow = NonNullable<GlobalSettingsInput>
 
 interface AllowedIpRow {
   id: string
@@ -47,10 +53,14 @@ const MAX_SETTINGS_PROFILES_ROWS = 500
 const MAX_ALLOWED_IP_ROWS = 200
 const MAX_API_KEY_ROWS = 200
 
+function joinAddressParts(parts: Array<string | null>) {
+  return parts.map((part) => part?.trim()).filter(Boolean).join(", ") || null
+}
+
 async function saveHospitalBranding(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
+  const { supabase } = await requireServerActionPermission("admin.settings.manage")
   const { user } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -62,9 +72,27 @@ async function saveHospitalBranding(formData: FormData) {
   }
 
   const hospitalName = ((formData.get("hospital_name") as string | null) || "").trim()
-  const address = ((formData.get("address") as string | null) || "").trim() || null
+  const addressLine1 = ((formData.get("address_line_1") as string | null) || "").trim() || null
+  const addressLine2 = ((formData.get("address_line_2") as string | null) || "").trim() || null
+  const city = ((formData.get("city") as string | null) || "").trim() || null
+  const stateOrProvince = ((formData.get("state_or_province") as string | null) || "").trim() || null
+  const postalCode = ((formData.get("postal_code") as string | null) || "").trim() || null
+  const country = ((formData.get("country") as string | null) || "").trim() || null
+  const address = joinAddressParts([addressLine1, addressLine2, city, stateOrProvince, postalCode, country])
   const phone = ((formData.get("phone") as string | null) || "").trim() || null
+  const phoneCountryCode = ((formData.get("phone_country_code") as string | null) || "").trim() || null
   const email = ((formData.get("email") as string | null) || "").trim() || null
+  const currencyCode = ((formData.get("currency_code") as string | null) || "").trim().toUpperCase() || "USD"
+  const locale = ((formData.get("locale") as string | null) || "").trim() || "en-US"
+  const timezone = ((formData.get("timezone") as string | null) || "").trim() || "UTC"
+  const dateFormat = ((formData.get("date_format") as string | null) || "").trim() || "DD/MM/YYYY"
+  const timeFormat = ((formData.get("time_format") as string | null) || "").trim() || "24h"
+  const language = ((formData.get("language") as string | null) || "").trim() || "en"
+  const stateLabel = ((formData.get("state_label") as string | null) || "").trim() || "State / Province"
+  const cityLabel = ((formData.get("city_label") as string | null) || "").trim() || "City"
+  const facilityLabel = ((formData.get("facility_label") as string | null) || "").trim() || "Facility"
+  const publicCoverageLabel =
+    ((formData.get("public_coverage_label") as string | null) || "").trim() || "Public coverage"
 
   const logoUrlFromInput = ((formData.get("billing_logo_url") as string | null) || "").trim() || null
   const logoFile = formData.get("billing_logo_file") as File | null
@@ -86,7 +114,9 @@ async function saveHospitalBranding(formData: FormData) {
 
   const { data: existing } = await supabase
     .from("hospital_settings")
-    .select("id")
+    .select(
+      "id, hospital_name, billing_logo_url, address, address_line_1, address_line_2, city, state_or_province, postal_code, country, phone, phone_country_code, email, currency_code, locale, timezone, date_format, time_format, language, state_label, city_label, facility_label, public_coverage_label",
+    )
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle()
@@ -95,21 +125,84 @@ async function saveHospitalBranding(formData: FormData) {
     hospital_name: hospitalName,
     billing_logo_url: finalLogoUrl,
     address,
+    address_line_1: addressLine1,
+    address_line_2: addressLine2,
+    city,
+    state_or_province: stateOrProvince,
+    postal_code: postalCode,
+    country,
     phone,
+    phone_country_code: phoneCountryCode,
     email,
+    currency_code: currencyCode,
+    locale,
+    timezone,
+    date_format: dateFormat,
+    time_format: timeFormat,
+    language,
+    state_label: stateLabel,
+    city_label: cityLabel,
+    facility_label: facilityLabel,
+    public_coverage_label: publicCoverageLabel,
   }
 
+  let insertedHospitalSettingsId: string | null = null
   if (existing?.id) {
-    await supabase.from("hospital_settings").update(payload).eq("id", existing.id)
+    const { error: updateError } = await supabase.from("hospital_settings").update(payload).eq("id", existing.id)
+    if (updateError) {
+      redirect("/dashboard/settings/hospital?tab=branding&error=branding_update_failed")
+    }
   } else {
-    await supabase.from("hospital_settings").insert(payload)
+    const { data: insertedRow, error: insertError } = await supabase
+      .from("hospital_settings")
+      .insert(payload)
+      .select("id")
+      .single()
+    if (insertError || !insertedRow?.id) {
+      redirect("/dashboard/settings/hospital?tab=branding&error=branding_create_failed")
+    }
+    insertedHospitalSettingsId = insertedRow.id
   }
 
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     actor_user_id: user.id,
     target_user_id: user.id,
     action: "hospital_branding_update",
   })
+  if (auditError) {
+    if (existing?.id) {
+      await supabase
+        .from("hospital_settings")
+        .update({
+          hospital_name: existing.hospital_name,
+          billing_logo_url: existing.billing_logo_url,
+          address: existing.address,
+          address_line_1: existing.address_line_1,
+          address_line_2: existing.address_line_2,
+          city: existing.city,
+          state_or_province: existing.state_or_province,
+          postal_code: existing.postal_code,
+          country: existing.country,
+          phone: existing.phone,
+          phone_country_code: existing.phone_country_code,
+          email: existing.email,
+          currency_code: existing.currency_code,
+          locale: existing.locale,
+          timezone: existing.timezone,
+          date_format: existing.date_format,
+          time_format: existing.time_format,
+          language: existing.language,
+          state_label: existing.state_label,
+          city_label: existing.city_label,
+          facility_label: existing.facility_label,
+          public_coverage_label: existing.public_coverage_label,
+        })
+        .eq("id", existing.id)
+    } else if (insertedHospitalSettingsId) {
+      await supabase.from("hospital_settings").delete().eq("id", insertedHospitalSettingsId)
+    }
+    redirect("/dashboard/settings/hospital?tab=branding&error=audit_log_failed")
+  }
 
   redirect("/dashboard/settings/hospital?tab=branding&status=branding_saved")
 }
@@ -117,7 +210,7 @@ async function saveHospitalBranding(formData: FormData) {
 async function assignUserRole(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
+  const { supabase } = await requireServerActionPermission("admin.settings.manage")
   const { user } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -149,7 +242,31 @@ async function assignUserRole(formData: FormData) {
     redirect("/dashboard/settings/hospital?tab=permissions&error=confirm_failed")
   }
 
-  await supabase.from("profiles").update({ role }).eq("id", userId)
+  const { data: existingProfile, error: existingProfileError } = await supabase
+    .from("profiles")
+    .select("id, role")
+    .eq("id", userId)
+    .maybeSingle()
+  if (existingProfileError || !existingProfile?.id) {
+    redirect("/dashboard/settings/hospital?tab=permissions&error=user_not_found")
+  }
+
+  const { error: updateError } = await supabase.from("profiles").update({ role }).eq("id", userId)
+  if (updateError) {
+    redirect("/dashboard/settings/hospital?tab=permissions&error=role_update_failed")
+  }
+
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+    actor_user_id: user.id,
+    target_user_id: userId,
+    action: "role_change",
+    old_role: existingProfile.role || null,
+    new_role: role,
+  })
+  if (auditError) {
+    await supabase.from("profiles").update({ role: existingProfile.role || null }).eq("id", userId)
+    redirect("/dashboard/settings/hospital?tab=permissions&error=audit_log_failed")
+  }
 
   redirect("/dashboard/settings/hospital?tab=permissions&status=role_saved")
 }
@@ -157,7 +274,7 @@ async function assignUserRole(formData: FormData) {
 async function saveSecuritySettings(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
+  const { supabase } = await requireServerActionPermission("admin.settings.manage")
   const { user } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -191,7 +308,7 @@ async function saveSecuritySettings(formData: FormData) {
 
   const { data: existing } = await supabase
     .from("system_settings")
-    .select("id")
+    .select("id, audit_logs_enabled, audit_log_retention_days")
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle()
@@ -201,17 +318,43 @@ async function saveSecuritySettings(formData: FormData) {
     audit_log_retention_days: retentionDays,
   }
 
+  let insertedSystemSettingsId: string | null = null
   if (existing?.id) {
-    await supabase.from("system_settings").update(payload).eq("id", existing.id)
+    const { error: updateError } = await supabase.from("system_settings").update(payload).eq("id", existing.id)
+    if (updateError) {
+      redirect("/dashboard/settings/hospital?tab=security&error=security_update_failed")
+    }
   } else {
-    await supabase.from("system_settings").insert(payload)
+    const { data: insertedSettingsRow, error: insertError } = await supabase
+      .from("system_settings")
+      .insert(payload)
+      .select("id")
+      .single()
+    if (insertError || !insertedSettingsRow?.id) {
+      redirect("/dashboard/settings/hospital?tab=security&error=security_create_failed")
+    }
+    insertedSystemSettingsId = insertedSettingsRow.id
   }
 
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     actor_user_id: user.id,
     target_user_id: user.id,
     action: "system_security_update",
   })
+  if (auditError) {
+    if (existing?.id) {
+      await supabase
+        .from("system_settings")
+        .update({
+          audit_logs_enabled: existing.audit_logs_enabled ?? true,
+          audit_log_retention_days: existing.audit_log_retention_days ?? 30,
+        })
+        .eq("id", existing.id)
+    } else if (insertedSystemSettingsId) {
+      await supabase.from("system_settings").delete().eq("id", insertedSystemSettingsId)
+    }
+    redirect("/dashboard/settings/hospital?tab=security&error=audit_log_failed")
+  }
 
   redirect("/dashboard/settings/hospital")
 }
@@ -219,7 +362,7 @@ async function saveSecuritySettings(formData: FormData) {
 async function addAllowedIp(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
+  const { supabase } = await requireServerActionPermission("admin.settings.manage")
   const { user } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -247,16 +390,28 @@ async function addAllowedIp(formData: FormData) {
     redirect("/dashboard/settings/hospital?error=confirm_failed")
   }
 
-  await supabase.from("security_allowed_ips").insert({
-    ip_range: ipRange,
-    created_by: user.id,
-  })
+  const { data: insertedIpRow, error: insertIpError } = await supabase
+    .from("security_allowed_ips")
+    .insert({
+      ip_range: ipRange,
+      created_by: user.id,
+    })
+    .select("id")
+    .single()
 
-  await supabase.from("admin_audit_logs").insert({
+  if (insertIpError || !insertedIpRow?.id) {
+    redirect("/dashboard/settings/hospital?tab=security&error=ip_add_failed")
+  }
+
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     actor_user_id: user.id,
     target_user_id: user.id,
     action: "security_allowed_ip_add",
   })
+  if (auditError) {
+    await supabase.from("security_allowed_ips").delete().eq("id", insertedIpRow.id as string)
+    redirect("/dashboard/settings/hospital?tab=security&error=audit_log_failed")
+  }
 
   redirect("/dashboard/settings/hospital?tab=security&status=ip_added")
 }
@@ -264,7 +419,7 @@ async function addAllowedIp(formData: FormData) {
 async function triggerBackup(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
+  const { supabase } = await requireServerActionPermission("admin.settings.manage")
   const { user } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -290,16 +445,28 @@ async function triggerBackup(formData: FormData) {
     redirect("/dashboard/settings/hospital?error=confirm_failed")
   }
 
-  await supabase.from("system_backups").insert({
-    file_url: null,
-    created_by: user.id,
-  })
+  const { data: insertedBackupRow, error: insertBackupError } = await supabase
+    .from("system_backups")
+    .insert({
+      file_url: null,
+      created_by: user.id,
+    })
+    .select("id")
+    .single()
 
-  await supabase.from("admin_audit_logs").insert({
+  if (insertBackupError || !insertedBackupRow?.id) {
+    redirect("/dashboard/settings/hospital?tab=backup&error=backup_trigger_failed")
+  }
+
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     actor_user_id: user.id,
     target_user_id: user.id,
     action: "system_backup_trigger",
   })
+  if (auditError) {
+    await supabase.from("system_backups").delete().eq("id", insertedBackupRow.id as string)
+    redirect("/dashboard/settings/hospital?tab=backup&error=audit_log_failed")
+  }
 
   redirect("/dashboard/settings/hospital?tab=backup&status=backup_triggered")
 }
@@ -307,7 +474,7 @@ async function triggerBackup(formData: FormData) {
 async function createApiKey(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
+  const { supabase } = await requireServerActionPermission("admin.settings.manage")
   const { user } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -338,17 +505,29 @@ async function createApiKey(formData: FormData) {
 
   const keyHash = createHash("sha256").update(secret).digest("hex")
 
-  await supabase.from("api_keys").insert({
-    label,
-    key_hash: keyHash,
-    created_by: user.id,
-  })
+  const { data: insertedApiKeyRow, error: insertApiKeyError } = await supabase
+    .from("api_keys")
+    .insert({
+      label,
+      key_hash: keyHash,
+      created_by: user.id,
+    })
+    .select("id")
+    .single()
 
-  await supabase.from("admin_audit_logs").insert({
+  if (insertApiKeyError || !insertedApiKeyRow?.id) {
+    redirect("/dashboard/settings/hospital?tab=integrations&error=api_key_create_failed")
+  }
+
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     actor_user_id: user.id,
     target_user_id: user.id,
     action: "api_key_create",
   })
+  if (auditError) {
+    await supabase.from("api_keys").delete().eq("id", insertedApiKeyRow.id as string)
+    redirect("/dashboard/settings/hospital?tab=integrations&error=audit_log_failed")
+  }
 
   redirect("/dashboard/settings/hospital?tab=integrations&status=api_key_created")
 }
@@ -374,10 +553,10 @@ export default async function HospitalSettingsPage({
 
   const { data: settings } = await supabase
     .from("hospital_settings")
-    .select("hospital_name, billing_logo_url, address, phone, email")
+    .select(GLOBAL_SETTINGS_SELECT)
     .order("created_at", { ascending: true })
     .limit(1)
-    .maybeSingle()
+    .maybeSingle<HospitalSettingsRow>()
 
   const { data: profiles } = await supabase
     .from("profiles")
@@ -481,9 +660,9 @@ export default async function HospitalSettingsPage({
             </Link>
           </Button>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Hospital Settings</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Facility Settings</h1>
             <p className="text-muted-foreground">
-              Configure branding, permissions, security, backups, and integrations for your facility.
+              Configure branding, regional settings, permissions, security, backups, and integrations for your facility.
             </p>
           </div>
         </div>
@@ -502,99 +681,13 @@ export default async function HospitalSettingsPage({
           <Card>
             <CardHeader>
               <CardTitle>Branding</CardTitle>
-              <CardDescription>Details used on invoices, reports, and patient-facing documents.</CardDescription>
+              <CardDescription>Details used on invoices, reports, patient-facing documents, and regional formatting.</CardDescription>
             </CardHeader>
             <CardContent>
-              <form action={saveHospitalBranding} className="space-y-6">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-1">
-                    <label htmlFor="hospital_name" className="text-sm font-medium">
-                      Hospital name
-                    </label>
-                    <Input
-                      id="hospital_name"
-                      name="hospital_name"
-                      defaultValue={settings?.hospital_name ?? ""}
-                      required
-                      placeholder="e.g. City General Hospital"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label htmlFor="address" className="text-sm font-medium">
-                      Address
-                    </label>
-                    <Input
-                      id="address"
-                      name="address"
-                      defaultValue={settings?.address ?? ""}
-                      placeholder="Street, city, district"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label htmlFor="phone" className="text-sm font-medium">
-                      Phone
-                    </label>
-                    <Input
-                      id="phone"
-                      name="phone"
-                      defaultValue={settings?.phone ?? ""}
-                      placeholder="Primary hospital phone number"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label htmlFor="email" className="text-sm font-medium">
-                      Email
-                    </label>
-                    <Input
-                      id="email"
-                      name="email"
-                      defaultValue={settings?.email ?? ""}
-                      placeholder="Contact email shown on invoices"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-1">
-                    <label htmlFor="billing_logo_url" className="text-sm font-medium">
-                      Logo URL
-                    </label>
-                    <Input
-                      id="billing_logo_url"
-                      name="billing_logo_url"
-                      defaultValue={settings?.billing_logo_url ?? ""}
-                      placeholder="https://.../logo.png"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      You can paste a public image URL or upload a logo file.
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <label htmlFor="billing_logo_file" className="text-sm font-medium">
-                      Upload logo
-                    </label>
-                    <Input id="billing_logo_file" name="billing_logo_file" type="file" accept="image/*" />
-                    <p className="text-xs text-muted-foreground">
-                      If a file is uploaded, it will be stored and used instead of the URL.
-                    </p>
-                  </div>
-                </div>
-
-                {settings?.billing_logo_url && (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Current logo</p>
-                    <img
-                      src={settings.billing_logo_url}
-                      alt="Hospital logo preview"
-                      className="h-16 w-auto rounded border bg-white object-contain p-1"
-                    />
-                  </div>
-                )}
-
-                <div className="flex justify-end">
-                  <Button type="submit">Save branding</Button>
-                </div>
-              </form>
+              <HospitalBrandingForm
+                action={saveHospitalBranding}
+                initialSettings={normalizeGlobalSettings(settings)}
+              />
             </CardContent>
           </Card>
         </TabsContent>

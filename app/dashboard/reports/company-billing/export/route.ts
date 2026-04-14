@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
+import { ROLES } from "@/lib/utils"
 
 const EXPORT_ROW_LIMIT = 5_000
 
@@ -15,7 +16,10 @@ export async function GET(request: NextRequest) {
   if (limited) return limited
 
   try {
-    const { supabase } = await requirePermission(request, "admin.export")
+    const { supabase, user } = await requirePermission(request, "admin.export")
+    if (user?.role !== ROLES.ADMIN) {
+      return apiError(403, "forbidden", "Forbidden: only admin can export company billing reports", request)
+    }
 
   const { searchParams } = new URL(request.url)
   const selectedCompanyId = (searchParams.get("company_id") || "").trim() || null

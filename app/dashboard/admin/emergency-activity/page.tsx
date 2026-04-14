@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
 
 interface EmergencyActivitySearchParams {
   actor?: string
@@ -36,6 +38,7 @@ export default async function EmergencyActivityPage({
   searchParams?: Promise<EmergencyActivitySearchParams>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -125,14 +128,6 @@ export default async function EmergencyActivityPage({
         full_name: (p.full_name as string | null) ?? null,
         role: (p.role as string | null) ?? null,
       })
-    }
-  }
-
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
     }
   }
 
@@ -268,7 +263,7 @@ export default async function EmergencyActivityPage({
 
                     return (
                       <TableRow key={row.id} className="hover:bg-muted/50">
-                        <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at)}</TableCell>
+                        <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at, settings)}</TableCell>
                         <TableCell className="text-xs">{actionLabel}</TableCell>
                         <TableCell className="text-xs">
                           <div className="flex flex-col gap-0.5">

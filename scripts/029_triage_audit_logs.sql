@@ -12,6 +12,17 @@ create table if not exists public.triage_audit_logs (
   created_at timestamptz not null default timezone('utc'::text, now())
 );
 
+alter table public.triage_audit_logs enable row level security;
+
+drop policy if exists "Authenticated staff can view triage audit logs" on public.triage_audit_logs;
+drop policy if exists "Authenticated staff can insert triage audit logs" on public.triage_audit_logs;
+
+create policy "Authenticated staff can view triage audit logs" on public.triage_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Authenticated staff can insert triage audit logs" on public.triage_audit_logs
+  for insert with check (auth.uid() is not null);
+
 create index if not exists triage_audit_logs_triage_id_idx on public.triage_audit_logs(triage_id);
 create index if not exists triage_audit_logs_actor_user_id_idx on public.triage_audit_logs(actor_user_id);
 create index if not exists triage_audit_logs_created_at_idx on public.triage_audit_logs(created_at desc);

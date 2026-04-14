@@ -1,0 +1,2989 @@
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/056_dashboard_alerts_rpc.sql =====
+
+-- 056_dashboard_alerts_rpc.sql
+-- Aggregate helper for dashboard alert counts and low-stock snapshot.
+
+DROP FUNCTION IF EXISTS public.dashboard_home_alerts(integer);
+
+CREATE FUNCTION public.dashboard_home_alerts(
+  p_low_stock_limit integer DEFAULT 12
+)
+RETURNS TABLE (
+  pending_lab_tests bigint,
+  pending_radiology_requests bigint,
+  outstanding_invoices bigint,
+  expiring_drugs bigint,
+  unbilled_visits bigint,
+  pending_discharges bigint,
+  low_stock_items jsonb
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  WITH low_stock AS (
+    SELECT
+      ms.quantity_on_hand,
+      ms.reorder_level,
+      COALESCE(m.name, 'Unknown medication') AS medication_name
+    FROM public.medication_stock ms
+    LEFT JOIN public.medications m ON m.id = ms.medication_id
+    WHERE COALESCE(ms.reorder_level, 0) > 0
+      AND COALESCE(ms.quantity_on_hand, 0) <= COALESCE(ms.reorder_level, 0)
+    ORDER BY ms.quantity_on_hand ASC, m.name ASC
+    LIMIT GREATEST(COALESCE(p_low_stock_limit, 12), 1)
+  )
+  SELECT
+    COALESCE((SELECT COUNT(*) FROM public.lab_tests WHERE status = 'pending'), 0) AS pending_lab_tests,
+    COALESCE((SELECT COUNT(*) FROM public.radiology_requests WHERE status IN ('pending', 'scheduled')), 0) AS pending_radiology_requests,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.invoices
+      WHERE GREATEST(COALESCE(total_amount, 0) - COALESCE(paid_amount, 0), 0) > 0
+    ), 0) AS outstanding_invoices,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.medication_stock
+      WHERE expiry_date IS NOT NULL
+        AND expiry_date >= CURRENT_DATE
+        AND expiry_date <= CURRENT_DATE + INTERVAL '30 days'
+        AND COALESCE(quantity_on_hand, 0) > 0
+    ), 0) AS expiring_drugs,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.visits v
+      WHERE v.visit_status = 'billing_pending'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.invoices i
+          WHERE i.visit_id = v.id
+        )
+    ), 0) AS unbilled_visits,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.admissions
+      WHERE status = 'admitted'
+        AND discharge_date IS NULL
+    ), 0) AS pending_discharges,
+    COALESCE(
+      (
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'quantity_on_hand', quantity_on_hand,
+            'reorder_level', reorder_level,
+            'medication_name', medication_name
+          )
+        )
+        FROM low_stock
+      ),
+      '[]'::jsonb
+    ) AS low_stock_items;
+$$;
+
+REVOKE ALL ON FUNCTION public.dashboard_home_alerts(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.dashboard_home_alerts(integer) TO authenticated;
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/lib/queue-actions.ts =====
+
+import type { SupabaseClient } from "@supabase/supabase-js"
+import { assertQueueTransition, type QueueStatus } from "@/lib/queues"
+import { ensureActiveVisitForPatient } from "@/lib/visit-flow"
+
+type QueueActionResult =
+  | { ok: true; redirectTo?: string | null }
+  | { ok: false; code: "not_found" | "invalid_state" | "unauthorized" | "invalid_department"; message: string }
+
+export async function callNextQueuePatient(
+  supabase: SupabaseClient,
+  department: string,
+  actorUserId?: string | null,
+): Promise<QueueActionResult> {
+  const { data: nextQueue } = await supabase
+    .from("queues")
+    .select("id, status, queue_number")
+    .eq("department", department)
+    .eq("status", "waiting")
+    .order("priority", { ascending: false })
+    .order("check_in_time", { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (!nextQueue) {
+    return { ok: false, code: "not_found", message: "No waiting patient found for this department." }
+  }
+
+  const currentStatus = (nextQueue.status as QueueStatus | null) ?? null
+  if (!currentStatus) {
+    return { ok: false, code: "invalid_state", message: "Queue item is missing a valid current state." }
+  }
+
+  try {
+    assertQueueTransition(currentStatus, "in_progress")
+  } catch {
+    return { ok: false, code: "invalid_state", message: "Queue item is no longer in a compatible state." }
+  }
+
+  const { error: updateError } = await supabase
+    .from("queues")
+    .update({
+      status: "in_progress",
+      called_time: new Date().toISOString(),
+    })
+    .eq("id", nextQueue.id)
+
+  if (updateError) {
+    throw updateError
+  }
+
+  await supabase.from("queue_audit_logs").insert({
+    queue_id: nextQueue.id,
+    action: "call_next",
+    old_status: currentStatus,
+    new_status: "in_progress",
+    actor_user_id: actorUserId ?? null,
+  })
+
+  await supabase.from("queue_settings").update({ current_serving: nextQueue.queue_number }).eq("department", department)
+
+  return { ok: true }
+}
+
+export async function completeQueueEntry(
+  supabase: SupabaseClient,
+  queueId: string,
+  actorUserId?: string | null,
+): Promise<QueueActionResult> {
+  const { data: existing } = await supabase
+    .from("queues")
+    .select("id, status")
+    .eq("id", queueId)
+    .maybeSingle()
+
+  const currentStatus = (existing?.status as QueueStatus | null) ?? null
+  if (!existing || !currentStatus) {
+    return { ok: false, code: "not_found", message: "Queue item could not be found." }
+  }
+
+  try {
+    assertQueueTransition(currentStatus, "completed")
+  } catch {
+    return { ok: false, code: "invalid_state", message: "Queue item is no longer in a compatible state." }
+  }
+
+  const { error: updateError } = await supabase
+    .from("queues")
+    .update({
+      status: "completed",
+      completed_time: new Date().toISOString(),
+    })
+    .eq("id", queueId)
+
+  if (updateError) {
+    throw updateError
+  }
+
+  await supabase.from("queue_audit_logs").insert({
+    queue_id: queueId,
+    action: "complete",
+    old_status: currentStatus,
+    new_status: "completed",
+    actor_user_id: actorUserId ?? null,
+  })
+
+  return { ok: true }
+}
+
+export async function cancelQueueEntry(
+  supabase: SupabaseClient,
+  queueId: string,
+  actorUserId?: string | null,
+): Promise<QueueActionResult> {
+  const { data: existing } = await supabase
+    .from("queues")
+    .select("id, status")
+    .eq("id", queueId)
+    .maybeSingle()
+
+  const currentStatus = (existing?.status as QueueStatus | null) ?? null
+  if (!existing || !currentStatus) {
+    return { ok: false, code: "not_found", message: "Queue item could not be found." }
+  }
+
+  try {
+    assertQueueTransition(currentStatus, "cancelled")
+  } catch {
+    return { ok: false, code: "invalid_state", message: "Queue item is no longer in a compatible state." }
+  }
+
+  const { error: updateError } = await supabase.from("queues").update({ status: "cancelled" }).eq("id", queueId)
+  if (updateError) {
+    throw updateError
+  }
+
+  await supabase.from("queue_audit_logs").insert({
+    queue_id: queueId,
+    action: "cancel",
+    old_status: currentStatus,
+    new_status: "cancelled",
+    actor_user_id: actorUserId ?? null,
+  })
+
+  return { ok: true }
+}
+
+export async function startOrContinueVisitForQueueEntry(
+  supabase: SupabaseClient,
+  queueId: string,
+  actorUserId?: string | null,
+): Promise<QueueActionResult> {
+  if (!actorUserId) {
+    return { ok: false, code: "unauthorized", message: "Authenticated user is required." }
+  }
+
+  const { data: queue } = await supabase
+    .from("queues")
+    .select("id, patient_id, department, visit_id")
+    .eq("id", queueId)
+    .maybeSingle()
+
+  if (!queue) {
+    return { ok: false, code: "not_found", message: "Queue item could not be found." }
+  }
+
+  const department = queue.department as string | null
+  const patientId = queue.patient_id as string | null
+
+  if (!department || !patientId) {
+    return { ok: false, code: "invalid_state", message: "Queue item is missing a linked patient or department." }
+  }
+
+  if (department !== "opd") {
+    return { ok: false, code: "invalid_department", message: "Only OPD queue items can start or continue a visit." }
+  }
+
+  let visitId = (queue.visit_id as string | null) ?? null
+
+  if (!visitId) {
+    const startOfDay = new Date()
+    startOfDay.setHours(0, 0, 0, 0)
+
+    const { data: existingVisit } = await supabase
+      .from("visits")
+      .select("id")
+      .eq("patient_id", patientId)
+      .gte("created_at", startOfDay.toISOString())
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingVisit?.id) {
+      visitId = existingVisit.id as string
+    } else {
+      visitId = await ensureActiveVisitForPatient(supabase, patientId, { facilityCode: "opd" })
+    }
+
+    if (!visitId) {
+      return { ok: false, code: "invalid_state", message: "Unable to create or locate an active visit for this patient." }
+    }
+
+    const { error: queueUpdateError } = await supabase.from("queues").update({ visit_id: visitId }).eq("id", queueId)
+    if (queueUpdateError) {
+      throw queueUpdateError
+    }
+  }
+
+  return { ok: true, redirectTo: `/dashboard/records/visit/${visitId}` }
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/app/api/queue/actions/route.ts =====
+
+import { NextResponse, type NextRequest } from "next/server"
+import { z } from "zod"
+import { createServerClient } from "@/lib/supabase/server"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { enforceTrustedOrigin } from "@/lib/http/request-security"
+import { logApiRequestComplete, logApiRequestFailure, logApiRequestStart } from "@/lib/http/observability"
+import {
+  callNextQueuePatient,
+  cancelQueueEntry,
+  completeQueueEntry,
+  startOrContinueVisitForQueueEntry,
+} from "@/lib/queue-actions"
+
+const queueActionSchema = z
+  .object({
+    type: z.enum(["call_next", "complete", "cancel", "start_visit"]),
+    department: z.string().trim().min(1).max(100).optional(),
+    queueId: z.string().uuid().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.type === "call_next" && !value.department) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["department"], message: "Department is required." })
+    }
+    if (value.type !== "call_next" && !value.queueId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["queueId"], message: "Queue ID is required." })
+    }
+  })
+
+export async function POST(request: NextRequest) {
+  const logCtx = logApiRequestStart(request, "api.queue.actions")
+  const limited = enforceFixedWindowRateLimit(request, {
+    key: "api_queue_actions",
+    maxRequests: 180,
+    windowMs: 60_000,
+  })
+
+  if (limited) {
+    logApiRequestComplete(request, "api.queue.actions", logCtx, limited.status)
+    return limited
+  }
+
+  const originGuard = enforceTrustedOrigin(request)
+  if (originGuard) {
+    logApiRequestComplete(request, "api.queue.actions", logCtx, originGuard.status)
+    return originGuard
+  }
+
+  try {
+    const body = await request.json()
+    const parsed = queueActionSchema.safeParse(body)
+
+    if (!parsed.success) {
+      logApiRequestComplete(request, "api.queue.actions", logCtx, 400)
+      return apiError(400, "invalid_payload", "Invalid queue action payload", request)
+    }
+
+    const supabase = await createServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      logApiRequestComplete(request, "api.queue.actions", logCtx, 401)
+      return apiError(401, "unauthorized", "Unauthorized", request)
+    }
+
+    const actorUserId = user.id
+    const action = parsed.data
+
+    const result =
+      action.type === "call_next"
+        ? await callNextQueuePatient(supabase, action.department!, actorUserId)
+        : action.type === "complete"
+          ? await completeQueueEntry(supabase, action.queueId!, actorUserId)
+          : action.type === "cancel"
+            ? await cancelQueueEntry(supabase, action.queueId!, actorUserId)
+            : await startOrContinueVisitForQueueEntry(supabase, action.queueId!, actorUserId)
+
+    if (!result.ok) {
+      const status = result.code === "not_found" ? 404 : result.code === "unauthorized" ? 401 : 409
+      logApiRequestComplete(request, "api.queue.actions", logCtx, status, { action: action.type, result: result.code })
+      return apiError(status, result.code, result.message, request)
+    }
+
+    logApiRequestComplete(request, "api.queue.actions", logCtx, 200, { action: action.type })
+    return NextResponse.json({ ok: true, redirectTo: result.redirectTo ?? null }, { status: 200 })
+  } catch (error) {
+    logApiRequestFailure(request, "api.queue.actions", logCtx, 500, error)
+    return apiError(500, "queue_action_failed", "Failed to process queue action", request)
+  }
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/lib/offline-queue-sync.ts =====
+
+"use client"
+
+export type OfflineQueueActionType = "call_next" | "complete" | "cancel"
+
+export type OfflineQueueOperation = {
+  id: string
+  type: OfflineQueueActionType
+  department?: string
+  queueId?: string
+  createdAt: number
+}
+
+const STORAGE_KEY = "offline-sync:queue-actions"
+
+function isBrowser() {
+  return typeof window !== "undefined"
+}
+
+export function listOfflineQueueOperations(): OfflineQueueOperation[] {
+  if (!isBrowser()) return []
+  const raw = window.localStorage.getItem(STORAGE_KEY)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as OfflineQueueOperation[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    window.localStorage.removeItem(STORAGE_KEY)
+    return []
+  }
+}
+
+function saveOfflineQueueOperations(operations: OfflineQueueOperation[]) {
+  if (!isBrowser()) return
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(operations))
+  window.dispatchEvent(new CustomEvent("offline-queue-sync:changed"))
+}
+
+export function enqueueOfflineQueueOperation(operation: Omit<OfflineQueueOperation, "id" | "createdAt">) {
+  const next: OfflineQueueOperation = {
+    ...operation,
+    id: `${operation.type}:${operation.queueId ?? operation.department ?? "unknown"}:${Date.now()}`,
+    createdAt: Date.now(),
+  }
+  saveOfflineQueueOperations([...listOfflineQueueOperations(), next])
+}
+
+async function postQueueAction(operation: OfflineQueueOperation) {
+  const response = await fetch("/api/queue/actions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      type: operation.type,
+      department: operation.department,
+      queueId: operation.queueId,
+    }),
+  })
+
+  const payload = (await response.json().catch(() => null)) as { ok?: boolean; error?: { code?: string } } | null
+
+  if (response.ok) {
+    return { ok: true as const }
+  }
+
+  const code = payload?.error?.code ?? "queue_action_failed"
+  const discard = response.status === 404 || response.status === 409
+  return { ok: false as const, discard, code }
+}
+
+export async function syncOfflineQueueOperations(): Promise<{
+  synced: number
+  discarded: number
+  remaining: number
+}> {
+  if (!isBrowser()) {
+    return { synced: 0, discarded: 0, remaining: 0 }
+  }
+
+  const operations = listOfflineQueueOperations()
+  if (operations.length === 0) {
+    return { synced: 0, discarded: 0, remaining: 0 }
+  }
+
+  const remaining: OfflineQueueOperation[] = []
+  let synced = 0
+  let discarded = 0
+
+  for (const operation of operations) {
+    try {
+      const result = await postQueueAction(operation)
+      if (result.ok) {
+        synced += 1
+        continue
+      }
+      if (result.discard) {
+        discarded += 1
+        continue
+      }
+      remaining.push(operation)
+    } catch {
+      remaining.push(operation)
+      break
+    }
+  }
+
+  saveOfflineQueueOperations(remaining)
+  return { synced, discarded, remaining: remaining.length }
+}
+
+export function subscribeOfflineQueueOperations(callback: () => void) {
+  if (!isBrowser()) return () => undefined
+
+  const handler = () => callback()
+  window.addEventListener("storage", handler)
+  window.addEventListener("offline-queue-sync:changed", handler as EventListener)
+  return () => {
+    window.removeEventListener("storage", handler)
+    window.removeEventListener("offline-queue-sync:changed", handler as EventListener)
+  }
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/components/offline-sync-status.tsx =====
+
+"use client"
+
+import { useEffect, useMemo, useState, useTransition } from "react"
+import { Button } from "@/components/ui/button"
+import {
+  listOfflineQueueOperations,
+  subscribeOfflineQueueOperations,
+  syncOfflineQueueOperations,
+} from "@/lib/offline-queue-sync"
+
+export function OfflineSyncStatus() {
+  const [pendingCount, setPendingCount] = useState(0)
+  const [online, setOnline] = useState(true)
+  const [lastMessage, setLastMessage] = useState<string | null>(null)
+  const [isPending, startTransition] = useTransition()
+
+  const refresh = useMemo(
+    () => () => {
+      setPendingCount(listOfflineQueueOperations().length)
+      setOnline(typeof navigator === "undefined" ? true : navigator.onLine)
+    },
+    [],
+  )
+
+  useEffect(() => {
+    refresh()
+    const unsubscribe = subscribeOfflineQueueOperations(refresh)
+    const handleOnline = () => {
+      refresh()
+      startTransition(async () => {
+        const result = await syncOfflineQueueOperations()
+        refresh()
+        if (result.synced || result.discarded) {
+          setLastMessage(
+            `Synced ${result.synced} queued action${result.synced === 1 ? "" : "s"}${result.discarded ? `, skipped ${result.discarded} stale action${result.discarded === 1 ? "" : "s"}` : ""}.`,
+          )
+        }
+      })
+    }
+    const handleOffline = () => refresh()
+    window.addEventListener("online", handleOnline)
+    window.addEventListener("offline", handleOffline)
+    return () => {
+      unsubscribe()
+      window.removeEventListener("online", handleOnline)
+      window.removeEventListener("offline", handleOffline)
+    }
+  }, [refresh])
+
+  if (pendingCount === 0 && online) {
+    return null
+  }
+
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="font-medium">{online ? "Queue sync pending" : "Offline queue mode"}</p>
+          <p className="text-xs text-amber-800/80">
+            {online
+              ? `${pendingCount} queue action${pendingCount === 1 ? "" : "s"} waiting to sync.`
+              : "Queue actions will be saved on this device and retried automatically when the connection returns."}
+            {lastMessage ? ` ${lastMessage}` : ""}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!online || pendingCount === 0 || isPending}
+          onClick={() =>
+            startTransition(async () => {
+              const result = await syncOfflineQueueOperations()
+              refresh()
+              setLastMessage(
+                result.synced || result.discarded
+                  ? `Synced ${result.synced} queued action${result.synced === 1 ? "" : "s"}${result.discarded ? `, skipped ${result.discarded} stale action${result.discarded === 1 ? "" : "s"}` : ""}.`
+                  : "No queued actions were synced."
+              )
+            })
+          }
+        >
+          {isPending ? "Syncing..." : "Retry sync"}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/components/offline-queue-action-button.tsx =====
+
+"use client"
+
+import { useRouter } from "next/navigation"
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
+import { enqueueOfflineQueueOperation, type OfflineQueueActionType } from "@/lib/offline-queue-sync"
+
+type QueueActionPayload = {
+  type: OfflineQueueActionType | "start_visit"
+  department?: string
+  queueId?: string
+}
+
+export function OfflineQueueActionButton({
+  payload,
+  label,
+  variant = "default",
+  size = "sm",
+  className,
+  disabled,
+}: {
+  payload: QueueActionPayload
+  label: string
+  variant?: "default" | "outline" | "secondary" | "ghost" | "destructive"
+  size?: "default" | "sm" | "lg" | "icon"
+  className?: string
+  disabled?: boolean
+}) {
+  const router = useRouter()
+  const [isPending, setIsPending] = useState(false)
+
+  return (
+    <Button
+      type="button"
+      variant={variant}
+      size={size}
+      className={className}
+      disabled={disabled || isPending}
+      onClick={async () => {
+        if (payload.type !== "start_visit" && typeof navigator !== "undefined" && !navigator.onLine) {
+          enqueueOfflineQueueOperation({
+            type: payload.type as OfflineQueueActionType,
+            department: payload.department,
+            queueId: payload.queueId,
+          })
+          router.refresh()
+          return
+        }
+
+        setIsPending(true)
+        try {
+          const response = await fetch("/api/queue/actions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          })
+
+          if (!response.ok) {
+            throw new Error("Queue action failed")
+          }
+
+          const data = (await response.json().catch(() => null)) as { redirectTo?: string | null } | null
+          if (data?.redirectTo) {
+            router.push(data.redirectTo)
+            return
+          }
+          router.refresh()
+        } catch (error) {
+          console.error("[v0] Queue action request failed:", error)
+          if (payload.type !== "start_visit") {
+            enqueueOfflineQueueOperation({
+              type: payload.type as OfflineQueueActionType,
+              department: payload.department,
+              queueId: payload.queueId,
+            })
+            router.refresh()
+            return
+          }
+          alert("This queue action could not be completed. Please try again.")
+        } finally {
+          setIsPending(false)
+        }
+      }}
+    >
+      {isPending ? "Working..." : label}
+    </Button>
+  )
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/lib/clinical-safety.ts =====
+
+export function parseAllergyTerms(input: string | null | undefined): string[] {
+  if (!input) return []
+  return input
+    .split(/[\n,;/]+/)
+    .map((term) => term.trim().toLowerCase())
+    .filter((term) => term.length >= 3)
+}
+
+function normalizeMedicationName(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+export function findMedicationAllergyMatches(allergies: string | null | undefined, medicationNames: string[]): string[] {
+  const allergyTerms = parseAllergyTerms(allergies)
+  if (allergyTerms.length === 0) return []
+
+  const matches = new Set<string>()
+  for (const medication of medicationNames) {
+    const normalizedMedication = normalizeMedicationName(medication)
+    if (!normalizedMedication) continue
+
+    for (const term of allergyTerms) {
+      if (normalizedMedication.includes(term) || term.includes(normalizedMedication)) {
+        matches.add(term)
+      }
+    }
+  }
+  return Array.from(matches)
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/app/api/auth/password-reset-audit/route.ts =====
+
+import { NextResponse, type NextRequest } from "next/server"
+import { z } from "zod"
+import { createAdminClient } from "@/lib/supabase/admin"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { enforceTrustedOrigin } from "@/lib/http/request-security"
+import { logApiRequestComplete, logApiRequestFailure, logApiRequestStart } from "@/lib/http/observability"
+
+const requestSchema = z.object({
+  email: z.string().trim().email().max(320),
+})
+
+export async function POST(request: NextRequest) {
+  const logCtx = logApiRequestStart(request, "api.auth.password_reset_audit")
+  const limited = enforceFixedWindowRateLimit(request, {
+    key: "api_auth_password_reset_audit",
+    maxRequests: 30,
+    windowMs: 60_000,
+  })
+  if (limited) {
+    logApiRequestComplete(request, "api.auth.password_reset_audit", logCtx, limited.status)
+    return limited
+  }
+
+  const originGuard = enforceTrustedOrigin(request)
+  if (originGuard) {
+    logApiRequestComplete(request, "api.auth.password_reset_audit", logCtx, originGuard.status)
+    return originGuard
+  }
+
+  try {
+    const body = await request.json()
+    const parsed = requestSchema.safeParse(body)
+    if (!parsed.success) {
+      logApiRequestComplete(request, "api.auth.password_reset_audit", logCtx, 400)
+      return apiError(400, "invalid_payload", "Invalid password reset audit payload", request)
+    }
+
+    const supabase = createAdminClient()
+    const { error } = await supabase.from("password_reset_events").insert({
+      email: parsed.data.email.toLowerCase(),
+    })
+
+    if (error) {
+      throw error
+    }
+
+    logApiRequestComplete(request, "api.auth.password_reset_audit", logCtx, 200)
+    return NextResponse.json({ ok: true }, { status: 200 })
+  } catch (error) {
+    logApiRequestFailure(request, "api.auth.password_reset_audit", logCtx, 500, error)
+    return apiError(500, "password_reset_audit_failed", "Failed to record password reset audit event", request)
+  }
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/app/auth/forgot-password/page.tsx =====
+
+"use client"
+
+import type React from "react"
+import { useState, useMemo, useEffect } from "react"
+import Link from "next/link"
+import { createBrowserClient } from "@/lib/supabase/client"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Loader2 } from "lucide-react"
+
+export default function ForgotPasswordPage() {
+  const supabase = useMemo(() => createBrowserClient(), [])
+
+  const [email, setEmail] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [cooldownRemaining, setCooldownRemaining] = useState<number | null>(null)
+
+  const COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes
+  const STORAGE_KEY = "hms:last_password_reset_request"
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+
+    const last = Number(raw)
+    if (!Number.isFinite(last)) return
+
+    const now = Date.now()
+    const remaining = last + COOLDOWN_MS - now
+    if (remaining > 0) {
+      setCooldownRemaining(remaining)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (cooldownRemaining === null) return
+    if (cooldownRemaining <= 0) {
+      setCooldownRemaining(null)
+      return
+    }
+
+    const id = window.setInterval(() => {
+      setCooldownRemaining((prev) => {
+        if (prev === null) return null
+        const next = prev - 1000
+        return next > 0 ? next : 0
+      })
+    }, 1000)
+
+    return () => window.clearInterval(id)
+  }, [cooldownRemaining])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setSuccess(null)
+    setLoading(true)
+
+    if (cooldownRemaining && cooldownRemaining > 0) {
+      setLoading(false)
+      setError("A reset link was requested recently. Please wait a few minutes before trying again.")
+      return
+    }
+
+    try {
+      const origin = typeof window !== "undefined" ? window.location.origin : ""
+      const redirectTo = origin ? `${origin}/auth/update-password` : undefined
+
+      const trimmedEmail = email.trim()
+      const normalizedEmail = trimmedEmail.toLowerCase()
+
+      // Server-side rate limiting via RPC using password_reset_events
+      const { data: canRequest, error: rateLimitError } = await supabase.rpc("can_request_password_reset", {
+        p_email: normalizedEmail,
+      })
+
+      if (rateLimitError) {
+        setError("Unable to check reset limits. Please try again in a few minutes.")
+        return
+      }
+
+      if (canRequest === false) {
+        setError("A reset link was requested recently. Please wait a few minutes before trying again.")
+        return
+      }
+
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo,
+      })
+
+      if (resetError) {
+        setError(resetError.message || "Unable to send password reset email.")
+        return
+      }
+
+      setSuccess(
+        "If an account exists for this email, a password reset link has been sent. Please check your inbox and follow the instructions.",
+      )
+
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_KEY, String(Date.now()))
+        setCooldownRemaining(COOLDOWN_MS)
+      }
+
+      // Best-effort logging of reset-start event for audit/monitoring without exposing the table to the browser.
+      void fetch("/api/auth/password-reset-audit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email: normalizedEmail }),
+      })
+    } catch (e) {
+      if (e instanceof Error) {
+        setError(e.message || "Unable to start password reset.")
+      } else {
+        setError("Unable to start password reset.")
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-emerald-50 flex items-center justify-center px-4 py-6 sm:py-8">
+      <div className="w-full max-w-md">
+        <Card className="shadow-lg border border-slate-100">
+          <CardHeader>
+            <CardTitle className="text-2xl font-semibold text-slate-900">Forgot password</CardTitle>
+            <CardDescription className="text-sm text-slate-600">
+              Enter your email address and we&apos;ll send you a link to reset your password.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-4" aria-label="Forgot password form">
+              {error && (
+                <Alert variant="destructive" aria-live="assertive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              {success && (
+                <Alert aria-live="polite">
+                  <AlertDescription>{success}</AlertDescription>
+                </Alert>
+              )}
+
+              {cooldownRemaining !== null && cooldownRemaining > 0 && (
+                <p className="text-xs text-slate-600">
+                  You can request another reset link in{" "}
+                  {Math.max(0, Math.floor(cooldownRemaining / 1000 / 60))}m
+                  {" "}
+                  {Math.max(0, Math.floor((cooldownRemaining / 1000) % 60)).toString().padStart(2, "0")}s.
+                </p>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  required
+                  disabled={loading}
+                />
+              </div>
+
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Sending reset link...
+                  </>
+                ) : (
+                  "Send reset link"
+                )}
+              </Button>
+
+              <div className="text-center text-sm text-slate-600">
+                <Link href="/auth/login" className="text-sky-700 hover:underline font-medium">
+                  Back to login
+                </Link>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/app/dashboard/queue/[department]/page.tsx =====
+
+import { createServerClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { ArrowLeft } from "lucide-react"
+import Link from "next/link"
+import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { OfflineSyncStatus } from "@/components/offline-sync-status"
+import { OfflineQueueActionButton } from "@/components/offline-queue-action-button"
+
+const DEPARTMENT_QUEUE_LIMIT = 200
+
+function normalizeQueuePatient(
+  relation:
+    | {
+        id?: string | null
+        patient_number?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        phone?: string | null
+      }
+    | Array<{
+        id?: string | null
+        patient_number?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        phone?: string | null
+      }>
+    | null
+    | undefined,
+) {
+  if (!relation) {
+    return null
+  }
+  return Array.isArray(relation) ? (relation[0] ?? null) : relation
+}
+
+const statusColors = {
+  waiting: "bg-yellow-500",
+  in_progress: "bg-blue-500",
+  completed: "bg-green-500",
+  cancelled: "bg-red-500",
+}
+
+export default async function DepartmentQueuePage(props: {
+  params: Promise<{ department: string }>
+  searchParams?: Promise<{ status?: string; error?: string }>
+}) {
+  const supabase = await createServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    redirect("/auth/login")
+  }
+
+  const { department } = await props.params
+
+  const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
+  const statusFilter = resolvedSearchParams?.status || "all"
+  const errorCode = resolvedSearchParams?.error
+
+  // Fetch queues for this department
+  const { data: queues } = await supabase
+    .from("queues")
+    .select(`
+      id, patient_id, visit_id, queue_number, check_in_time, priority, status,
+      patient:patients(id, patient_number, first_name, last_name, phone)
+    `)
+    .eq("department", department)
+    .in("status", ["waiting", "in_progress"])
+    .order("priority", { ascending: false })
+    .order("check_in_time", { ascending: true })
+    .limit(DEPARTMENT_QUEUE_LIMIT)
+
+  const { data: setting } = await supabase
+    .from("queue_settings")
+    .select("department, current_serving")
+    .eq("department", department)
+    .single()
+
+  const waitingQueues = queues?.filter((q) => q.status === "waiting") || []
+  const inProgressQueues = queues?.filter((q) => q.status === "in_progress") || []
+
+  const visibleInProgressQueues = statusFilter === "waiting" ? [] : inProgressQueues
+  const visibleWaitingQueues = statusFilter === "in_progress" ? [] : waitingQueues
+
+  const errorMessage = (() => {
+    switch (errorCode) {
+      case "queue_action_invalid":
+        return "This queue action could not be completed because the item is no longer in a compatible state. Please refresh the page and try again."
+      default:
+        return null
+    }
+  })()
+
+  return (
+    <div className="space-y-6">
+      {errorMessage && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {errorMessage}
+        </div>
+      )}
+      <div className="flex items-center gap-4">
+        <Link href="/dashboard/queue">
+          <Button variant="ghost" size="icon">
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+        </Link>
+        <div className="flex-1">
+          <h1 className="text-3xl font-bold text-foreground capitalize">{department} Queue</h1>
+          <p className="text-muted-foreground">
+            {waitingQueues.length} waiting • {inProgressQueues.length} in progress
+          </p>
+        </div>
+        <OfflineQueueActionButton
+          payload={{ type: "call_next", department }}
+          label="Call Next Patient"
+          size="lg"
+          disabled={waitingQueues.length === 0}
+        />
+      </div>
+
+      <OfflineSyncStatus />
+
+      <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+        Work this queue from top to bottom: call the next patient, complete active work when finished, and cancel only
+        when the patient is no longer proceeding. OPD queues can start or continue a linked visit directly from here.
+      </div>
+
+      {department === "opd" ? (
+        <PatientWorkflowPanel
+          currentStage="queue"
+          title="Queue workflow"
+          description="The queue is the handoff point between triage and consultation. Use the linked visit to keep the patient journey connected."
+        />
+      ) : null}
+
+      <form method="GET" className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <label className="text-muted-foreground" htmlFor="status">
+          Status filter
+        </label>
+        <select
+          id="status"
+          name="status"
+          defaultValue={statusFilter}
+          className="h-8 rounded-md border border-input bg-background px-2 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          <option value="all">Waiting & In Progress</option>
+          <option value="waiting">Waiting only</option>
+          <option value="in_progress">In Progress only</option>
+        </select>
+        <button
+          type="submit"
+          className="inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
+        >
+          Apply
+        </button>
+      </form>
+      {(queues?.length || 0) >= DEPARTMENT_QUEUE_LIMIT && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Showing the first {DEPARTMENT_QUEUE_LIMIT} active queue rows for this department.
+        </div>
+      )}
+
+      {setting?.current_serving && (
+        <Card className="border-primary">
+          <CardHeader>
+            <CardTitle className="text-primary">Now Serving</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold">{setting.current_serving}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>In Progress ({inProgressQueues.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {visibleInProgressQueues.length > 0 ? (
+              visibleInProgressQueues.map((queue) => {
+                const patient = normalizeQueuePatient(queue.patient)
+                return (
+                <div key={queue.id} className="p-4 border rounded-lg space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="font-medium">
+                        <Link
+                          href={patient?.id ? `/dashboard/patients/${patient.id}` : "#"}
+                          className="hover:underline"
+                        >
+                          {patient?.first_name} {patient?.last_name}
+                        </Link>
+                      </p>
+                      <p className="text-sm text-muted-foreground">Queue: {queue.queue_number}</p>
+                    </div>
+                    <Badge className={statusColors.in_progress}>In Progress</Badge>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <OfflineQueueActionButton
+                      payload={{ type: "complete", queueId: queue.id }}
+                      label="Complete"
+                      size="sm"
+                      className="w-full"
+                    />
+                    <OfflineQueueActionButton
+                      payload={{ type: "cancel", queueId: queue.id }}
+                      label="Cancel"
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              )})
+            ) : (
+              <p className="py-8 text-center text-muted-foreground">
+                No patients are currently in progress. Use <span className="font-medium">Call Next Patient</span> when
+                someone is waiting, or switch the filter back to view active work.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Waiting ({waitingQueues.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {visibleWaitingQueues.length > 0 ? (
+              visibleWaitingQueues.map((queue, index) => {
+                const patient = normalizeQueuePatient(queue.patient)
+                return (
+                <div key={queue.id} className="p-4 border rounded-lg">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-lg">#{index + 1}</span>
+                        <p className="font-medium">
+                          <Link
+                            href={patient?.id ? `/dashboard/patients/${patient.id}` : "#"}
+                            className="hover:underline"
+                          >
+                            {patient?.first_name} {patient?.last_name}
+                          </Link>
+                        </p>
+                      </div>
+                      <p className="text-sm text-muted-foreground">Queue: {queue.queue_number}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Checked in:{" "}
+                        {new Date(queue.check_in_time).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-1 items-end">
+                      <Badge className={statusColors.waiting}>Waiting</Badge>
+                      {queue.priority !== "normal" && (
+                        <Badge variant="outline" className="text-xs capitalize">
+                          {queue.priority}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    {department === "opd" && (
+                      <OfflineQueueActionButton
+                        payload={{ type: "start_visit", queueId: queue.id }}
+                        label="Start/Continue Visit"
+                        size="sm"
+                        className="w-full"
+                      />
+                    )}
+                    {(department === "opd" || department === "emergency") && (
+                      <div className="flex-1">
+                        <Button
+                          asChild
+                          size="sm"
+                          variant="outline"
+                          className="w-full"
+                        >
+                          <Link
+                            href={`/dashboard/inpatient/new?patient_id=${patient?.id ?? ""}$${
+                              queue.visit_id ? `&visit_id=${queue.visit_id}` : ""
+                            }`}
+                          >
+                            Admit inpatient
+                          </Link>
+                        </Button>
+                      </div>
+                    )}
+                    <OfflineQueueActionButton
+                      payload={{ type: "cancel", queueId: queue.id }}
+                      label="Cancel"
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              )})
+            ) : (
+              <p className="py-8 text-center text-muted-foreground">
+                No patients are currently waiting in this department. Add a new queue entry or check back after the next
+                registration or triage handoff.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/app/dashboard/prescriptions/new/page.tsx =====
+
+"use client"
+
+import type React from "react"
+import { useState, useMemo, useEffect } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Plus, Trash2, ArrowLeft } from "lucide-react"
+import Link from "next/link"
+import { createClient } from "@/lib/supabase/client"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { FormDraftStatus } from "@/components/form-draft-status"
+import { FormHelpTip } from "@/components/form-help-tip"
+import { useLocalDraft } from "@/lib/use-local-draft"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { findMedicationAllergyMatches } from "@/lib/clinical-safety"
+
+interface MedicationItem {
+  medication_name: string
+  dosage: string
+  frequency: string
+  duration: string
+  quantity: number
+  instructions: string
+}
+
+interface MedicationOption {
+  id: string
+  name: string
+}
+
+interface PrescriptionDraft {
+  patientId: string
+  visitId: string
+  notes: string
+  medications: MedicationItem[]
+  newMedicineName: string
+}
+
+interface PatientSafetyRecord {
+  id: string
+  full_name: string | null
+  allergies: string | null
+}
+
+export default function NewPrescriptionPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  const supabase = useMemo(() => createClient(), [])
+
+  const initialDraft: PrescriptionDraft = {
+    patientId: searchParams.get("patient_id") || "",
+    visitId: searchParams.get("visit_id") || "",
+    notes: "",
+    medications: [{ medication_name: "", dosage: "", frequency: "", duration: "", quantity: 1, instructions: "" }],
+    newMedicineName: "",
+  }
+  const { value: draft, setValue: setDraft, lastSavedAt, resetDraft } = useLocalDraft("draft:prescriptions:new", initialDraft)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [catalogue, setCatalogue] = useState<MedicationOption[]>([])
+  const [isLoadingCatalogue, setIsLoadingCatalogue] = useState(true)
+  const [isAddingMedicine, setIsAddingMedicine] = useState(false)
+  const [isCreatingMedicine, setIsCreatingMedicine] = useState(false)
+  const [patientSafetyRecord, setPatientSafetyRecord] = useState<PatientSafetyRecord | null>(null)
+  const [isLoadingPatientSafety, setIsLoadingPatientSafety] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadMedications = async () => {
+      const { data, error } = await supabase.from("medications").select("id, name").order("name")
+      if (cancelled) return
+      if (error) {
+        console.error("[v0] Error loading medication catalogue:", error.message || error)
+        setCatalogue([])
+      } else {
+        setCatalogue((data || []) as MedicationOption[])
+      }
+      setIsLoadingCatalogue(false)
+    }
+
+    void loadMedications()
+
+    return () => {
+      cancelled = true
+    }
+  }, [supabase])
+
+  useEffect(() => {
+    const identifier = draft.patientId.trim()
+    if (!identifier) {
+      setPatientSafetyRecord(null)
+      return
+    }
+
+    let cancelled = false
+    setIsLoadingPatientSafety(true)
+
+    const loadPatientSafety = async () => {
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      const { data, error } = await supabase
+        .from("patients")
+        .select("id, full_name, allergies")
+        .eq(uuidRegex.test(identifier) ? "id" : "patient_number", identifier)
+        .maybeSingle()
+
+      if (cancelled) return
+      if (error) {
+        console.error("[v0] Error loading patient allergy profile:", error.message || error)
+        setPatientSafetyRecord(null)
+      } else {
+        setPatientSafetyRecord((data as PatientSafetyRecord | null) ?? null)
+      }
+      setIsLoadingPatientSafety(false)
+    }
+
+    void loadPatientSafety()
+
+    return () => {
+      cancelled = true
+    }
+  }, [draft.patientId, supabase])
+
+  const allergyMatches = useMemo(
+    () =>
+      findMedicationAllergyMatches(
+        patientSafetyRecord?.allergies,
+        draft.medications.map((medication) => medication.medication_name),
+      ),
+    [draft.medications, patientSafetyRecord?.allergies],
+  )
+
+  const addMedication = () => {
+    setDraft({
+      ...draft,
+      medications: [
+        ...draft.medications,
+        { medication_name: "", dosage: "", frequency: "", duration: "", quantity: 1, instructions: "" },
+      ],
+    })
+  }
+
+  const removeMedication = (index: number) => {
+    setDraft({ ...draft, medications: draft.medications.filter((_, i) => i !== index) })
+  }
+
+  const updateMedication = (index: number, field: keyof MedicationItem, value: string | number) => {
+    const updated = [...draft.medications]
+    updated[index] = { ...updated[index], [field]: value }
+    setDraft({ ...draft, medications: updated })
+  }
+
+  const handleQuickAddMedicine = async () => {
+    const name = draft.newMedicineName.trim()
+    if (!name) return
+
+    setIsCreatingMedicine(true)
+    try {
+      const { data, error } = await supabase
+        .from("medications")
+        .insert({
+          name,
+          dosage_form: "unspecified",
+          strength: "",
+          unit: "unit",
+          category: "Uncategorized",
+          unit_price: 0,
+        })
+        .select("id, name")
+        .single()
+
+      if (error || !data) {
+        console.error("[v0] Error quick-adding medication:", error || new Error("No data returned"))
+        return
+      }
+
+      setCatalogue((prev) => {
+        const next = [...prev, data as MedicationOption]
+        next.sort((a, b) => a.name.localeCompare(b.name))
+        return next
+      })
+
+      // If the first medication has no name yet, preselect this new medicine for convenience
+      setDraft((current) => {
+        if (current.medications.length === 0) {
+          return {
+            ...current,
+            medications: [{ medication_name: name, dosage: "", frequency: "", duration: "", quantity: 1, instructions: "" }],
+            newMedicineName: "",
+          }
+        }
+        const copy = [...current.medications]
+        if (!copy[0].medication_name) {
+          copy[0] = { ...copy[0], medication_name: name }
+        }
+        return { ...current, medications: copy, newMedicineName: "" }
+      })
+
+      setIsAddingMedicine(false)
+    } finally {
+      setIsCreatingMedicine(false)
+    }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsSubmitting(true)
+
+    try {
+      // Generate a simple human-readable prescription number
+      const generatedPrescriptionNumber = `RX-${Date.now().toString().slice(-6)}`
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user) {
+        router.push("/auth/login")
+        return
+      }
+
+      const identifier = draft.patientId.trim()
+
+      // Support either a raw patient UUID (patient_id) or a PT- style patient_number in the same field
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("id, patient_number")
+        .eq(uuidRegex.test(identifier) ? "id" : "patient_number", identifier)
+        .maybeSingle()
+
+      if (patientError) {
+        throw patientError
+      }
+
+      if (!patient) {
+        throw new Error("No patient found with that patient number.")
+      }
+
+      if (allergyMatches.length > 0) {
+        throw new Error(`Prescription blocked due to recorded allergy match: ${allergyMatches.join(", ")}`)
+      }
+
+      // Create prescription (table currently does not have a medications column)
+      const { data: prescription, error: prescriptionError } = await supabase
+        .from("prescriptions")
+        .insert({
+          patient_id: patient.id,
+          visit_id: draft.visitId || null,
+          doctor_id: user.id,
+          prescription_number: generatedPrescriptionNumber,
+          notes: draft.notes,
+          status: "pending",
+        })
+        .select()
+        .single()
+
+      if (prescriptionError) throw prescriptionError
+
+      // Create prescription items
+      const items = draft.medications.map((med) => ({
+        prescription_id: prescription.id,
+        ...med,
+      }))
+
+      const { error: itemsError } = await supabase.from("prescription_items").insert(items)
+
+      if (itemsError) throw itemsError
+
+      try {
+        await supabase.from("pharmacy_audit_logs").insert({
+          prescription_id: prescription.id,
+          actor_user_id: user.id,
+          action: "created",
+          old_status: null,
+          new_status: "pending",
+          notes: draft.notes || null,
+        })
+      } catch (auditError) {
+        console.error("[v0] Error logging prescription creation:", auditError)
+      }
+
+      resetDraft()
+      router.push(`/dashboard/prescriptions/${prescription.id}`)
+    } catch (error) {
+      console.error("[v0] Error creating prescription:", error instanceof Error ? error.message : error)
+      alert("Error creating prescription. Please try again.")
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/prescriptions">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Prescriptions
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-balance text-3xl font-bold tracking-tight">Create New Prescription</h1>
+            <p className="text-pretty text-muted-foreground">Add medications and instructions for a patient</p>
+          </div>
+        </div>
+      </div>
+
+      <FormDraftStatus lastSavedAt={lastSavedAt} onClear={resetDraft} />
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Prescription Details</CardTitle>
+            <CardDescription>Select patient and add general notes</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center gap-1">
+                <Label htmlFor="patient_id">Patient Number *</Label>
+                <FormHelpTip text="Enter the patient number from the chart or patient profile so the prescription links correctly." />
+              </div>
+              <Input
+                id="patient_id"
+                value={draft.patientId}
+                onChange={(e) => setDraft({ ...draft, patientId: e.target.value })}
+                placeholder="Enter patient number (e.g., PT-000123)"
+                required
+              />
+            </div>
+
+            {draft.visitId ? (
+              <div className="space-y-2">
+                <Label htmlFor="visit_id" className="flex items-center gap-1">
+                  Linked Visit
+                  <FormHelpTip text="This prescription will be tied to the active visit so pharmacy and billing continue the same encounter." />
+                </Label>
+                <Input id="visit_id" value={draft.visitId} readOnly className="bg-muted/30" />
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-1">
+                <Label htmlFor="notes">General Notes</Label>
+                <FormHelpTip text="Use general notes for diagnosis context or shared dispensing instructions." />
+              </div>
+              <Textarea
+                id="notes"
+                value={draft.notes}
+                onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+                placeholder="Additional instructions or notes..."
+                rows={3}
+              />
+            </div>
+
+            {patientSafetyRecord?.allergies ? (
+              <Alert variant={allergyMatches.length > 0 ? "destructive" : "default"}>
+                <AlertDescription>
+                  Recorded allergies for {patientSafetyRecord.full_name || "this patient"}: {patientSafetyRecord.allergies}
+                  {allergyMatches.length > 0
+                    ? ` Prescription submission is blocked because the selected medicines match: ${allergyMatches.join(", ")}.`
+                    : " No direct match was detected against the currently selected medicines."}
+                </AlertDescription>
+              </Alert>
+            ) : draft.patientId ? (
+              <Alert>
+                <AlertDescription>
+                  {isLoadingPatientSafety
+                    ? "Checking the patient allergy profile..."
+                    : "No allergy record was found for this patient. Confirm this before finalizing the prescription."}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Medications</CardTitle>
+                <CardDescription>Add prescribed medications and dosage instructions</CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="outline" size="sm" asChild>
+                  <Link href="/dashboard/pharmacy">Manage medicines</Link>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsAddingMedicine((v) => !v)}
+                >
+                  {isAddingMedicine ? "Close" : "Quick add medicine"}
+                </Button>
+              </div>
+              <Button type="button" onClick={addMedication} size="sm">
+                <Plus className="mr-2 h-4 w-4" />
+                Add Medication
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {isAddingMedicine && (
+              <div className="rounded-md border bg-muted/40 p-3 space-y-2 text-sm">
+                <p className="font-medium">Quick add medicine</p>
+                <p className="text-xs text-muted-foreground">
+                  This creates a basic catalogue entry (name only with default details). You can refine stock, pricing,
+                  and other fields later from the Pharmacy dashboard.
+                </p>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Input
+                    placeholder="Medication name (e.g. Paracetamol 500mg tablet)"
+                    value={draft.newMedicineName}
+                    onChange={(e) => setDraft({ ...draft, newMedicineName: e.target.value })}
+                    className="sm:max-w-xs"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleQuickAddMedicine}
+                    disabled={isCreatingMedicine || !draft.newMedicineName.trim()}
+                  >
+                    {isCreatingMedicine ? "Adding..." : "Save"}
+                  </Button>
+                </div>
+              </div>
+            )}
+            {draft.medications.map((med, index) => (
+              <div key={index} className="space-y-4 rounded-lg border p-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium">Medication {index + 1}</h3>
+                  {draft.medications.length > 1 && (
+                    <Button type="button" onClick={() => removeMedication(index)} variant="ghost" size="sm">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1">
+                      <Label>Medication Name *</Label>
+                      <FormHelpTip text="Select from the medicine catalogue to keep dispensing and stock tracking aligned." />
+                    </div>
+                    <Select
+                      value={med.medication_name}
+                      onValueChange={(value) => updateMedication(index, "medication_name", value)}
+                      disabled={isLoadingCatalogue}
+                      required
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={
+                          isLoadingCatalogue ? "Loading medicines..." : "Select medicine from catalogue"
+                        } />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {catalogue.map((option) => (
+                          <SelectItem key={option.id} value={option.name}>
+                            {option.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1">
+                      <Label>Dosage *</Label>
+                      <FormHelpTip text="Record the dose strength to be taken each time, for example 500mg or 2 tablets." />
+                    </div>
+                    <Input
+                      value={med.dosage}
+                      onChange={(e) => updateMedication(index, "dosage", e.target.value)}
+                      placeholder="e.g., 500mg"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1">
+                      <Label>Frequency *</Label>
+                      <FormHelpTip text="Record how often the medicine should be taken, for example twice daily." />
+                    </div>
+                    <Input
+                      value={med.frequency}
+                      onChange={(e) => updateMedication(index, "frequency", e.target.value)}
+                      placeholder="e.g., 3 times daily"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1">
+                      <Label>Duration *</Label>
+                      <FormHelpTip text="Specify how long the treatment should continue, such as 5 days or 2 weeks." />
+                    </div>
+                    <Input
+                      value={med.duration}
+                      onChange={(e) => updateMedication(index, "duration", e.target.value)}
+                      placeholder="e.g., 7 days"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1">
+                      <Label>Quantity *</Label>
+                      <FormHelpTip text="Enter the total quantity to dispense for the full treatment course." />
+                    </div>
+                    <Input
+                      type="number"
+                      value={med.quantity}
+                      onChange={(e) => updateMedication(index, "quantity", Number.parseInt(e.target.value) || 1)}
+                      min="1"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2 md:col-span-2">
+                    <Label>Instructions</Label>
+                    <Textarea
+                      value={med.instructions}
+                      onChange={(e) => updateMedication(index, "instructions", e.target.value)}
+                      placeholder="e.g., Take with food"
+                      rows={2}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <div className="flex justify-end gap-4">
+          <Button type="button" variant="outline" asChild>
+            <Link href="/dashboard/prescriptions">Cancel</Link>
+          </Button>
+          <Button type="submit" disabled={isSubmitting || allergyMatches.length > 0}>
+            {isSubmitting ? "Creating..." : "Create Prescription"}
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/components/lab-test-create-form.tsx =====
+
+"use client"
+
+import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { FormDraftStatus } from "@/components/form-draft-status"
+import { FormHelpTip } from "@/components/form-help-tip"
+import { useLocalDraft } from "@/lib/use-local-draft"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Checkbox } from "@/components/ui/checkbox"
+import { createClient } from "@/lib/supabase/client"
+
+interface PatientOption {
+  id: string
+  full_name: string | null
+  patient_number: string | null
+}
+
+interface LabDraft {
+  patient_id: string
+  visit_id: string
+  test_category: string
+  test_type: string
+  priority: string
+  notes: string
+  allow_duplicate: boolean
+}
+
+interface DuplicateLabOrder {
+  id: string
+  test_number: string | null
+  status: string | null
+  created_at: string | null
+}
+
+export function LabTestCreateForm({
+  patients,
+  defaultPatientId,
+  defaultVisitId,
+  action,
+}: {
+  patients: PatientOption[]
+  defaultPatientId?: string
+  defaultVisitId?: string
+  action: (formData: FormData) => void | Promise<void>
+}) {
+  const initialValue: LabDraft = {
+    patient_id: defaultPatientId || "",
+    visit_id: defaultVisitId || "",
+    test_category: "",
+    test_type: "",
+    priority: "routine",
+    notes: "",
+    allow_duplicate: false,
+  }
+
+  const { value, setValue, lastSavedAt, resetDraft } = useLocalDraft("draft:lab:new", initialValue)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [duplicateOrders, setDuplicateOrders] = useState<DuplicateLabOrder[]>([])
+  const [isCheckingDuplicates, setIsCheckingDuplicates] = useState(false)
+  const supabase = useMemo(() => createClient(), [])
+
+  const update = <K extends keyof LabDraft>(field: K, fieldValue: LabDraft[K]) => {
+    setValue({ ...value, [field]: fieldValue })
+  }
+
+  useEffect(() => {
+    if (!value.patient_id || !value.test_type.trim()) {
+      setDuplicateOrders([])
+      return
+    }
+
+    let cancelled = false
+    setIsCheckingDuplicates(true)
+
+    const loadDuplicates = async () => {
+      const since = new Date()
+      since.setDate(since.getDate() - 7)
+
+      const { data, error } = await supabase
+        .from("lab_tests")
+        .select("id, test_number, status, created_at")
+        .eq("patient_id", value.patient_id)
+        .ilike("test_type", value.test_type.trim())
+        .neq("status", "cancelled")
+        .gte("created_at", since.toISOString())
+        .order("created_at", { ascending: false })
+        .limit(5)
+
+      if (cancelled) return
+      if (error) {
+        console.error("[v0] Error checking duplicate lab orders:", error.message || error)
+        setDuplicateOrders([])
+      } else {
+        setDuplicateOrders((data || []) as DuplicateLabOrder[])
+      }
+      setIsCheckingDuplicates(false)
+    }
+
+    void loadDuplicates()
+    return () => {
+      cancelled = true
+    }
+  }, [supabase, value.patient_id, value.test_type])
+
+  return (
+    <>
+      <FormDraftStatus
+        title="Lab order draft"
+        description="Lab order details are saved locally on this device while you complete the request."
+        lastSavedAt={lastSavedAt}
+        onClear={resetDraft}
+      />
+
+      <form
+        action={async (formData) => {
+          setIsSubmitting(true)
+          await action(formData)
+        }}
+      >
+        <input type="hidden" name="patient_id" value={value.patient_id} />
+        <input type="hidden" name="visit_id" value={value.visit_id} />
+        <input type="hidden" name="test_category" value={value.test_category} />
+        <input type="hidden" name="priority" value={value.priority} />
+        <input type="hidden" name="allow_duplicate" value={value.allow_duplicate ? "true" : "false"} />
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Test Details</CardTitle>
+            <CardDescription>Select patient and test information</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="space-y-2">
+              <div className="flex items-center gap-1">
+                <Label>Patient *</Label>
+                <FormHelpTip text="Choose the patient first so the order reaches the correct chart and downstream result queue." />
+              </div>
+              <Select value={value.patient_id} onValueChange={(next) => update("patient_id", next)} required>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select patient" />
+                </SelectTrigger>
+                <SelectContent>
+                  {patients.map((patient) => (
+                    <SelectItem key={patient.id} value={patient.id}>
+                      {patient.full_name} ({patient.patient_number})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <div className="flex items-center gap-1">
+                  <Label>Test Category *</Label>
+                  <FormHelpTip text="Use the broad lab discipline first, then add the exact test name in the next field." />
+                </div>
+                <Select value={value.test_category} onValueChange={(next) => update("test_category", next)} required>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Hematology">Hematology</SelectItem>
+                    <SelectItem value="Clinical Chemistry">Clinical Chemistry</SelectItem>
+                    <SelectItem value="Microbiology">Microbiology</SelectItem>
+                    <SelectItem value="Immunology">Immunology</SelectItem>
+                    <SelectItem value="Urinalysis">Urinalysis</SelectItem>
+                    <SelectItem value="Parasitology">Parasitology</SelectItem>
+                    <SelectItem value="Blood Bank">Blood Bank</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-1">
+                  <Label htmlFor="test_type">Test Type *</Label>
+                  <FormHelpTip text="Enter the exact requested test, for example Complete Blood Count or Malaria RDT." />
+                </div>
+                <Input
+                  id="test_type"
+                  name="test_type"
+                  placeholder="e.g., Complete Blood Count"
+                  value={value.test_type}
+                  onChange={(e) => update("test_type", e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Priority *</Label>
+                <Select value={value.priority} onValueChange={(next) => update("priority", next)} required>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select priority" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="routine">Routine</SelectItem>
+                    <SelectItem value="urgent">Urgent</SelectItem>
+                    <SelectItem value="stat">STAT</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-1">
+                <Label htmlFor="notes">Clinical Notes</Label>
+                <FormHelpTip text="Include the clinical indication or relevant context so the lab team understands why the test is being ordered." />
+              </div>
+              <Textarea
+                id="notes"
+                name="notes"
+                placeholder="Clinical indication or additional information..."
+                rows={3}
+                value={value.notes}
+                onChange={(e) => update("notes", e.target.value)}
+              />
+            </div>
+
+            {value.patient_id && value.test_type.trim() ? (
+              duplicateOrders.length > 0 ? (
+                <Alert variant="destructive">
+                  <AlertDescription className="space-y-2">
+                    <p>
+                      A similar lab order for this patient already exists within the last 7 days. Review the existing
+                      orders before creating another one.
+                    </p>
+                    <ul className="list-disc pl-5 text-xs">
+                      {duplicateOrders.map((order) => (
+                        <li key={order.id}>
+                          {order.test_number || order.id} · {order.status || "pending"} ·{" "}
+                          {order.created_at ? new Date(order.created_at).toLocaleString() : "date unavailable"}
+                        </li>
+                      ))}
+                    </ul>
+                    <label className="flex items-start gap-2 text-xs font-medium">
+                      <Checkbox
+                        checked={value.allow_duplicate}
+                        onCheckedChange={(checked) => update("allow_duplicate", Boolean(checked))}
+                      />
+                      <span>I have reviewed the existing orders and need to place a duplicate test anyway.</span>
+                    </label>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert>
+                  <AlertDescription>
+                    {isCheckingDuplicates
+                      ? "Checking for recent duplicate lab orders..."
+                      : "No recent duplicate order was detected for this patient and test type."}
+                  </AlertDescription>
+                </Alert>
+              )
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <div className="mt-6 flex justify-end gap-4">
+          <Button type="button" variant="outline" asChild>
+            <Link href="/dashboard/lab">Cancel</Link>
+          </Button>
+          <Button type="submit" disabled={isSubmitting || (duplicateOrders.length > 0 && !value.allow_duplicate)}>
+            {isSubmitting ? "Ordering..." : "Order Test"}
+          </Button>
+        </div>
+      </form>
+    </>
+  )
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/app/dashboard/lab/new/page.tsx =====
+
+import { createServerClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import Link from "next/link"
+import { ArrowLeft } from "lucide-react"
+import { LabTestCreateForm } from "@/components/lab-test-create-form"
+import { ensureVisitAutoChargeLine } from "@/lib/pricing-engine"
+
+export default async function NewLabTestPage(props: { searchParams: Promise<{ patient_id?: string; visit_id?: string }> }) {
+  const supabase = await createServerClient()
+
+  const { patient_id: searchPatientId, visit_id: searchVisitId } = await props.searchParams
+
+  // Fetch patients
+  const { data: patients } = await supabase
+    .from("patients")
+    .select("id, full_name, patient_number")
+    .eq("status", "active")
+    .order("full_name")
+
+  async function createLabTest(formData: FormData) {
+    "use server"
+
+    const supabase = await createServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      redirect("/auth/login")
+    }
+
+    const testData = {
+      patient_id: formData.get("patient_id") as string,
+      visit_id: ((formData.get("visit_id") as string | null) || "").trim() || null,
+      doctor_id: user.id,
+      test_type: formData.get("test_type") as string,
+      test_category: formData.get("test_category") as string,
+      priority: formData.get("priority") as string,
+      notes: formData.get("notes") as string,
+      status: "pending",
+      created_by: user.id,
+    }
+    const allowDuplicate = ((formData.get("allow_duplicate") as string | null) || "").trim() === "true"
+
+    const duplicateWindowStart = new Date()
+    duplicateWindowStart.setDate(duplicateWindowStart.getDate() - 7)
+
+    const { data: recentDuplicate } = await supabase
+      .from("lab_tests")
+      .select("id, test_number, created_at, status")
+      .eq("patient_id", testData.patient_id)
+      .ilike("test_type", testData.test_type.trim())
+      .neq("status", "cancelled")
+      .gte("created_at", duplicateWindowStart.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (recentDuplicate && !allowDuplicate) {
+      throw new Error("A similar lab test already exists for this patient within the last 7 days. Review it before ordering another.")
+    }
+
+    const { data, error } = await supabase.from("lab_tests").insert(testData).select().single()
+
+    if (error || !data) {
+      console.error("[v0] Error creating lab test:", error)
+      throw error || new Error("Failed to create lab test")
+    }
+
+    try {
+      await supabase.from("lab_audit_logs").insert({
+        lab_test_id: data.id,
+        actor_user_id: user.id,
+        action: "created",
+        old_status: null,
+        new_status: "pending",
+        notes: testData.notes || null,
+      })
+    } catch (auditError) {
+      console.error("[v0] Error logging lab test creation:", auditError)
+    }
+
+    if (testData.visit_id) {
+      await ensureVisitAutoChargeLine(supabase, {
+        visitId: testData.visit_id,
+        actorUserId: user.id,
+        serviceType: "lab",
+        description: `Lab test: ${testData.test_type}`,
+        quantity: 1,
+        mode: "replace",
+      })
+    }
+
+    redirect(`/dashboard/lab/${data.id}`)
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/lab">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Lab Tests
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-balance text-3xl font-bold tracking-tight">Order New Lab Test</h1>
+            <p className="text-pretty text-muted-foreground">Create a new laboratory test order</p>
+          </div>
+        </div>
+      </div>
+
+      <LabTestCreateForm
+        patients={patients || []}
+        defaultPatientId={searchPatientId || ""}
+        defaultVisitId={searchVisitId || ""}
+        action={createLabTest}
+      />
+    </div>
+  )
+}
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/020_audit_logs.sql =====
+
+-- 020_audit_logs.sql
+-- Central audit log for key actions across the system.
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  occurred_at TIMESTAMP DEFAULT now(),
+  user_id UUID,
+  role TEXT,
+  facility_id UUID,
+  action TEXT NOT NULL, -- e.g. prescription.dispense, lab.result_entered
+  resource_type TEXT, -- e.g. prescription, lab_test, admission, invoice
+  resource_id UUID,
+  metadata JSONB,
+  ip_address TEXT,
+  user_agent TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_occurred_at ON audit_logs(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
+
+ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can view audit logs" ON audit_logs;
+DROP POLICY IF EXISTS "System can insert audit logs" ON audit_logs;
+
+CREATE POLICY "Admins can view audit logs" ON audit_logs
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = auth.uid()
+      AND lower(coalesce(p.role, '')) IN ('admin', 'facility_admin')
+    )
+  );
+
+CREATE POLICY "System can insert audit logs" ON audit_logs
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+COMMIT;
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/021_sync_queue.sql =====
+
+-- 021_sync_queue.sql
+-- Simple server-side queue to accept offline/PWA operations for later processing.
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS sync_queue (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID,
+  operation_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  status TEXT DEFAULT 'pending', -- pending, processing, completed, failed
+  created_at TIMESTAMP DEFAULT now(),
+  processed_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_queue_status_created_at ON sync_queue(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_queue_user_id ON sync_queue(user_id);
+
+ALTER TABLE sync_queue ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can enqueue sync operations" ON sync_queue;
+DROP POLICY IF EXISTS "Admins can view sync queue" ON sync_queue;
+
+CREATE POLICY "Users can enqueue sync operations" ON sync_queue
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL AND user_id = auth.uid());
+
+CREATE POLICY "Admins can view sync queue" ON sync_queue
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+COMMIT;
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/023_patient_insurance_and_company_employees.sql =====
+
+-- 023_patient_insurance_and_company_employees.sql
+-- Extend patients with insurance fields and add company_employees / employee_dependents tables.
+
+BEGIN;
+
+-- Extend patients with insurance-related fields
+ALTER TABLE patients
+  ADD COLUMN IF NOT EXISTS insurance_type TEXT CHECK (insurance_type IN ('employee', 'dependent')),
+  ADD COLUMN IF NOT EXISTS insurance_card_number TEXT,
+  ADD COLUMN IF NOT EXISTS insurance_expiry_date DATE,
+  ADD COLUMN IF NOT EXISTS insurance_card_serial TEXT,
+  ADD COLUMN IF NOT EXISTS insurance_card_photo_url TEXT,
+  ADD COLUMN IF NOT EXISTS insurance_mobile TEXT,
+  ADD COLUMN IF NOT EXISTS employee_id UUID;
+
+-- Ensure company_id exists (from previous migration) but don't error if it already does
+ALTER TABLE patients
+  ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id);
+
+-- Unique insurance card number per company (only when both are present)
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_company_insurance_card
+  ON patients (company_id, insurance_card_number)
+  WHERE company_id IS NOT NULL AND insurance_card_number IS NOT NULL;
+
+-- Company employees table
+CREATE TABLE IF NOT EXISTS company_employees (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  full_name TEXT NOT NULL,
+  phone TEXT,
+  insurance_card_number TEXT,
+  insurance_card_serial TEXT,
+  insurance_expiry_date DATE NOT NULL,
+  card_photo_url TEXT,
+  status TEXT NOT NULL DEFAULT 'active', -- active, expired, missing
+  created_at TIMESTAMP DEFAULT now(),
+  updated_at TIMESTAMP DEFAULT now()
+);
+
+-- Dependents linked to employees
+CREATE TABLE IF NOT EXISTS employee_dependents (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  employee_id UUID NOT NULL REFERENCES company_employees(id) ON DELETE CASCADE,
+  patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  full_name TEXT NOT NULL,
+  relationship TEXT,
+  insurance_card_number TEXT,
+  insurance_card_serial TEXT,
+  insurance_expiry_date DATE NOT NULL,
+  card_photo_url TEXT,
+  status TEXT NOT NULL DEFAULT 'active', -- active, expired, missing
+  created_at TIMESTAMP DEFAULT now(),
+  updated_at TIMESTAMP DEFAULT now()
+);
+
+-- Basic indexes
+CREATE INDEX IF NOT EXISTS idx_company_employees_company_id ON company_employees(company_id);
+CREATE INDEX IF NOT EXISTS idx_company_employees_status ON company_employees(status);
+CREATE INDEX IF NOT EXISTS idx_employee_dependents_employee_id ON employee_dependents(employee_id);
+CREATE INDEX IF NOT EXISTS idx_employee_dependents_status ON employee_dependents(status);
+
+ALTER TABLE company_employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_dependents ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view company employees" ON company_employees;
+DROP POLICY IF EXISTS "Authenticated staff can manage company employees" ON company_employees;
+DROP POLICY IF EXISTS "Authenticated staff can view employee dependents" ON employee_dependents;
+DROP POLICY IF EXISTS "Authenticated staff can manage employee dependents" ON employee_dependents;
+
+CREATE POLICY "Authenticated staff can view company employees" ON company_employees
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can manage company employees" ON company_employees
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can view employee dependents" ON employee_dependents
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can manage employee dependents" ON employee_dependents
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+COMMIT;
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/025_admin_audit_logs.sql =====
+
+-- Audit log for admin changes to staff roles and account status
+create table if not exists public.admin_audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  actor_user_id uuid not null references auth.users (id) on delete cascade,
+  target_user_id uuid not null references auth.users (id) on delete cascade,
+  action text not null,
+  old_role text,
+  new_role text,
+  old_status text,
+  new_status text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.admin_audit_logs enable row level security;
+
+drop policy if exists "Admins can view admin audit logs" on public.admin_audit_logs;
+drop policy if exists "Admins can insert admin audit logs" on public.admin_audit_logs;
+
+create policy "Admins can view admin audit logs" on public.admin_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Admins can insert admin audit logs" on public.admin_audit_logs
+  for insert with check (auth.uid() is not null);
+
+comment on table public.admin_audit_logs is 'Audit log for admin actions on staff accounts (role and status changes).';
+comment on column public.admin_audit_logs.actor_user_id is 'Admin user who performed the action.';
+comment on column public.admin_audit_logs.target_user_id is 'Staff account that was modified.';
+comment on column public.admin_audit_logs.action is 'Type of action, e.g. role_change or status_change.';
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/026_password_reset_events.sql =====
+
+-- Log password reset requests for audit/monitoring
+create table if not exists public.password_reset_events (
+  id uuid primary key default gen_random_uuid(),
+  email text not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.password_reset_events enable row level security;
+
+drop policy if exists "No direct access to password reset events" on public.password_reset_events;
+
+create policy "No direct access to password reset events" on public.password_reset_events
+  for all using (false) with check (false);
+
+comment on table public.password_reset_events is 'Records when a password reset email was requested for an account.';
+comment on column public.password_reset_events.email is 'Email address the reset was requested for.';
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/028_appointment_audit_logs.sql =====
+
+-- Audit log for appointment lifecycle events (create, status changes, cancellation)
+create table if not exists public.appointment_audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  appointment_id uuid not null references public.appointments (id) on delete cascade,
+  actor_user_id uuid not null references auth.users (id) on delete cascade,
+  patient_id uuid references public.patients (id) on delete set null,
+  doctor_id uuid references public.profiles (id) on delete set null,
+  action text not null,
+  old_status text,
+  new_status text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.appointment_audit_logs enable row level security;
+
+drop policy if exists "Authenticated staff can view appointment audit logs" on public.appointment_audit_logs;
+drop policy if exists "Authenticated staff can insert appointment audit logs" on public.appointment_audit_logs;
+
+create policy "Authenticated staff can view appointment audit logs" on public.appointment_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Authenticated staff can insert appointment audit logs" on public.appointment_audit_logs
+  for insert with check (auth.uid() is not null);
+
+comment on table public.appointment_audit_logs is 'Audit log for appointment lifecycle events (created, status changes, cancellation).';
+comment on column public.appointment_audit_logs.actor_user_id is 'User who performed the appointment action.';
+comment on column public.appointment_audit_logs.action is 'Action type, e.g. created, status_updated, cancelled.';
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/029_triage_audit_logs.sql =====
+
+-- 029_triage_audit_logs.sql
+-- Logs lifecycle events for emergency triage assessments.
+
+create table if not exists public.triage_audit_logs (
+  id uuid primary key default uuid_generate_v4(),
+  triage_id uuid not null references public.triage_assessments(id) on delete cascade,
+  actor_user_id uuid not null references auth.users(id) on delete restrict,
+  action text not null check (action in ('created', 'status_updated', 'notes_updated')),
+  old_status text null,
+  new_status text null,
+  notes text null,
+  created_at timestamptz not null default timezone('utc'::text, now())
+);
+
+alter table public.triage_audit_logs enable row level security;
+
+drop policy if exists "Authenticated staff can view triage audit logs" on public.triage_audit_logs;
+drop policy if exists "Authenticated staff can insert triage audit logs" on public.triage_audit_logs;
+
+create policy "Authenticated staff can view triage audit logs" on public.triage_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Authenticated staff can insert triage audit logs" on public.triage_audit_logs
+  for insert with check (auth.uid() is not null);
+
+create index if not exists triage_audit_logs_triage_id_idx on public.triage_audit_logs(triage_id);
+create index if not exists triage_audit_logs_actor_user_id_idx on public.triage_audit_logs(actor_user_id);
+create index if not exists triage_audit_logs_created_at_idx on public.triage_audit_logs(created_at desc);
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/030_billing_audit_logs.sql =====
+
+-- 030_billing_audit_logs.sql
+-- Logs lifecycle events for invoices and billing actions.
+
+create table if not exists public.billing_audit_logs (
+  id uuid primary key default uuid_generate_v4(),
+  invoice_id uuid not null references public.invoices(id) on delete cascade,
+  actor_user_id uuid not null references auth.users(id) on delete restrict,
+  action text not null check (action in ('created', 'updated', 'payment_recorded', 'status_changed')),
+  old_status text null,
+  new_status text null,
+  amount numeric null,
+  metadata jsonb null,
+  created_at timestamptz not null default timezone('utc'::text, now())
+);
+
+alter table public.billing_audit_logs enable row level security;
+
+drop policy if exists "Authenticated staff can view billing audit logs" on public.billing_audit_logs;
+drop policy if exists "Authenticated staff can insert billing audit logs" on public.billing_audit_logs;
+
+create policy "Authenticated staff can view billing audit logs" on public.billing_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Authenticated staff can insert billing audit logs" on public.billing_audit_logs
+  for insert with check (auth.uid() is not null);
+
+create index if not exists billing_audit_logs_invoice_id_idx on public.billing_audit_logs(invoice_id);
+create index if not exists billing_audit_logs_actor_user_id_idx on public.billing_audit_logs(actor_user_id);
+create index if not exists billing_audit_logs_created_at_idx on public.billing_audit_logs(created_at desc);
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/031_lab_audit_logs.sql =====
+
+-- 031_lab_audit_logs.sql
+-- Logs lifecycle events for laboratory tests.
+
+create table if not exists public.lab_audit_logs (
+  id uuid primary key default uuid_generate_v4(),
+  lab_test_id uuid not null references public.lab_tests(id) on delete cascade,
+  actor_user_id uuid not null references auth.users(id) on delete restrict,
+  action text not null check (action in ('created', 'status_updated', 'sample_collected', 'sample_received', 'result_entered', 'cancelled')),
+  old_status text null,
+  new_status text null,
+  notes text null,
+  metadata jsonb null,
+  created_at timestamptz not null default timezone('utc'::text, now())
+);
+
+alter table public.lab_audit_logs enable row level security;
+
+drop policy if exists "Authenticated staff can view lab audit logs" on public.lab_audit_logs;
+drop policy if exists "Authenticated staff can insert lab audit logs" on public.lab_audit_logs;
+
+create policy "Authenticated staff can view lab audit logs" on public.lab_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Authenticated staff can insert lab audit logs" on public.lab_audit_logs
+  for insert with check (auth.uid() is not null);
+
+create index if not exists lab_audit_logs_lab_test_id_idx on public.lab_audit_logs(lab_test_id);
+create index if not exists lab_audit_logs_actor_user_id_idx on public.lab_audit_logs(actor_user_id);
+create index if not exists lab_audit_logs_created_at_idx on public.lab_audit_logs(created_at desc);
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/044_facilities_and_visit_facility.sql =====
+
+-- 044_facilities_and_visit_facility.sql
+-- Basic facilities/clinics dimension and link from visits.
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS facilities (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name TEXT NOT NULL,
+  code TEXT UNIQUE,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT now(),
+  updated_at TIMESTAMP DEFAULT now()
+);
+
+ALTER TABLE visits
+  ADD COLUMN IF NOT EXISTS facility_id UUID REFERENCES facilities(id);
+
+CREATE INDEX IF NOT EXISTS idx_visits_facility_id ON visits(facility_id);
+
+ALTER TABLE facilities ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view facilities" ON facilities;
+DROP POLICY IF EXISTS "Admins can manage facilities" ON facilities;
+
+CREATE POLICY "Authenticated staff can view facilities" ON facilities
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Admins can manage facilities" ON facilities
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+COMMIT;
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/057_add_insurance_billing_batches.sql =====
+
+CREATE TABLE IF NOT EXISTS public.insurance_billing_batches (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_number text NOT NULL UNIQUE,
+  company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE RESTRICT,
+  from_date date NOT NULL,
+  to_date date NOT NULL,
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'paid')),
+  subtotal numeric NOT NULL DEFAULT 0,
+  total_amount numeric NOT NULL DEFAULT 0,
+  paid_amount numeric NOT NULL DEFAULT 0,
+  created_by uuid NULL,
+  submitted_at timestamptz NULL,
+  paid_at timestamptz NULL,
+  notes text NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.insurance_billing_batch_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id uuid NOT NULL REFERENCES public.insurance_billing_batches(id) ON DELETE CASCADE,
+  invoice_id uuid NOT NULL REFERENCES public.invoices(id) ON DELETE RESTRICT,
+  patient_id uuid NULL REFERENCES public.patients(id) ON DELETE SET NULL,
+  visit_id uuid NULL REFERENCES public.visits(id) ON DELETE SET NULL,
+  amount numeric NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (invoice_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_insurance_billing_batches_company_id
+  ON public.insurance_billing_batches(company_id);
+
+CREATE INDEX IF NOT EXISTS idx_insurance_billing_batches_status
+  ON public.insurance_billing_batches(status);
+
+CREATE INDEX IF NOT EXISTS idx_insurance_billing_batch_items_batch_id
+  ON public.insurance_billing_batch_items(batch_id);
+
+ALTER TABLE public.insurance_billing_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.insurance_billing_batch_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view insurance billing batches" ON public.insurance_billing_batches;
+DROP POLICY IF EXISTS "Billing staff can manage insurance billing batches" ON public.insurance_billing_batches;
+DROP POLICY IF EXISTS "Authenticated staff can view insurance billing batch items" ON public.insurance_billing_batch_items;
+DROP POLICY IF EXISTS "Billing staff can manage insurance billing batch items" ON public.insurance_billing_batch_items;
+
+CREATE POLICY "Authenticated staff can view insurance billing batches" ON public.insurance_billing_batches
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Billing staff can manage insurance billing batches" ON public.insurance_billing_batches
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can view insurance billing batch items" ON public.insurance_billing_batch_items
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Billing staff can manage insurance billing batch items" ON public.insurance_billing_batch_items
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE OR REPLACE FUNCTION public.set_updated_at_insurance_billing_batches()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $fn$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$fn$;
+
+DROP TRIGGER IF EXISTS trg_insurance_billing_batches_updated_at
+  ON public.insurance_billing_batches;
+
+CREATE TRIGGER trg_insurance_billing_batches_updated_at
+BEFORE UPDATE ON public.insurance_billing_batches
+FOR EACH ROW
+EXECUTE FUNCTION public.set_updated_at_insurance_billing_batches();
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/060_add_tariffs.sql =====
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS public.tariffs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  service_type text NOT NULL CHECK (service_type IN ('inpatient', 'surgery', 'nursing', 'lab', 'radiology')),
+  facility_id uuid NOT NULL REFERENCES public.facilities(id) ON DELETE CASCADE,
+  insurer_id uuid NULL REFERENCES public.companies(id) ON DELETE SET NULL,
+  base_price numeric(12,2) NOT NULL CHECK (base_price >= 0),
+  unit_type text NOT NULL CHECK (unit_type IN ('per_day', 'per_hour', 'per_service')),
+  currency text NOT NULL DEFAULT 'USD',
+  created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tariffs_service_facility_insurer_unique
+  ON public.tariffs(service_type, facility_id, COALESCE(insurer_id, '00000000-0000-0000-0000-000000000000'::uuid));
+
+CREATE INDEX IF NOT EXISTS idx_tariffs_facility_service
+  ON public.tariffs(facility_id, service_type);
+
+CREATE INDEX IF NOT EXISTS idx_tariffs_insurer
+  ON public.tariffs(insurer_id);
+
+ALTER TABLE public.tariffs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view tariffs" ON public.tariffs;
+DROP POLICY IF EXISTS "Billing staff can manage tariffs" ON public.tariffs;
+
+CREATE POLICY "Authenticated staff can view tariffs" ON public.tariffs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Billing staff can manage tariffs" ON public.tariffs
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+COMMIT;
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/061_add_insurance_payments.sql =====
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS public.insurance_payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id uuid NOT NULL REFERENCES public.insurance_billing_batches(id) ON DELETE CASCADE,
+  expected_amount numeric(12,2) NOT NULL DEFAULT 0,
+  paid_amount numeric(12,2) NOT NULL DEFAULT 0,
+  variance numeric(12,2) NOT NULL DEFAULT 0,
+  status text NOT NULL CHECK (status IN ('matched', 'underpaid', 'overpaid', 'denied', 'partial')),
+  denial_reason_codes text[] NOT NULL DEFAULT '{}',
+  notes text,
+  created_by uuid NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+CREATE INDEX IF NOT EXISTS idx_insurance_payments_batch_id
+  ON public.insurance_payments(batch_id, created_at DESC);
+
+ALTER TABLE public.insurance_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view insurance payments" ON public.insurance_payments;
+DROP POLICY IF EXISTS "Billing staff can manage insurance payments" ON public.insurance_payments;
+
+CREATE POLICY "Authenticated staff can view insurance payments" ON public.insurance_payments
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Billing staff can manage insurance payments" ON public.insurance_payments
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+COMMIT;
+
+
+===== FILE: /Users/kalbertjack/Desktop/HMS/scripts/063_security_hardening_rls.sql =====
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION public.current_app_role()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT lower(
+    coalesce(
+      (SELECT p.role FROM public.profiles p WHERE p.id = auth.uid() LIMIT 1),
+      auth.jwt() ->> 'role',
+      auth.jwt() -> 'app_metadata' ->> 'role',
+      auth.jwt() -> 'user_metadata' ->> 'role',
+      ''
+    )
+  )
+$$;
+
+CREATE OR REPLACE FUNCTION public.has_any_role(allowed_roles text[])
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT auth.uid() IS NOT NULL
+    AND public.current_app_role() = ANY (
+      ARRAY(SELECT lower(value) FROM unnest(allowed_roles) AS value)
+    )
+$$;
+
+ALTER TABLE public.company_employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employee_dependents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.facilities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.insurance_billing_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.insurance_billing_batch_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admin_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.password_reset_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.appointment_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.triage_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.billing_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.lab_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.pharmacy_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sync_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tariffs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.insurance_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view company employees" ON public.company_employees;
+DROP POLICY IF EXISTS "Authenticated staff can manage company employees" ON public.company_employees;
+CREATE POLICY "Authenticated staff can view company employees" ON public.company_employees
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated staff can manage company employees" ON public.company_employees
+  FOR ALL USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Authenticated staff can view employee dependents" ON public.employee_dependents;
+DROP POLICY IF EXISTS "Authenticated staff can manage employee dependents" ON public.employee_dependents;
+CREATE POLICY "Authenticated staff can view employee dependents" ON public.employee_dependents
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated staff can manage employee dependents" ON public.employee_dependents
+  FOR ALL USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Authenticated staff can view facilities" ON public.facilities;
+DROP POLICY IF EXISTS "Admins can manage facilities" ON public.facilities;
+CREATE POLICY "Authenticated staff can view facilities" ON public.facilities
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Admins can manage facilities" ON public.facilities
+  FOR ALL USING (public.has_any_role(ARRAY['admin', 'facility_admin']))
+  WITH CHECK (public.has_any_role(ARRAY['admin', 'facility_admin']));
+
+DROP POLICY IF EXISTS "Authenticated staff can view insurance billing batches" ON public.insurance_billing_batches;
+DROP POLICY IF EXISTS "Billing staff can manage insurance billing batches" ON public.insurance_billing_batches;
+CREATE POLICY "Authenticated staff can view insurance billing batches" ON public.insurance_billing_batches
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Billing staff can manage insurance billing batches" ON public.insurance_billing_batches
+  FOR ALL USING (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']))
+  WITH CHECK (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']));
+
+DROP POLICY IF EXISTS "Authenticated staff can view insurance billing batch items" ON public.insurance_billing_batch_items;
+DROP POLICY IF EXISTS "Billing staff can manage insurance billing batch items" ON public.insurance_billing_batch_items;
+CREATE POLICY "Authenticated staff can view insurance billing batch items" ON public.insurance_billing_batch_items
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Billing staff can manage insurance billing batch items" ON public.insurance_billing_batch_items
+  FOR ALL USING (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']))
+  WITH CHECK (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']));
+
+DROP POLICY IF EXISTS "Admins can view admin audit logs" ON public.admin_audit_logs;
+DROP POLICY IF EXISTS "Admins can insert admin audit logs" ON public.admin_audit_logs;
+CREATE POLICY "Admins can view admin audit logs" ON public.admin_audit_logs
+  FOR SELECT USING (public.has_any_role(ARRAY['admin', 'facility_admin']));
+CREATE POLICY "Admins can insert admin audit logs" ON public.admin_audit_logs
+  FOR INSERT WITH CHECK (public.has_any_role(ARRAY['admin', 'facility_admin']));
+
+DROP POLICY IF EXISTS "No direct access to password reset events" ON public.password_reset_events;
+CREATE POLICY "No direct access to password reset events" ON public.password_reset_events
+  FOR ALL USING (false) WITH CHECK (false);
+
+DROP POLICY IF EXISTS "Authenticated staff can view appointment audit logs" ON public.appointment_audit_logs;
+DROP POLICY IF EXISTS "Authenticated staff can insert appointment audit logs" ON public.appointment_audit_logs;
+CREATE POLICY "Authenticated staff can view appointment audit logs" ON public.appointment_audit_logs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated staff can insert appointment audit logs" ON public.appointment_audit_logs
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Authenticated staff can view triage audit logs" ON public.triage_audit_logs;
+DROP POLICY IF EXISTS "Authenticated staff can insert triage audit logs" ON public.triage_audit_logs;
+CREATE POLICY "Authenticated staff can view triage audit logs" ON public.triage_audit_logs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated staff can insert triage audit logs" ON public.triage_audit_logs
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Authenticated staff can view billing audit logs" ON public.billing_audit_logs;
+DROP POLICY IF EXISTS "Authenticated staff can insert billing audit logs" ON public.billing_audit_logs;
+CREATE POLICY "Authenticated staff can view billing audit logs" ON public.billing_audit_logs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated staff can insert billing audit logs" ON public.billing_audit_logs
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Authenticated staff can view lab audit logs" ON public.lab_audit_logs;
+DROP POLICY IF EXISTS "Authenticated staff can insert lab audit logs" ON public.lab_audit_logs;
+CREATE POLICY "Authenticated staff can view lab audit logs" ON public.lab_audit_logs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated staff can insert lab audit logs" ON public.lab_audit_logs
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Authenticated staff can view pharmacy audit logs" ON public.pharmacy_audit_logs;
+DROP POLICY IF EXISTS "Authenticated staff can insert pharmacy audit logs" ON public.pharmacy_audit_logs;
+CREATE POLICY "Authenticated staff can view pharmacy audit logs" ON public.pharmacy_audit_logs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated staff can insert pharmacy audit logs" ON public.pharmacy_audit_logs
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Admins can view audit logs" ON public.audit_logs;
+DROP POLICY IF EXISTS "System can insert audit logs" ON public.audit_logs;
+CREATE POLICY "Admins can view audit logs" ON public.audit_logs
+  FOR SELECT USING (public.has_any_role(ARRAY['admin', 'facility_admin']));
+CREATE POLICY "System can insert audit logs" ON public.audit_logs
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+DROP POLICY IF EXISTS "Users can enqueue sync operations" ON public.sync_queue;
+DROP POLICY IF EXISTS "Admins can view sync queue" ON public.sync_queue;
+CREATE POLICY "Users can enqueue sync operations" ON public.sync_queue
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL AND user_id = auth.uid());
+CREATE POLICY "Admins can view sync queue" ON public.sync_queue
+  FOR SELECT USING (public.has_any_role(ARRAY['admin', 'facility_admin']));
+
+DROP POLICY IF EXISTS "Anyone can view tariffs" ON public.tariffs;
+DROP POLICY IF EXISTS "Staff can manage tariffs" ON public.tariffs;
+DROP POLICY IF EXISTS "Authenticated staff can view tariffs" ON public.tariffs;
+DROP POLICY IF EXISTS "Billing staff can manage tariffs" ON public.tariffs;
+CREATE POLICY "Authenticated staff can view tariffs" ON public.tariffs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Billing staff can manage tariffs" ON public.tariffs
+  FOR ALL USING (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']))
+  WITH CHECK (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']));
+
+DROP POLICY IF EXISTS "Staff can view insurance payments" ON public.insurance_payments;
+DROP POLICY IF EXISTS "Billing staff can manage insurance payments" ON public.insurance_payments;
+CREATE POLICY "Authenticated staff can view insurance payments" ON public.insurance_payments
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Billing staff can manage insurance payments" ON public.insurance_payments
+  FOR ALL USING (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']))
+  WITH CHECK (public.has_any_role(ARRAY['admin', 'facility_admin', 'cashier']));
+
+COMMIT;
+

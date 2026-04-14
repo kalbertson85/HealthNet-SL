@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button"
 import { ArrowLeft } from "lucide-react"
 import { PatientRegistrationProgress } from "@/components/patient-registration-progress"
 import { PatientRegistrationForm } from "@/components/patient-registration-form"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { logAuditEvent } from "@/lib/audit"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 export default async function NewPatientPage({
   searchParams,
@@ -12,6 +15,7 @@ export default async function NewPatientPage({
   searchParams: Promise<{ error?: string }>
 }) {
   const supabaseForPage = await createServerClient()
+  const settings = await getGlobalSettings()
   const { error: errorParam } = await searchParams
   const { data: companies } = await supabaseForPage
     .from("companies")
@@ -23,19 +27,14 @@ export default async function NewPatientPage({
       ? "Insurance type requires company, insurance card number, and expiry date."
       : errorParam === "missing_required"
         ? "Please complete all required patient fields before submitting."
+        : errorParam === "create_failed"
+          ? "Unable to register patient. No partial records were saved."
         : null
 
   async function createPatient(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
+    const { supabase, user } = await requireServerActionPermission("patients.create")
 
     const fullName = (formData.get("full_name") as string) || ""
     const phoneNumber = (formData.get("phone_number") as string) || ""
@@ -107,14 +106,14 @@ export default async function NewPatientPage({
       insurance_card_serial: insuranceCardSerial,
       insurance_mobile: insuranceMobile,
       status: "active",
-      created_by: user.id,
+      created_by: user.id as string,
     }
 
     const { data, error } = await supabase.from("patients").insert(patientData).select().single()
 
     if (error) {
       console.error("[v0] Error creating patient:", error.message || error)
-      throw error
+      redirect("/dashboard/patients/new?error=create_failed")
     }
 
     type InsertedPatient = {
@@ -131,13 +130,49 @@ export default async function NewPatientPage({
       insurance_expiry_date?: string | null
     }
 
+    const rollbackPatientRegistration = async () => {
+      await supabase.from("visits").delete().eq("patient_id", insertedPatient.id)
+      await supabase.from("employee_dependents").delete().eq("patient_id", insertedPatient.id)
+      await supabase.from("company_employees").delete().eq("patient_id", insertedPatient.id)
+      await supabase.from("patients").delete().eq("id", insertedPatient.id)
+    }
+
+    const { error: adminAuditError } = await supabase.from("admin_audit_logs").insert({
+      actor_user_id: user.id,
+      target_user_id: user.id,
+      action: "patient_create",
+      notes: `Created patient ${insertedPatient.id}`,
+    })
+    if (adminAuditError) {
+      await rollbackPatientRegistration()
+      redirect("/dashboard/patients/new?error=create_failed")
+    }
+
+    await logAuditEvent({
+      action: "patient.created",
+      entityType: "patient",
+      entityId: insertedPatient.id,
+      user,
+      metadata: {
+        patient_number: generatedPatientNumber,
+        insurance_type: insuranceType,
+      },
+      after: {
+        full_name: fullName,
+        phone_number: phoneNumber,
+        gender,
+        company_id: companyId,
+        insurance_type: insuranceType,
+      },
+    })
+
     // Auto-sync company employee record when patient is an insured employee
     if (
       (insertedPatient.insurance_type || insuranceType) === "employee" &&
       insertedPatient.company_id &&
       (insertedPatient.insurance_card_number || insuranceCardNumber)
     ) {
-      await supabase
+      const { error: employeeUpsertError } = await supabase
         .from("company_employees")
         .upsert(
           {
@@ -151,6 +186,10 @@ export default async function NewPatientPage({
           },
           { onConflict: "patient_id" },
         )
+      if (employeeUpsertError) {
+        await rollbackPatientRegistration()
+        redirect("/dashboard/patients/new?error=create_failed")
+      }
     }
 
     // Auto-sync dependent into employee_dependents when insurance_type=dependent and an employee insurance ID is provided
@@ -167,7 +206,7 @@ export default async function NewPatientPage({
         .maybeSingle()
 
       if (matchingEmployee?.id) {
-        await supabase
+        const { error: dependentUpsertError } = await supabase
           .from("employee_dependents")
           .upsert(
             {
@@ -181,45 +220,48 @@ export default async function NewPatientPage({
             },
             { onConflict: "patient_id" },
           )
+        if (dependentUpsertError) {
+          await rollbackPatientRegistration()
+          redirect("/dashboard/patients/new?error=create_failed")
+        }
       }
     }
 
     // Automatically start a visit for this patient so they appear in the doctor queue
-    try {
-      const { data: fullPatient } = await supabase
-        .from("patients")
-        .select("id, company_id, free_health_category")
-        .eq("id", insertedPatient.id)
-        .maybeSingle()
+    const { data: fullPatient, error: fullPatientError } = await supabase
+      .from("patients")
+      .select("id, company_id, free_health_category")
+      .eq("id", insertedPatient.id)
+      .maybeSingle()
+    if (fullPatientError || !fullPatient?.id) {
+      await rollbackPatientRegistration()
+      redirect("/dashboard/patients/new?error=create_failed")
+    }
 
-      const fhcAwarePatient = (fullPatient || null) as
-        | { company_id?: string | null; free_health_category?: string | null; id?: string | null }
-        | null
+    const fhcAwarePatient = (fullPatient || null) as
+      | { company_id?: string | null; free_health_category?: string | null; id?: string | null }
+      | null
 
-      const companyId = (fhcAwarePatient?.company_id as string | null) ?? null
-      const fhcCategory = (fhcAwarePatient?.free_health_category as string | null) ?? "none"
-      const isFreeHealthCare = fhcCategory !== "none"
-      const payerCategory = isFreeHealthCare ? "fhc" : companyId ? "company" : "self_pay"
+    const assignedCompanyId = (fhcAwarePatient?.company_id as string | null) ?? null
+    const fhcCategory = (fhcAwarePatient?.free_health_category as string | null) ?? "none"
+    const isFreeHealthCare = fhcCategory !== "none"
+    const payerCategory = isFreeHealthCare ? "fhc" : assignedCompanyId ? "company" : "self_pay"
 
-      const { data: opdFacility } = await supabase
-        .from("facilities")
-        .select("id, code")
-        .eq("code", "opd")
-        .maybeSingle()
+    const { data: opdFacility } = await supabase.from("facilities").select("id, code").eq("code", "opd").maybeSingle()
 
-      const facilityId = (opdFacility?.id as string | null) ?? null
+    const facilityId = (opdFacility?.id as string | null) ?? null
 
-      await supabase.from("visits").insert({
-        patient_id: insertedPatient.id,
-        visit_status: "doctor_pending",
-        assigned_company_id: companyId,
-        is_free_health_care: isFreeHealthCare,
-        payer_category: payerCategory,
-        facility_id: facilityId,
-      })
-    } catch (visitError) {
-      console.error("[v0] Error creating initial visit for patient:", visitError)
-      // Continue redirecting even if visit creation fails
+    const { error: visitInsertError } = await supabase.from("visits").insert({
+      patient_id: insertedPatient.id,
+      visit_status: "doctor_pending",
+      assigned_company_id: assignedCompanyId,
+      is_free_health_care: isFreeHealthCare,
+      payer_category: payerCategory,
+      facility_id: facilityId,
+    })
+    if (visitInsertError) {
+      await rollbackPatientRegistration()
+      redirect("/dashboard/patients/new?error=create_failed")
     }
 
     redirect(`/dashboard/patients/${data.id}`)
@@ -266,7 +308,11 @@ export default async function NewPatientPage({
         of kin details improve reporting and follow-up later.
       </div>
 
-      <PatientRegistrationForm companies={companies || []} action={createPatient} />
+      <PatientRegistrationForm
+        companies={companies || []}
+        action={createPatient}
+        publicCoverageLabel={settings.publicCoverageLabel}
+      />
     </div>
   )
 }

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { signOut } from "@/app/actions/auth"
+import { APP_BRAND_NAME } from "@/config/global"
 
 interface DashboardUser {
   id: string
@@ -72,7 +73,7 @@ export function DashboardHeader({ user, profile, hospitalName, hospitalLogoUrl }
             />
           )}
           <span className="text-xl sm:text-2xl font-semibold tracking-tight text-primary/80">
-            {hospitalName || "HealthNet-SL HMS"}
+            {hospitalName || APP_BRAND_NAME}
           </span>
         </div>
 

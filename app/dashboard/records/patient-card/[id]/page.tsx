@@ -41,9 +41,14 @@ export default async function PatientCardPage({
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-100 p-4">
       <div className="mb-4 flex w-full max-w-md items-center justify-between">
-        <Button asChild variant="outline" size="sm">
-          <Link href="/dashboard/records">Back to Records</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/records">Back to Records</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/dashboard/records/history/${patient.id}`}>View history</Link>
+          </Button>
+        </div>
         <PrintButton />
       </div>
       <div className="mb-4 w-full max-w-md rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">

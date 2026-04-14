@@ -1,9 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from "pdf-lib"
-import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { enforceTrustedOriginOrReferer } from "@/lib/http/request-security"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 import { fetchInsuranceBatchDetails } from "@/lib/billing/insurance-batches"
+import { createTranslator } from "@/lib/i18n"
+import { formatCurrency, formatDate, formatFacilityAddress, type GlobalSettingsInput } from "@/lib/locale-format"
+import { requireRole, requireFacilityAccess, parseUuidParam, resolveAuthError } from "@/lib/auth-guard"
+import { ROLES } from "@/lib/utils"
 
 const PAGE_MARGIN = 36
 const BORDER = rgb(0.84, 0.87, 0.91)
@@ -31,21 +35,6 @@ function drawText(page: PDFPage, text: string, x: number, y: number, size: numbe
   page.drawText(text, { x, y, size, font, color })
 }
 
-function formatCurrency(value: number) {
-  return `Le ${new Intl.NumberFormat("en-SL", { maximumFractionDigits: 0 }).format(value)}`
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "-"
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(parsed)
-}
-
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const limited = enforceFixedWindowRateLimit(request, {
     key: "insurance_batch_pdf",
@@ -54,9 +43,27 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   })
   if (limited) return limited
 
+  const originGuard = enforceTrustedOriginOrReferer(request)
+  if (originGuard) return originGuard
+
   try {
-    const { supabase } = await requirePermission(request, "billing.manage")
-    const { id } = await params
+    const { supabase, user } = await requireRole([ROLES.ADMIN, ROLES.FACILITY_ADMIN, ROLES.CASHIER])
+    const { id: rawId } = await params
+    const id = parseUuidParam(rawId, "insurance batch id")
+
+    const { data: facilityVisit } = await supabase
+      .from("insurance_billing_batch_items")
+      .select("visit_id")
+      .eq("batch_id", id)
+      .not("visit_id", "is", null)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (facilityVisit?.visit_id) {
+      const { data: visitRow } = await supabase.from("visits").select("facility_id").eq("id", facilityVisit.visit_id).maybeSingle()
+      requireFacilityAccess({ user, supabase }, visitRow?.facility_id ?? null)
+    }
 
     const batchDetails = await fetchInsuranceBatchDetails(supabase, id)
     if (!batchDetails) {
@@ -66,10 +73,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const { batch, groupedPatients } = batchDetails
     const { data: settings } = await supabase
       .from("hospital_settings")
-      .select("hospital_name, address, phone, email")
+      .select("hospital_name, address, address_line_1, address_line_2, city, state_or_province, postal_code, country, phone, email, currency_code, locale, timezone, date_format, time_format, language")
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle()
+    const t = createTranslator(settings?.language)
 
     const pdfDoc = await PDFDocument.create()
     const regular = await pdfDoc.embedFont(StandardFonts.Helvetica)
@@ -81,15 +89,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     drawText(page, (settings?.hospital_name || "Hospital").trim(), PAGE_MARGIN, y, 15, bold)
     y -= 18
-    for (const line of [settings?.address, settings?.phone ? `Tel: ${settings.phone}` : null, settings?.email ? `Email: ${settings.email}` : null].filter(Boolean) as string[]) {
+    for (const line of [formatFacilityAddress(settings as GlobalSettingsInput), settings?.phone ? `Tel: ${settings.phone}` : null, settings?.email ? `Email: ${settings.email}` : null].filter(Boolean) as string[]) {
       drawText(page, line, PAGE_MARGIN, y, 9, regular, MUTED)
       y -= 12
     }
 
-    drawText(page, "INSURANCE INVOICE", pageWidth - 205, state.y, 21, bold, BRAND)
-    drawText(page, `Batch #: ${batch.batch_number || batch.id}`, pageWidth - 205, state.y - 24, 10, regular)
-    drawText(page, `Status: ${batch.status}`, pageWidth - 205, state.y - 38, 10, bold)
-    drawText(page, `Period: ${formatDate(batch.from_date)} to ${formatDate(batch.to_date)}`, pageWidth - 205, state.y - 52, 9, regular, MUTED)
+    drawText(page, t("pdf.insuranceInvoice", "Insurance Invoice").toUpperCase(), pageWidth - 205, state.y, 21, bold, BRAND)
+    drawText(page, `${t("pdf.batchNumber", "Batch #")}: ${batch.batch_number || batch.id}`, pageWidth - 205, state.y - 24, 10, regular)
+    drawText(page, `${t("pdf.status", "Status")}: ${batch.status}`, pageWidth - 205, state.y - 38, 10, bold)
+    drawText(page, `${t("pdf.period", "Period")}: ${formatDate(batch.from_date, settings as GlobalSettingsInput)} to ${formatDate(batch.to_date, settings as GlobalSettingsInput)}`, pageWidth - 205, state.y - 52, 9, regular, MUTED)
 
     y = Math.min(y, state.y - 72)
     page.drawLine({
@@ -103,21 +111,21 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const boxWidth = (contentWidth - 16) / 2
     for (const [index, block] of [
       {
-        title: "Bill To",
+        title: t("pdf.billTo", "Bill To"),
         rows: [
-          { label: "Provider", value: batch.companyName || "Insurance provider" },
-          { label: "Contact", value: [batch.companyContactPerson, batch.companyPhone].filter(Boolean).join(" · ") || batch.companyEmail || "-" },
-          { label: "Address", value: batch.companyAddress || "-" },
-          { label: "Email", value: batch.companyEmail || "-" },
+          { label: t("pdf.provider", "Provider"), value: batch.companyName || "Insurance provider" },
+          { label: t("pdf.contact", "Contact"), value: [batch.companyContactPerson, batch.companyPhone].filter(Boolean).join(" · ") || batch.companyEmail || "-" },
+          { label: t("pdf.address", "Address"), value: batch.companyAddress || "-" },
+          { label: t("settings.email", "Email"), value: batch.companyEmail || "-" },
         ],
       },
       {
-        title: "Batch Summary",
+        title: t("pdf.batchSummary", "Batch Summary"),
         rows: [
-          { label: "Beneficiaries", value: String(groupedPatients.length) },
-          { label: "Grand total", value: formatCurrency(batch.total_amount) },
-          { label: "Amount paid", value: formatCurrency(batch.paid_amount) },
-          { label: "Balance", value: formatCurrency(Math.max(batch.total_amount - batch.paid_amount, 0)) },
+          { label: t("pdf.beneficiaries", "Beneficiaries"), value: String(groupedPatients.length) },
+          { label: t("pdf.grandTotal", "Grand total"), value: formatCurrency(batch.total_amount, settings as GlobalSettingsInput) },
+          { label: t("pdf.amountPaid", "Amount paid"), value: formatCurrency(batch.paid_amount, settings as GlobalSettingsInput) },
+          { label: t("pdf.balance", "Balance"), value: formatCurrency(Math.max(batch.total_amount - batch.paid_amount, 0), settings as GlobalSettingsInput) },
         ],
       },
     ].entries()) {
@@ -149,12 +157,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     y -= 112
 
     const columns = [
-      { label: "Date", x: PAGE_MARGIN + 8 },
-      { label: "Visit", x: PAGE_MARGIN + 72 },
-      { label: "Service", x: PAGE_MARGIN + 132 },
-      { label: "Qty", x: PAGE_MARGIN + 385 },
-      { label: "Unit", x: PAGE_MARGIN + 422 },
-      { label: "Total", x: PAGE_MARGIN + 490 },
+      { label: t("pdf.date", "Date"), x: PAGE_MARGIN + 8 },
+      { label: t("pdf.visit", "Visit"), x: PAGE_MARGIN + 72 },
+      { label: t("pdf.service", "Service"), x: PAGE_MARGIN + 132 },
+      { label: t("pdf.qty", "Qty"), x: PAGE_MARGIN + 385 },
+      { label: t("pdf.unit", "Unit"), x: PAGE_MARGIN + 422 },
+      { label: t("pdf.total", "Total"), x: PAGE_MARGIN + 490 },
     ]
 
     for (const group of groupedPatients) {
@@ -178,7 +186,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       ].filter(Boolean)
       drawText(page, group.patientName, PAGE_MARGIN + 8, y - 16, 11, bold)
       drawText(page, relationshipParts.join(" · "), PAGE_MARGIN + 200, y - 16, 8, regular, MUTED)
-      drawText(page, formatCurrency(group.total), pageWidth - 118, y - 16, 10, bold)
+      drawText(page, formatCurrency(group.total, settings as GlobalSettingsInput), pageWidth - 118, y - 16, 10, bold)
       y -= 28
 
       page.drawRectangle({
@@ -213,17 +221,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
             borderColor: BORDER,
             borderWidth: 1,
           })
-          drawText(page, formatDate(invoice.createdAt), columns[0].x, y - 11, 8, regular)
+          drawText(page, formatDate(invoice.createdAt, settings as GlobalSettingsInput), columns[0].x, y - 11, 8, regular)
           drawText(page, invoice.visitReference, columns[1].x, y - 11, 8, regular)
           drawText(page, item.description.slice(0, 44), columns[2].x, y - 11, 8, regular)
           drawText(page, String(item.quantity), columns[3].x, y - 11, 8, regular)
-          drawText(page, formatCurrency(item.unit_price), columns[4].x, y - 11, 8, regular)
-          drawText(page, formatCurrency(item.amount), columns[5].x, y - 11, 8, regular)
+          drawText(page, formatCurrency(item.unit_price, settings as GlobalSettingsInput), columns[4].x, y - 11, 8, regular)
+          drawText(page, formatCurrency(item.amount, settings as GlobalSettingsInput), columns[5].x, y - 11, 8, regular)
           y -= 18
         }
       }
 
-      drawText(page, `Beneficiary subtotal: ${formatCurrency(group.total)}`, PAGE_MARGIN + 8, y - 2, 9, bold, MUTED)
+      drawText(page, `${t("pdf.beneficiarySubtotal", "Beneficiary subtotal")}: ${formatCurrency(group.total, settings as GlobalSettingsInput)}`, PAGE_MARGIN + 8, y - 2, 9, bold, MUTED)
       y -= 22
     }
 
@@ -240,13 +248,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       borderWidth: 1,
       color: HEADER_FILL,
     })
-    drawText(page, `Grand total  ${formatCurrency(batch.total_amount)}`, pageWidth - 208, y - 16, 10, bold)
-    drawText(page, `Paid  ${formatCurrency(batch.paid_amount)}`, pageWidth - 208, y - 31, 9, regular)
-    drawText(page, `Balance  ${formatCurrency(Math.max(batch.total_amount - batch.paid_amount, 0))}`, pageWidth - 208, y - 45, 9, regular)
+    drawText(page, `${t("pdf.grandTotal", "Grand total")}  ${formatCurrency(batch.total_amount, settings as GlobalSettingsInput)}`, pageWidth - 208, y - 16, 10, bold)
+    drawText(page, `${t("pdf.amountPaid", "Amount paid")}  ${formatCurrency(batch.paid_amount, settings as GlobalSettingsInput)}`, pageWidth - 208, y - 31, 9, regular)
+    drawText(page, `${t("pdf.balance", "Balance")}  ${formatCurrency(Math.max(batch.total_amount - batch.paid_amount, 0), settings as GlobalSettingsInput)}`, pageWidth - 208, y - 45, 9, regular)
 
     drawText(
       page,
-      `Generated ${new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`,
+      `${t("pdf.generated", "Generated")} ${new Intl.DateTimeFormat(settings?.locale || "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: settings?.timezone || "UTC" }).format(new Date())}`,
       PAGE_MARGIN,
       y - 50,
       8,
@@ -264,7 +272,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       },
     })
   } catch (error) {
-    const authResponse = toAuthErrorResponse(error, request)
+    const authResponse = resolveAuthError(error, request, (status, code, message) => apiError(status, code, message, request))
     if (authResponse) return authResponse
     throw error
   }

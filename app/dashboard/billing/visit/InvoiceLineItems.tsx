@@ -114,7 +114,7 @@ export function InvoiceLineItems({ initialItems }: InvoiceLineItemsProps) {
                 onChange={(e) => updateItem(index, "item_type", e.target.value)}
               >
                 <option value="billable">Normal billable</option>
-                <option value="fhc_covered">FHC-covered (zero to patient)</option>
+                <option value="fhc_covered">Covered by public program (zero to patient)</option>
               </select>
             </div>
             <div className="flex items-end justify-end pt-2">

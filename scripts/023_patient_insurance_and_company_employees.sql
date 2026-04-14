@@ -60,4 +60,26 @@ CREATE INDEX IF NOT EXISTS idx_company_employees_status ON company_employees(sta
 CREATE INDEX IF NOT EXISTS idx_employee_dependents_employee_id ON employee_dependents(employee_id);
 CREATE INDEX IF NOT EXISTS idx_employee_dependents_status ON employee_dependents(status);
 
+ALTER TABLE company_employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_dependents ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view company employees" ON company_employees;
+DROP POLICY IF EXISTS "Authenticated staff can manage company employees" ON company_employees;
+DROP POLICY IF EXISTS "Authenticated staff can view employee dependents" ON employee_dependents;
+DROP POLICY IF EXISTS "Authenticated staff can manage employee dependents" ON employee_dependents;
+
+CREATE POLICY "Authenticated staff can view company employees" ON company_employees
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can manage company employees" ON company_employees
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can view employee dependents" ON employee_dependents
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can manage employee dependents" ON employee_dependents
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
 COMMIT;

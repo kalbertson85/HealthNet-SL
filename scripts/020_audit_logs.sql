@@ -29,12 +29,13 @@ DROP POLICY IF EXISTS "System can insert audit logs" ON audit_logs;
 CREATE POLICY "Admins can view audit logs" ON audit_logs
   FOR SELECT USING (
     EXISTS (
-      SELECT 1 FROM auth.users u
-      WHERE u.id = auth.uid()
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = auth.uid()
+      AND lower(coalesce(p.role, '')) IN ('admin', 'facility_admin')
     )
   );
 
 CREATE POLICY "System can insert audit logs" ON audit_logs
-  FOR INSERT WITH CHECK (true);
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 
 COMMIT;

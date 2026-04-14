@@ -9,6 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { fetchInvoicesWithPatientsByIds, fetchProfilesByIds } from "@/lib/admin/activity"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency, formatDateTime } from "@/lib/locale-format"
 
 interface BillingActivitySearchParams {
   actor?: string
@@ -38,6 +40,7 @@ export default async function BillingActivityPage({
   searchParams?: Promise<BillingActivitySearchParams>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -115,13 +118,7 @@ export default async function BillingActivityPage({
     }
   }
 
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
-  }
+  const formatTimestamp = (value: string) => formatDateTime(value, settings)
 
   const renderActor = (actorId: string) => {
     const actor = actorProfilesById.get(actorId)
@@ -259,7 +256,7 @@ export default async function BillingActivityPage({
 
                     return (
                       <TableRow key={row.id} className="hover:bg-muted/50">
-                        <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{formatTimestamp(row.created_at)}</TableCell>
                         <TableCell className="text-xs">{actionLabel}</TableCell>
                         <TableCell className="text-xs">
                           <div className="flex flex-col gap-0.5">
@@ -276,7 +273,7 @@ export default async function BillingActivityPage({
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">{renderPatient(row.invoice_id)}</TableCell>
                         <TableCell className="text-xs">
-                          {row.amount != null ? `Le ${Number(row.amount).toLocaleString()}` : "-"}
+                          {row.amount != null ? formatCurrency(Number(row.amount), settings) : "-"}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">{renderActor(row.actor_user_id)}</TableCell>
                       </TableRow>

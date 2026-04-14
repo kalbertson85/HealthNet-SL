@@ -6,11 +6,16 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { AlertCircle } from "lucide-react"
-import { assertVisitTransition, type VisitStatus } from "@/lib/visits"
+import { assertVisitTransition, parseVisitStatus } from "@/lib/visits"
 import { FormHelpTip } from "@/components/form-help-tip"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate, formatDateTime } from "@/lib/locale-format"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { logAuditEvent } from "@/lib/audit"
+import { z } from "zod"
 
 interface Vital {
   id: string
@@ -122,10 +127,19 @@ function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
   return Array.isArray(relation) ? (relation[0] ?? null) : relation
 }
 
-export default async function AdmissionDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function AdmissionDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams?: Promise<{ error?: string }>
+}) {
   const { id } = await params
+  const resolvedSearchParams = searchParams ? await searchParams : undefined
+  const errorCode = resolvedSearchParams?.error
 
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const { data: admission } = await supabase
     .from("admissions")
@@ -193,27 +207,45 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
     } | null
   }
 
+  const errorMessage = (() => {
+    switch (errorCode) {
+      case "visit_transition_invalid":
+        return "Discharge was blocked because the linked visit is not in a valid state for completion."
+      case "discharge_update_failed":
+        return "Discharge could not be completed. No changes were finalized."
+      case "note_save_failed":
+        return "Nursing note could not be saved."
+      default:
+        return null
+    }
+  })()
+
   async function addNursingNote(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const note = (formData.get("note") as string) || ""
-    const noteType = (formData.get("note_type") as string) || null
-
-    if (!note.trim()) {
+    const { supabase, user } = await requireServerActionPermission("inpatient.manage")
+    const parsed = z
+      .object({
+        note: z.string().trim().min(1).max(5000),
+        note_type: z.string().trim().max(50).optional(),
+      })
+      .safeParse({
+        note: formData.get("note"),
+        note_type: formData.get("note_type"),
+      })
+    if (!parsed.success) {
       redirect(`/dashboard/inpatient/${id}`)
     }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    await supabase.from("nursing_notes").insert({
+    const { error: noteInsertError } = await supabase.from("nursing_notes").insert({
       admission_id: id,
-      note,
-      note_type: noteType,
+      note: parsed.data.note,
+      note_type: parsed.data.note_type ?? null,
       recorded_by: user?.id ?? null,
     })
+    if (noteInsertError) {
+      redirect(`/dashboard/inpatient/${id}?error=note_save_failed`)
+    }
 
     redirect(`/dashboard/inpatient/${id}`)
   }
@@ -221,36 +253,31 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
   async function discharge(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const dischargeSummary = formData.get("discharge_summary") as string
-    const dischargeInstructions = formData.get("discharge_instructions") as string
-
-    // Update admission
-    await supabase
-      .from("admissions")
-      .update({
-        status: "discharged",
-        discharge_date: new Date().toISOString(),
-        discharge_summary: dischargeSummary,
-        discharge_instructions: dischargeInstructions,
+    const { supabase, user } = await requireServerActionPermission("inpatient.manage")
+    const parsed = z
+      .object({
+        discharge_summary: z.string().trim().min(1).max(8000),
+        discharge_instructions: z.string().trim().min(1).max(8000),
       })
+      .safeParse({
+        discharge_summary: formData.get("discharge_summary"),
+        discharge_instructions: formData.get("discharge_instructions"),
+      })
+    if (!parsed.success) {
+      redirect(`/dashboard/inpatient/${id}`)
+    }
+    const dischargeSummary = parsed.data.discharge_summary
+    const dischargeInstructions = parsed.data.discharge_instructions
+    const { data: currentAdmission } = await supabase
+      .from("admissions")
+      .select("id, status, bed_id, ward_id, visit_id, discharge_date, discharge_summary, discharge_instructions")
       .eq("id", id)
-
-    // Update bed status
-    await supabase.from("beds").update({ status: "available" }).eq("id", admissionRow.bed_id)
-
-    // Update ward available beds
-    const { data: ward } = await supabase.from("wards").select("available_beds").eq("id", admissionRow.ward_id).single()
-
-    if (ward) {
-      await supabase
-        .from("wards")
-        .update({ available_beds: (ward.available_beds || 0) + 1 })
-        .eq("id", admissionRow.ward_id)
+      .maybeSingle()
+    if (!currentAdmission || (currentAdmission.status as string | null) !== "admitted") {
+      redirect(`/dashboard/inpatient/${id}`)
     }
 
-    // If this admission is linked to a visit, reflect completion on that visit
-    const visitId = (admissionRow.visit_id as string | null) ?? null
+    const visitId = (currentAdmission.visit_id as string | null) ?? null
     if (visitId) {
       const { data: beforeVisit } = await supabase
         .from("visits")
@@ -258,24 +285,63 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
         .eq("id", visitId)
         .maybeSingle()
 
-      const currentStatus = (beforeVisit?.visit_status as VisitStatus | null) ?? null
+      const currentStatus = parseVisitStatus(beforeVisit?.visit_status)
+      if (!currentStatus) {
+        redirect(`/dashboard/inpatient/${id}?error=visit_transition_invalid`)
+      }
 
-      if (currentStatus) {
-        try {
-          assertVisitTransition(currentStatus, "completed")
-          await supabase.from("visits").update({ visit_status: "completed" }).eq("id", visitId)
-        } catch (err) {
-          console.error("[inpatient] Invalid visit status transition on discharge", {
-            visitId,
-            from: currentStatus,
-            to: "completed",
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
+      try {
+        assertVisitTransition(currentStatus, "completed")
+      } catch (err) {
+        console.error("[inpatient] Invalid visit status transition on discharge", {
+          visitId,
+          from: currentStatus,
+          to: "completed",
+          error: err instanceof Error ? err.message : String(err),
+        })
+        redirect(`/dashboard/inpatient/${id}?error=visit_transition_invalid`)
       }
     }
 
-    redirect(`/dashboard/inpatient/${id}`)
+    const dischargeRpcResult = await supabase.rpc("discharge_admission_transactional", {
+      p_admission_id: id,
+      p_discharge_summary: dischargeSummary,
+      p_discharge_instructions: dischargeInstructions,
+      p_actor_user_id: user.id,
+    })
+
+    if (!dischargeRpcResult.error) {
+      const rpcData = (dischargeRpcResult.data || null) as { ok?: boolean; code?: string } | null
+      if (rpcData?.ok) {
+        await logAuditEvent({
+          action: "inpatient.discharge_completed",
+          entityType: "admission",
+          entityId: id,
+          user,
+          metadata: {
+            admission_id: id,
+            visit_id: visitId,
+            discharge_mode: "rpc",
+          },
+        })
+        redirect(`/dashboard/inpatient/${id}`)
+      }
+
+      const code = String(rpcData?.code || "")
+      if (code === "admission_not_found" || code === "admission_not_active") {
+        redirect(`/dashboard/inpatient/${id}`)
+      }
+      if (code === "invalid_transition" || code === "visit_not_found") {
+        redirect(`/dashboard/inpatient/${id}?error=visit_transition_invalid`)
+      }
+      redirect(`/dashboard/inpatient/${id}?error=discharge_update_failed`)
+    } else {
+      const rpcErrorCode = String((dischargeRpcResult.error as { code?: string } | null)?.code || "")
+      if (rpcErrorCode === "42883") {
+        redirect(`/dashboard/inpatient/${id}?error=discharge_update_failed`)
+      }
+      redirect(`/dashboard/inpatient/${id}?error=discharge_update_failed`)
+    }
   }
 
   const daysAdmitted = admissionRow.admission_date
@@ -284,6 +350,11 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
 
   return (
     <div className="space-y-6">
+      {errorMessage && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {errorMessage}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-balance text-3xl font-bold tracking-tight">Admission Details</h1>
@@ -291,7 +362,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
             <span>Admission #{admissionRow.admission_number}</span>
             {admissionVisit?.is_free_health_care && (
               <Badge variant="secondary" className="text-[11px]">
-                Free Health Care
+                {settings.publicCoverageLabel}
               </Badge>
             )}
             {admissionFacility?.name && (
@@ -340,7 +411,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
             <CardTitle>Admission Date</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-xl font-bold">{new Date(admissionRow.admission_date).toLocaleDateString()}</p>
+            <p className="text-xl font-bold">{formatDate(admissionRow.admission_date, settings)}</p>
             <p className="text-sm text-muted-foreground">{new Date(admissionRow.admission_date).toLocaleTimeString()}</p>
           </CardContent>
         </Card>
@@ -430,7 +501,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
               {vitals.map((vital: Vital) => (
                 <div key={vital.id} className="flex justify-between items-start border-b pb-2 last:border-0">
                   <div className="space-y-1">
-                    <p className="text-sm font-medium">{new Date(vital.recorded_at).toLocaleString()}</p>
+                    <p className="text-sm font-medium">{formatDateTime(vital.recorded_at, settings)}</p>
                     <div className="text-sm text-muted-foreground">
                       BP: {vital.blood_pressure_systolic}/{vital.blood_pressure_diastolic} | Pulse: {vital.pulse_rate} |
                       Temp: {vital.temperature}°C | SpO2: {vital.oxygen_saturation}%
@@ -454,7 +525,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
               {nursingNotes.map((note: NursingNote) => (
                 <div key={note.id} className="border-l-2 border-muted pl-3">
                   <p className="text-xs text-muted-foreground mb-1">
-                    {new Date(note.created_at).toLocaleString()} {note.note_type ? `• ${note.note_type}` : ""}
+                    {formatDateTime(note.created_at, settings)} {note.note_type ? `• ${note.note_type}` : ""}
                   </p>
                   <p className="text-sm whitespace-pre-wrap">{note.note}</p>
                 </div>
@@ -570,7 +641,7 @@ export default async function AdmissionDetailPage({ params }: { params: Promise<
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Discharge Date</p>
-              <p>{admissionRow.discharge_date ? new Date(admissionRow.discharge_date).toLocaleString() : "N/A"}</p>
+              <p>{admissionRow.discharge_date ? formatDateTime(admissionRow.discharge_date, settings) : "N/A"}</p>
             </div>
             <Separator />
             <div>

@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
 
 interface SystemActivitySearchParams {
   module?: string
@@ -43,6 +45,7 @@ export default async function SystemActivityPage({
   searchParams?: Promise<SystemActivitySearchParams>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -378,14 +381,6 @@ export default async function SystemActivityPage({
     }
   }
 
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
-  }
-
   const renderModuleLabel = (module: UnifiedActivityRow["module"]) => {
     switch (module) {
       case "appointment":
@@ -604,7 +599,7 @@ export default async function SystemActivityPage({
                 ) : (
                   pageRows.map((row) => (
                     <TableRow key={`${row.module}:${row.id}`} className="hover:bg-muted/50">
-                      <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at, settings)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{renderModuleLabel(row.module)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {row.module === "emergency" && row.resource_label

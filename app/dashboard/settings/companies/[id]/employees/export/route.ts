@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
+import { ROLES } from "@/lib/utils"
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const limited = enforceFixedWindowRateLimit(request, {
@@ -12,23 +13,31 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (limited) return limited
 
   try {
-    const { supabase } = await requirePermission(request, "admin.export")
+    const { supabase, user } = await requirePermission(request, "admin.export")
+    if (user?.role !== ROLES.ADMIN) {
+      return apiError(403, "forbidden", "Forbidden: only admin can export company employee rosters", request)
+    }
     const { id: companyId } = await params
 
-  const [{ data: company }, { data: employees }, { data: dependents }] = await Promise.all([
+  const [{ data: company }, { data: employees }] = await Promise.all([
     supabase.from("companies").select("id, name").eq("id", companyId).maybeSingle(),
     supabase
       .from("company_employees")
-      .select("full_name, phone, insurance_card_number, insurance_card_serial, insurance_expiry_date, status")
+      .select("id, full_name, phone, insurance_card_number, insurance_card_serial, insurance_expiry_date, status")
       .eq("company_id", companyId),
-    supabase
-      .from("employee_dependents")
-      .select("full_name, relationship, insurance_card_number, insurance_card_serial, insurance_expiry_date, status"),
   ])
 
   if (!company) {
     return new NextResponse("Company not found", { status: 404 })
   }
+
+  const employeeIds = ((employees || []) as Array<{ id: string }>).map((employee) => employee.id).filter(Boolean)
+  const { data: dependents } = employeeIds.length
+    ? await supabase
+        .from("employee_dependents")
+        .select("full_name, relationship, insurance_card_number, insurance_card_serial, insurance_expiry_date, status")
+        .in("employee_id", employeeIds)
+    : { data: [] }
 
   const lines: string[] = []
   lines.push(`Company,${JSON.stringify(company.name)}`)

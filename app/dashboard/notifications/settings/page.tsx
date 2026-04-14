@@ -5,15 +5,11 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
 import { Mail, MessageSquare, Smartphone } from "lucide-react"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 async function updatePreferences(formData: FormData) {
   "use server"
-  const supabase = await createServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) return
+  const { supabase, user } = await requireServerActionPermission("dashboard.view")
 
   const preferences = {
     email_enabled: formData.get("email_enabled") === "on",
@@ -26,14 +22,24 @@ async function updatePreferences(formData: FormData) {
     system_alerts: formData.get("system_alerts") === "on",
   }
 
-  await supabase
+  const { error: upsertError } = await supabase
     .from("notification_preferences")
     .upsert({ user_id: user.id, ...preferences })
     .eq("user_id", user.id)
+  if (upsertError) {
+    redirect("/dashboard/notifications/settings?error=preferences_update_failed")
+  }
+
+  redirect("/dashboard/notifications/settings?status=preferences_saved")
 }
 
-export default async function NotificationSettingsPage() {
+export default async function NotificationSettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ status?: string; error?: string }>
+}) {
   const supabase = await createServerClient()
+  const sp = searchParams ? await searchParams : undefined
   const {
     data: { user },
   } = await supabase.auth.getUser()
@@ -53,18 +59,34 @@ export default async function NotificationSettingsPage() {
 
   // Create default preferences if none exist
   if (!preferences) {
-    const { data: newPreferences } = await supabase
+    const { data: newPreferences, error: createPreferencesError } = await supabase
       .from("notification_preferences")
       .insert({ user_id: user.id })
       .select(
         "user_id, email_enabled, sms_enabled, push_enabled, appointment_reminders, lab_results, prescription_ready, payment_reminders, system_alerts",
       )
       .single()
+    if (createPreferencesError) {
+      redirect("/dashboard/notifications/settings?error=preferences_load_failed")
+    }
     preferences = newPreferences
   }
 
   return (
     <div className="space-y-6">
+      {sp?.status === "preferences_saved" && (
+        <div className="rounded-md border border-emerald-400/40 bg-emerald-500/5 p-3 text-sm text-emerald-700">
+          Notification preferences saved.
+        </div>
+      )}
+      {sp?.error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+          {sp.error === "preferences_update_failed" && "Unable to save notification preferences. Please try again."}
+          {sp.error === "preferences_load_failed" && "Unable to initialize notification preferences. Please try again."}
+          {!["preferences_update_failed", "preferences_load_failed"].includes(sp.error) &&
+            "Unable to update notification preferences. Please try again."}
+        </div>
+      )}
       <div>
         <h1 className="text-3xl font-bold text-foreground">Notification Settings</h1>
         <p className="text-muted-foreground">Manage how you receive notifications</p>

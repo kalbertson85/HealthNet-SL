@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createServerClient } from "@/lib/supabase/server"
-import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { ROLES } from "@/lib/utils"
 import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_JSON_HEADERS } from "@/lib/http/headers"
+import { requireRole, resolveAuthError } from "@/lib/auth-guard"
 
 export const dynamic = "force-dynamic"
 
@@ -15,15 +14,14 @@ export async function GET(request: NextRequest) {
   })
   if (limited) return limited
 
-  const { user, profile } = await getSessionUserAndProfile()
-  if (!user) return apiError(401, "unauthorized", "Unauthorized", request)
-
-  const role = profile?.role ?? user.role
-  if (role !== ROLES.ADMIN && role !== ROLES.FACILITY_ADMIN) {
-    return apiError(403, "forbidden", "Forbidden", request)
+  let supabase
+  try {
+    ;({ supabase } = await requireRole([ROLES.ADMIN]))
+  } catch (error) {
+    const authResponse = resolveAuthError(error, request, apiError)
+    if (authResponse) return authResponse
+    throw error
   }
-
-  const supabase = await createServerClient()
   const { searchParams } = new URL(request.url)
   const page = Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1)
   const pageSize = Math.min(200, Math.max(1, Number.parseInt(searchParams.get("page_size") || "50", 10) || 50))

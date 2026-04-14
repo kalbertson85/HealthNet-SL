@@ -13,9 +13,10 @@ describe("POST /api/webhooks/mobile-money", () => {
 
   afterEach(() => {
     delete process.env.MOBILE_MONEY_WEBHOOK_SECRET
+    delete process.env.MOBILE_MONEY_WEBHOOK_HEALTH_TOKEN
   })
 
-  it("returns webhook readiness with configured=false when secret is missing", async () => {
+  it("returns basic webhook readiness without internal configuration details", async () => {
     const request = new NextRequest("http://localhost/api/webhooks/mobile-money", {
       method: "GET",
       headers: { "x-forwarded-for": "10.0.0.21" },
@@ -28,15 +29,20 @@ describe("POST /api/webhooks/mobile-money", () => {
     expect(payload).toMatchObject({
       ok: true,
       provider: "mobile_money",
-      configured: false,
+      status: "basic",
     })
+    expect(payload.configured).toBeUndefined()
   })
 
-  it("returns webhook readiness with configured=true when secret exists", async () => {
+  it("returns detailed webhook readiness only with a valid health token", async () => {
     process.env.MOBILE_MONEY_WEBHOOK_SECRET = secret
+    process.env.MOBILE_MONEY_WEBHOOK_HEALTH_TOKEN = "health-token-123"
     const request = new NextRequest("http://localhost/api/webhooks/mobile-money", {
       method: "GET",
-      headers: { "x-forwarded-for": "10.0.0.22" },
+      headers: {
+        "x-forwarded-for": "10.0.0.22",
+        "x-webhook-health-token": "health-token-123",
+      },
     })
 
     const response = await GET(request)
@@ -46,6 +52,7 @@ describe("POST /api/webhooks/mobile-money", () => {
     expect(payload).toMatchObject({
       ok: true,
       provider: "mobile_money",
+      status: "detailed",
       configured: true,
     })
   })

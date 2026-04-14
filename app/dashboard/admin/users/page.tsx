@@ -5,6 +5,8 @@ import { can } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { getSupabaseAdminClient } from "@/lib/storage"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface ProfileRow {
   id: string
@@ -17,35 +19,53 @@ interface ProfileRow {
 async function assignUserRole(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
-  const { user } = await getSessionUserAndProfile()
-
-  if (!user) {
-    redirect("/auth/login")
-  }
-
-  if (!can(user, "admin.settings.manage")) {
-    redirect("/dashboard")
-  }
-
-  const userId = ((formData.get("user_id") as string | null) || "").trim()
-  const role = ((formData.get("role") as string | null) || "").trim()
-  const currentRole = ((formData.get("current_role") as string | null) || "").trim()
-
-  if (!userId || !role) {
+  const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+  const parsed = z
+    .object({
+      user_id: z.string().uuid(),
+      role: z.enum(["admin", "facility_admin", "doctor", "nurse", "pharmacist", "lab_tech", "cashier", "clerk", "receptionist"]),
+      current_role: z.string().trim().optional(),
+    })
+    .safeParse({
+      user_id: formData.get("user_id"),
+      role: formData.get("role"),
+      current_role: formData.get("current_role"),
+    })
+  if (!parsed.success) {
     redirect("/dashboard/admin/users")
   }
 
-  await supabase.from("profiles").update({ role }).eq("id", userId)
+  const userId = parsed.data.user_id
+  const role = parsed.data.role
+  const { data: existingProfile, error: existingProfileError } = await supabase
+    .from("profiles")
+    .select("id, role")
+    .eq("id", userId)
+    .maybeSingle()
+  if (existingProfileError || !existingProfile?.id) {
+    redirect("/dashboard/admin/users?error=user_not_found")
+  }
 
-  if (currentRole !== role) {
-    await supabase.from("admin_audit_logs").insert({
-      actor_user_id: user.id,
-      target_user_id: userId,
-      action: "role_change",
-      old_role: currentRole || null,
-      new_role: role,
-    })
+  const currentRole = ((existingProfile as { role?: string | null }).role || "").trim()
+  if (currentRole === role) {
+    redirect("/dashboard/admin/users?status=role_saved")
+  }
+
+  const { error: updateError } = await supabase.from("profiles").update({ role }).eq("id", userId)
+  if (updateError) {
+    redirect("/dashboard/admin/users?error=role_update_failed")
+  }
+
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+    actor_user_id: user.id,
+    target_user_id: userId,
+    action: "role_change",
+    old_role: currentRole || null,
+    new_role: role,
+  })
+  if (auditError) {
+    await supabase.from("profiles").update({ role: currentRole || null }).eq("id", userId)
+    redirect("/dashboard/admin/users?error=audit_log_failed")
   }
 
   redirect("/dashboard/admin/users?status=role_saved")
@@ -54,35 +74,52 @@ async function assignUserRole(formData: FormData) {
 async function updateUserStatus(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
-  const { user } = await getSessionUserAndProfile()
-
-  if (!user) {
-    redirect("/auth/login")
-  }
-
-  if (!can(user, "admin.settings.manage")) {
-    redirect("/dashboard")
-  }
-
-  const userId = ((formData.get("user_id") as string | null) || "").trim()
-  const status = ((formData.get("status") as string | null) || "").trim()
-  const currentStatus = ((formData.get("current_status") as string | null) || "").trim()
-
-  if (!userId || !status) {
+  const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+  const parsed = z
+    .object({
+      user_id: z.string().uuid(),
+      status: z.enum(["active", "blocked"]),
+      current_status: z.string().trim().optional(),
+    })
+    .safeParse({
+      user_id: formData.get("user_id"),
+      status: formData.get("status"),
+      current_status: formData.get("current_status"),
+    })
+  if (!parsed.success) {
     redirect("/dashboard/admin/users")
   }
+  const userId = parsed.data.user_id
+  const status = parsed.data.status
+  const { data: existingProfile, error: existingProfileError } = await supabase
+    .from("profiles")
+    .select("id, status")
+    .eq("id", userId)
+    .maybeSingle()
+  if (existingProfileError || !existingProfile?.id) {
+    redirect("/dashboard/admin/users?error=user_not_found")
+  }
 
-  await supabase.from("profiles").update({ status }).eq("id", userId)
+  const currentStatus = ((existingProfile as { status?: string | null }).status || "active").trim()
+  if (currentStatus === status) {
+    redirect("/dashboard/admin/users?status=status_saved")
+  }
 
-  if (currentStatus !== status) {
-    await supabase.from("admin_audit_logs").insert({
-      actor_user_id: user.id,
-      target_user_id: userId,
-      action: "status_change",
-      old_status: currentStatus || null,
-      new_status: status,
-    })
+  const { error: updateError } = await supabase.from("profiles").update({ status }).eq("id", userId)
+  if (updateError) {
+    redirect("/dashboard/admin/users?error=status_update_failed")
+  }
+
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+    actor_user_id: user.id,
+    target_user_id: userId,
+    action: "status_change",
+    old_status: currentStatus || null,
+    new_status: status,
+  })
+  if (auditError) {
+    await supabase.from("profiles").update({ status: currentStatus || null }).eq("id", userId)
+    redirect("/dashboard/admin/users?error=audit_log_failed")
   }
 
   redirect("/dashboard/admin/users?status=status_saved")
@@ -91,24 +128,27 @@ async function updateUserStatus(formData: FormData) {
 async function createUser(formData: FormData) {
   "use server"
 
-  const { user } = await getSessionUserAndProfile()
-
-  if (!user) {
-    redirect("/auth/login")
-  }
-
-  if (!can(user, "admin.settings.manage")) {
-    redirect("/dashboard")
-  }
-
-  const fullName = ((formData.get("full_name") as string | null) || "").trim()
-  const email = ((formData.get("email") as string | null) || "").trim()
-  const phoneNumber = ((formData.get("phone_number") as string | null) || "").trim()
-  const role = ((formData.get("role") as string | null) || "").trim()
-
-  if (!fullName || !email || !role) {
+  const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+  const parsed = z
+    .object({
+      full_name: z.string().trim().min(1).max(200),
+      email: z.string().trim().email().max(320),
+      phone_number: z.string().trim().max(50).optional(),
+      role: z.enum(["admin", "facility_admin", "doctor", "nurse", "pharmacist", "lab_tech", "cashier", "clerk", "receptionist"]),
+    })
+    .safeParse({
+      full_name: formData.get("full_name"),
+      email: formData.get("email"),
+      phone_number: formData.get("phone_number"),
+      role: formData.get("role"),
+    })
+  if (!parsed.success) {
     redirect("/dashboard/admin/users?error=invalid_input")
   }
+  const fullName = parsed.data.full_name
+  const email = parsed.data.email
+  const phoneNumber = parsed.data.phone_number ?? ""
+  const role = parsed.data.role
 
   const adminClient = getSupabaseAdminClient()
 
@@ -131,23 +171,32 @@ async function createUser(formData: FormData) {
     redirect("/dashboard/admin/users?error=create_failed")
   }
 
-  try {
-    // Ensure there is a matching profile row with role set for RBAC helpers.
-    const { error: profileError } = await adminClient.from("profiles").upsert(
-      {
-        id: data.user.id,
-        full_name: fullName,
-        email,
-        role,
-      },
-      { onConflict: "id" },
-    )
+  const { error: profileError } = await adminClient.from("profiles").upsert(
+    {
+      id: data.user.id,
+      full_name: fullName,
+      email,
+      role,
+    },
+    { onConflict: "id" },
+  )
+  if (profileError) {
+    await adminClient.auth.admin.deleteUser(data.user.id)
+    console.error("[v0] Error upserting profile for new staff user:", profileError.message || profileError)
+    redirect("/dashboard/admin/users?error=profile_create_failed")
+  }
 
-    if (profileError) {
-      console.error("[v0] Error upserting profile for new staff user:", profileError.message || profileError)
-    }
-  } catch (profileUpsertError) {
-    console.error("[v0] Unexpected error while upserting profile for new staff user:", profileUpsertError)
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
+    actor_user_id: user.id,
+    target_user_id: data.user.id,
+    action: "user_created",
+    new_role: role,
+    notes: `Created by admin with email ${email}`,
+  })
+  if (auditError) {
+    await adminClient.auth.admin.deleteUser(data.user.id)
+    await adminClient.from("profiles").delete().eq("id", data.user.id)
+    redirect("/dashboard/admin/users?error=audit_log_failed")
   }
 
   redirect("/dashboard/admin/users?status=user_created")

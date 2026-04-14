@@ -13,6 +13,13 @@ interface PasswordResetEventRow {
   email: string
   created_at: string
 }
+interface LoginAuditEventRow {
+  id: string
+  email: string | null
+  outcome: "success" | "failure"
+  failure_code: string | null
+  created_at: string
+}
 
 interface ResetActivityPageProps {
   searchParams?: Promise<{
@@ -24,6 +31,7 @@ interface ResetActivityPageProps {
 
 export const revalidate = 0
 const RECENT_RESET_SCAN_LIMIT = 200
+const RECENT_LOGIN_AUDIT_SCAN_LIMIT = 200
 
 export default async function ResetActivityPage({ searchParams }: ResetActivityPageProps) {
   const supabase = await createServerClient()
@@ -69,6 +77,35 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
     rows = rows.filter((row) => row.email.toLowerCase().includes(q))
   }
 
+  let loginAuditRows: LoginAuditEventRow[] = []
+  try {
+    let loginQuery = supabase
+      .from("auth_login_events")
+      .select("id, email, outcome, failure_code, created_at")
+      .order("created_at", { ascending: false })
+      .limit(RECENT_LOGIN_AUDIT_SCAN_LIMIT)
+
+    if (fromFilter) {
+      loginQuery = loginQuery.gte("created_at", fromFilter)
+    }
+    if (toFilter) {
+      loginQuery = loginQuery.lte("created_at", toFilter)
+    }
+
+    const { data: loginData, error: loginError } = await loginQuery
+    if (loginError) {
+      console.error("[v0] Error loading login audit events", loginError)
+    } else {
+      loginAuditRows = (loginData || []) as LoginAuditEventRow[]
+    }
+  } catch (error) {
+    console.error("[v0] Login audit query unavailable", error)
+  }
+
+  if (q) {
+    loginAuditRows = loginAuditRows.filter((row) => (row.email || "").toLowerCase().includes(q))
+  }
+
   const formatDateTime = (value: string | null) => {
     if (!value) return ""
     try {
@@ -98,6 +135,23 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
   }
 
   const thresholdExceeded = topEmail !== null && topCount > MAX_PER_EMAIL
+  const failedLoginCount = loginAuditRows.filter((row) => row.outcome === "failure").length
+  const successfulLoginCount = loginAuditRows.filter((row) => row.outcome === "success").length
+  const mostFrequentFailure = loginAuditRows
+    .filter((row) => row.outcome === "failure")
+    .reduce<Record<string, number>>((acc, row) => {
+      const key = row.failure_code || "unknown"
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {})
+  let topFailureCode: string | null = null
+  let topFailureCount = 0
+  for (const [code, count] of Object.entries(mostFrequentFailure)) {
+    if (count > topFailureCount) {
+      topFailureCode = code
+      topFailureCount = count
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -179,9 +233,9 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
       <Card>
         <CardHeader>
           <CardTitle>Summary</CardTitle>
-          <CardDescription>High-level view of reset requests in the current filter window.</CardDescription>
+          <CardDescription>High-level view of reset and login security activity in the current filter window.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-3 text-sm">
+        <CardContent className="grid gap-4 md:grid-cols-5 text-sm">
           <div>
             <p className="text-xs font-medium text-muted-foreground">Reset requests (window)</p>
             <p className="text-2xl font-bold">{totalInWindow}</p>
@@ -189,6 +243,14 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
           <div>
             <p className="text-xs font-medium text-muted-foreground">Unique emails</p>
             <p className="text-2xl font-bold">{uniqueEmails}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Login successes</p>
+            <p className="text-2xl font-bold">{successfulLoginCount}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Login failures</p>
+            <p className="text-2xl font-bold">{failedLoginCount}</p>
           </div>
           <div className="space-y-1">
             {thresholdExceeded ? (
@@ -199,6 +261,15 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
                 <p className="text-[11px] text-muted-foreground">
                   Consider reviewing this account in the audit logs or temporarily blocking it if activity looks
                   suspicious.
+                </p>
+              </>
+            ) : topFailureCode && topFailureCount > 5 ? (
+              <>
+                <p className="text-xs font-medium text-destructive">
+                  Frequent login failures: {topFailureCode} ({topFailureCount} events).
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  Review login audit events and investigate affected accounts if this continues.
                 </p>
               </>
             ) : (
@@ -237,6 +308,47 @@ export default async function ResetActivityPage({ searchParams }: ResetActivityP
                     <TableRow key={row.id} className="hover:bg-muted/50">
                       <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.email}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent login audit events</CardTitle>
+          <CardDescription>
+            Showing up to {RECENT_LOGIN_AUDIT_SCAN_LIMIT} matching events (success and failure outcomes).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Outcome</TableHead>
+                  <TableHead>Failure code</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loginAuditRows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
+                      No login audit events found. Run script `069_auth_login_events.sql` to enable login telemetry.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  loginAuditRows.map((row) => (
+                    <TableRow key={row.id} className="hover:bg-muted/50">
+                      <TableCell className="whitespace-nowrap text-xs">{formatDateTime(row.created_at)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{row.email || "-"}</TableCell>
+                      <TableCell className="text-xs font-medium">{row.outcome}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{row.failure_code || "-"}</TableCell>
                     </TableRow>
                   ))
                 )}

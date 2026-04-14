@@ -7,9 +7,11 @@ import { Separator } from "@/components/ui/separator"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
-import { ensureCan } from "@/lib/utils"
 import { logAuditEvent } from "@/lib/audit"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate, formatDateTime } from "@/lib/locale-format"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
   if (!relation) return null
@@ -22,6 +24,7 @@ export default async function PrescriptionDetailPage(props: {
 }) {
   const supabase = await createServerClient()
   const { id } = await props.params
+  const settings = await getGlobalSettings()
 
   const resolvedSearchParams = props.searchParams ? await props.searchParams : undefined
   const errorCode = resolvedSearchParams?.error
@@ -113,14 +116,6 @@ export default async function PrescriptionDetailPage(props: {
     }
   }
 
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
-  }
-
   const renderActor = (actorId: string) => {
     const actor = actorProfilesById.get(actorId)
     if (!actor) return actorId
@@ -133,54 +128,28 @@ export default async function PrescriptionDetailPage(props: {
   async function markInProgress() {
     "use server"
 
-    const supabase = await createServerClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle()
-
-    ensureCan(
-      { id: user.id, role: profile?.role ?? null, facility_id: null },
-      "pharmacy.manage",
-    )
+    const { supabase, user } = await requireServerActionPermission("pharmacy.manage")
 
     if (prescriptionRecord.status !== "pending") {
-      console.error("[v0] Cannot mark in progress: prescription is not pending", {
-        id,
-        status: prescriptionRecord.status,
-      })
       redirect(`/dashboard/prescriptions/${id}`)
     }
 
-    await supabase
-      .from("prescriptions")
-      .update({ status: "in_progress" })
-      .eq("id", id)
+    const rpcResult = await supabase.rpc("update_prescription_status_transactional", {
+      p_prescription_id: id,
+      p_new_status: "in_progress",
+      p_actor_user_id: user.id,
+      p_notes: null,
+    })
+    if (rpcResult.error) {
+      redirect(`/dashboard/prescriptions/${id}?error=status_update_failed`)
+    }
 
-    try {
-      await supabase.from("pharmacy_audit_logs").insert({
-        prescription_id: id,
-        actor_user_id: user.id,
-        action: "status_updated",
-        old_status: prescriptionRecord.status,
-        new_status: "in_progress",
-        notes: null,
-        metadata: {
-          patient_id: prescriptionRecord.patient_id,
-          prescription_number: prescriptionRecord.prescription_number,
-        },
-      })
-    } catch (auditError) {
-      console.error("[v0] Error logging prescription status update to in_progress:", auditError)
+    const rpcData = (rpcResult.data || null) as { ok?: boolean; code?: string; old_status?: string | null; new_status?: string | null } | null
+    if (!rpcData?.ok) {
+      if (rpcData?.code === "not_pending") {
+        redirect(`/dashboard/prescriptions/${id}`)
+      }
+      redirect(`/dashboard/prescriptions/${id}?error=status_update_failed`)
     }
 
     await logAuditEvent({
@@ -190,8 +159,8 @@ export default async function PrescriptionDetailPage(props: {
       metadata: {
         prescription_number: prescriptionRecord.prescription_number,
         patient_id: prescriptionRecord.patient_id,
-        old_status: prescriptionRecord.status,
-        new_status: "in_progress",
+        old_status: rpcData.old_status ?? prescriptionRecord.status,
+        new_status: rpcData.new_status ?? "in_progress",
       },
     })
 
@@ -201,165 +170,42 @@ export default async function PrescriptionDetailPage(props: {
   async function dispense() {
     "use server"
 
-    const supabase = await createServerClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    // Enforce that only pharmacy roles/admins can dispense
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle()
-
-    ensureCan(
-      { id: user.id, role: profile?.role ?? null, facility_id: null },
-      "pharmacy.manage",
-    )
-
-    // Do not allow dispensing if prescription is not pending
+    const { supabase, user } = await requireServerActionPermission("pharmacy.manage")
     if (prescriptionRecord.status !== "pending") {
-      console.error("[v0] Cannot dispense: prescription is not pending", {
-        id,
-        status: prescriptionRecord.status,
-      })
       redirect(`/dashboard/prescriptions/${id}?error=not_pending`)
     }
 
-    // Load prescription items
-    const { data: items, error: itemsError } = await supabase
-      .from("prescription_items")
-      .select("id, prescription_id, medication_name, quantity")
-      .eq("prescription_id", id)
+    const rpcResult = await supabase.rpc("dispense_prescription_transactional", {
+      p_prescription_id: id,
+      p_actor_user_id: user.id,
+      p_complete_visit: true,
+    })
 
-    if (itemsError || !items || items.length === 0) {
-      console.error("[v0] Cannot dispense: no prescription items found", itemsError)
-      redirect(`/dashboard/prescriptions/${id}?error=no_items`)
-    }
-
-    // Resolve medications by name
-    const medicationNames = Array.from(new Set(items.map((item) => item.medication_name).filter(Boolean)))
-
-    const { data: medications, error: medsError } = await supabase
-      .from("medications")
-      .select("id, name")
-      .in("name", medicationNames)
-
-    if (medsError || !medications) {
-      console.error("[v0] Cannot dispense: error loading medications", medsError)
-      redirect(`/dashboard/prescriptions/${id}`)
-    }
-
-    const medicationByName = Object.fromEntries(
-      medications.map((m: { id: string; name: string }) => [m.name, m]),
-    ) as Record<string, { id: string }>
-
-    // Aggregate required quantities per medication
-    const requiredByMedication: Record<string, number> = {}
-    for (const item of items) {
-      const med = medicationByName[item.medication_name]
-      if (!med) {
-        console.error("[v0] Cannot dispense: no medication record for", item.medication_name)
-        redirect(`/dashboard/prescriptions/${id}?error=medication_not_found`)
+    if (rpcResult.error) {
+      const rpcErrorCode = String((rpcResult.error as { code?: string } | null)?.code || "")
+      if (rpcErrorCode === "42883") {
+        redirect(`/dashboard/prescriptions/${id}?error=transactional_dependency_unavailable`)
       }
-      const quantity = Number(item.quantity || 0)
-      if (!Number.isFinite(quantity) || quantity <= 0) {
-        console.error("[v0] Cannot dispense: invalid quantity for item", {
-          prescription_id: id,
-          item,
-        })
-        redirect(`/dashboard/prescriptions/${id}?error=invalid_quantity`)
+      redirect(`/dashboard/prescriptions/${id}?error=dispense_failed`)
+    }
+
+    const rpcData = (rpcResult.data || null) as { ok?: boolean; code?: string; message?: string } | null
+    if (!rpcData?.ok) {
+      const code = String(rpcData?.code || "")
+      if (
+        code === "not_pending" ||
+        code === "no_items" ||
+        code === "medication_not_found" ||
+        code === "invalid_quantity" ||
+        code === "stock_error" ||
+        code === "insufficient_stock"
+      ) {
+        redirect(`/dashboard/prescriptions/${id}?error=${code}`)
       }
-      requiredByMedication[med.id] = (requiredByMedication[med.id] || 0) + quantity
-    }
-
-    const medicationIds = Object.keys(requiredByMedication)
-
-    const { data: stocks, error: stockError } = await supabase
-      .from("medication_stock")
-      .select("id, medication_id, quantity_on_hand")
-      .in("medication_id", medicationIds)
-
-    if (stockError || !stocks) {
-      console.error("[v0] Cannot dispense: error loading medication stock", stockError)
-      redirect(`/dashboard/prescriptions/${id}?error=stock_error`)
-    }
-
-    const stockByMedicationId: Record<string, (typeof stocks)[number]> = {}
-    for (const stock of stocks) {
-      stockByMedicationId[stock.medication_id] = stock
-    }
-
-    // Check stock availability
-    const shortages: { medication_id: string; required: number; available: number }[] = []
-    for (const [medId, requiredQty] of Object.entries(requiredByMedication)) {
-      const stock = stockByMedicationId[medId]
-      const available = Number(stock?.quantity_on_hand || 0)
-      if (!stock || available < requiredQty) {
-        shortages.push({ medication_id: medId, required: requiredQty, available })
+      if (code === "prescription_not_found") {
+        redirect(`/dashboard/prescriptions`)
       }
-    }
-
-    if (shortages.length > 0) {
-      console.error("[v0] Cannot dispense: insufficient stock for", shortages)
-      redirect(`/dashboard/prescriptions/${id}?error=insufficient_stock`)
-    }
-
-    // Deduct stock and record dispense events
-    for (const [medId, requiredQty] of Object.entries(requiredByMedication)) {
-      const stock = stockByMedicationId[medId]
-      const newQty = Number(stock.quantity_on_hand || 0) - requiredQty
-
-      await supabase
-        .from("medication_stock")
-        .update({ quantity_on_hand: newQty })
-        .eq("id", stock.id)
-    }
-
-    for (const item of items) {
-      const med = medicationByName[item.medication_name]
-      const stock = stockByMedicationId[med.id]
-      const quantity = Number(item.quantity || 0)
-
-      await supabase.from("dispense_events").insert({
-        prescription_id: id,
-        patient_id: prescriptionRecord.patient_id,
-        medication_id: med.id,
-        source_stock_id: stock.id,
-        quantity_dispensed: quantity,
-        dispensed_by: user.id,
-      })
-    }
-
-    await supabase
-      .from("prescriptions")
-      .update({
-        status: "dispensed",
-        dispensed_at: new Date().toISOString(),
-        dispensed_by: user.id,
-      })
-      .eq("id", id)
-
-    try {
-      await supabase.from("pharmacy_audit_logs").insert({
-        prescription_id: id,
-        actor_user_id: user.id,
-        action: "dispensed",
-        old_status: prescriptionRecord.status,
-        new_status: "dispensed",
-        notes: null,
-        metadata: {
-          patient_id: prescriptionRecord.patient_id,
-          prescription_number: prescriptionRecord.prescription_number,
-        },
-      })
-    } catch (auditError) {
-      console.error("[v0] Error logging prescription dispense:", auditError)
+      redirect(`/dashboard/prescriptions/${id}?error=dispense_failed`)
     }
 
     await logAuditEvent({
@@ -372,73 +218,34 @@ export default async function PrescriptionDetailPage(props: {
       },
     })
 
-    // Complete only the linked visit for this prescription.
-    if (prescriptionRecord.visit_id) {
-      try {
-        await supabase
-          .from("visits")
-          .update({ visit_status: "completed" })
-          .eq("id", prescriptionRecord.visit_id)
-          .eq("visit_status", "pharmacy_pending")
-      } catch (error) {
-        console.error("[v0] Error marking visit completed after dispense:", error)
-      }
-    }
-
     redirect(`/dashboard/prescriptions/${id}`)
   }
 
   async function cancelPrescription() {
     "use server"
 
-    const supabase = await createServerClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle()
-
-    ensureCan(
-      { id: user.id, role: profile?.role ?? null, facility_id: null },
-      "pharmacy.manage",
-    )
+    const { supabase, user } = await requireServerActionPermission("pharmacy.manage")
 
     if (prescriptionRecord.status !== "pending") {
-      console.error("[v0] Cannot cancel: prescription is not pending", {
-        id,
-        status: prescriptionRecord.status,
-      })
       redirect(`/dashboard/prescriptions/${id}`)
     }
 
-    await supabase
-      .from("prescriptions")
-      .update({ status: "cancelled" })
-      .eq("id", id)
+    const rpcResult = await supabase.rpc("update_prescription_status_transactional", {
+      p_prescription_id: id,
+      p_new_status: "cancelled",
+      p_actor_user_id: user.id,
+      p_notes: null,
+    })
+    if (rpcResult.error) {
+      redirect(`/dashboard/prescriptions/${id}?error=status_update_failed`)
+    }
 
-    try {
-      await supabase.from("pharmacy_audit_logs").insert({
-        prescription_id: id,
-        actor_user_id: user.id,
-        action: "cancelled",
-        old_status: prescriptionRecord.status,
-        new_status: "cancelled",
-        notes: null,
-        metadata: {
-          patient_id: prescriptionRecord.patient_id,
-          prescription_number: prescriptionRecord.prescription_number,
-        },
-      })
-    } catch (auditError) {
-      console.error("[v0] Error logging prescription cancellation:", auditError)
+    const rpcData = (rpcResult.data || null) as { ok?: boolean; code?: string; old_status?: string | null; new_status?: string | null } | null
+    if (!rpcData?.ok) {
+      if (rpcData?.code === "not_pending") {
+        redirect(`/dashboard/prescriptions/${id}`)
+      }
+      redirect(`/dashboard/prescriptions/${id}?error=status_update_failed`)
     }
 
     await logAuditEvent({
@@ -448,6 +255,8 @@ export default async function PrescriptionDetailPage(props: {
       metadata: {
         prescription_number: prescriptionRecord.prescription_number,
         patient_id: prescriptionRecord.patient_id,
+        old_status: rpcData.old_status ?? prescriptionRecord.status,
+        new_status: rpcData.new_status ?? "cancelled",
       },
     })
 
@@ -466,8 +275,24 @@ export default async function PrescriptionDetailPage(props: {
         return "One or more prescription item quantities are invalid."
       case "stock_error":
         return "Unable to load medication stock. Please try again."
+      case "stock_update_failed":
+        return "Failed to update medication stock. No dispensing changes were saved."
+      case "dispense_event_failed":
+        return "Failed to record one or more dispense events. No dispensing changes were saved."
+      case "prescription_update_failed":
+        return "Failed to update prescription status. No dispensing changes were saved."
+      case "visit_update_failed":
+        return "Failed to complete the linked visit. No dispensing changes were saved."
+      case "status_update_failed":
+        return "Failed to update prescription status. Please try again."
+      case "audit_log_failed":
+        return "Failed to write the pharmacy audit log. No workflow changes were saved."
       case "insufficient_stock":
         return "Insufficient stock to dispense all medications on this prescription."
+      case "transactional_dependency_unavailable":
+        return "Dispensing is temporarily unavailable because the transactional dispense function has not been deployed."
+      case "dispense_failed":
+        return "Dispensing failed and no changes were saved."
       default:
         return null
     }
@@ -557,7 +382,7 @@ export default async function PrescriptionDetailPage(props: {
             </div>
             <div>
               <p className="text-sm font-medium text-muted-foreground">Date Prescribed</p>
-              <p>{new Date(prescription.created_at).toLocaleDateString()}</p>
+              <p>{formatDate(prescription.created_at, settings)}</p>
             </div>
             {prescription.visit_id && (
               <div>
@@ -576,7 +401,7 @@ export default async function PrescriptionDetailPage(props: {
             {prescription.dispensed_at && (
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Dispensed On</p>
-                <p>{new Date(prescription.dispensed_at).toLocaleDateString()}</p>
+                <p>{formatDate(prescription.dispensed_at, settings)}</p>
               </div>
             )}
           </CardContent>
@@ -671,7 +496,7 @@ export default async function PrescriptionDetailPage(props: {
                     {log.notes && <p className="line-clamp-2">Notes: {log.notes}</p>}
                     <p>By: {renderActor(log.actor_user_id)}</p>
                   </div>
-                  <div className="whitespace-nowrap text-right">{formatDateTime(log.created_at)}</div>
+                  <div className="whitespace-nowrap text-right">{formatDateTime(log.created_at, settings)}</div>
                 </div>
               ))}
             </div>

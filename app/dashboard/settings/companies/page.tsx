@@ -8,30 +8,49 @@ import { Input } from "@/components/ui/input"
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 import { uploadCompanyLogo } from "@/lib/storage"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 async function saveCompany(formData: FormData) {
   "use server"
 
-  const supabase = await createServerClient()
-  const { user } = await getSessionUserAndProfile()
-
-  if (!user) {
-    redirect("/auth/login")
+  const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+  const parsed = z
+    .object({
+      name: z.string().trim().min(1).max(200),
+      address: z.string().trim().max(500).optional(),
+      contact_person: z.string().trim().max(200).optional(),
+      phone: z.string().trim().max(50).optional(),
+      email: z.string().trim().email().max(320).optional().or(z.literal("")),
+      terms_preset: z.string().trim().max(200).optional(),
+      terms: z.string().trim().max(1000).optional(),
+      industry_type: z.string().trim().max(100).optional(),
+      invoice_footer_text: z.string().trim().max(1000).optional(),
+    })
+    .safeParse({
+      name: formData.get("name"),
+      address: formData.get("address"),
+      contact_person: formData.get("contact_person"),
+      phone: formData.get("phone"),
+      email: formData.get("email"),
+      terms_preset: formData.get("terms_preset"),
+      terms: formData.get("terms"),
+      industry_type: formData.get("industry_type"),
+      invoice_footer_text: formData.get("invoice_footer_text"),
+    })
+  if (!parsed.success) {
+    redirect("/dashboard/settings/companies?error=missing_name")
   }
 
-  if (!can(user, "admin.export") && !can(user, "admin.settings.manage")) {
-    redirect("/dashboard")
-  }
-
-  const name = ((formData.get("name") as string | null) || "").trim()
-  const address = ((formData.get("address") as string | null) || "").trim() || null
-  const contactPerson = ((formData.get("contact_person") as string | null) || "").trim() || null
-  const phone = ((formData.get("phone") as string | null) || "").trim() || null
-  const email = ((formData.get("email") as string | null) || "").trim() || null
-  const termsPreset = ((formData.get("terms_preset") as string | null) || "").trim()
-  const termsCustom = ((formData.get("terms") as string | null) || "").trim() || null
-  const industryType = ((formData.get("industry_type") as string | null) || "").trim() || null
-  const invoiceFooterText = ((formData.get("invoice_footer_text") as string | null) || "").trim() || null
+  const name = parsed.data.name
+  const address = parsed.data.address || null
+  const contactPerson = parsed.data.contact_person || null
+  const phone = parsed.data.phone || null
+  const email = parsed.data.email || null
+  const termsPreset = parsed.data.terms_preset || ""
+  const termsCustom = parsed.data.terms || null
+  const industryType = parsed.data.industry_type || null
+  const invoiceFooterText = parsed.data.invoice_footer_text || null
 
   const logoUrlFromInput = ((formData.get("logo_url") as string | null) || "").trim() || null
   const logoFile = formData.get("logo_file") as File | null
@@ -46,13 +65,9 @@ async function saveCompany(formData: FormData) {
     }
   }
 
-  if (!name) {
-    redirect("/dashboard/settings/companies?error=missing_name")
-  }
-
   const terms = termsCustom || termsPreset || null
 
-  await supabase.from("companies").insert({
+  const createPayload = {
     name,
     address,
     contact_person: contactPerson,
@@ -62,13 +77,25 @@ async function saveCompany(formData: FormData) {
     logo_url: finalLogoUrl,
     industry_type: industryType,
     invoice_footer_text: invoiceFooterText,
-  })
+  }
+  const { data: createdCompany, error: createError } = await supabase
+    .from("companies")
+    .insert(createPayload)
+    .select("id")
+    .single()
+  if (createError || !createdCompany?.id) {
+    redirect("/dashboard/settings/companies?error=company_create_failed")
+  }
 
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     actor_user_id: user.id,
     target_user_id: user.id,
     action: "company_create",
   })
+  if (auditError) {
+    await supabase.from("companies").delete().eq("id", createdCompany.id)
+    redirect("/dashboard/settings/companies?error=audit_log_failed")
+  }
 
   redirect("/dashboard/settings/companies")
 }

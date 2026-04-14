@@ -7,6 +7,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { fetchInsuranceBatchDetails } from "@/lib/billing/insurance-batches"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatCurrency, formatDate } from "@/lib/locale-format"
+import { logAuditEvent } from "@/lib/audit"
+import { requireServerActionPermission } from "@/lib/server-action-security"
 
 export default async function InsuranceBillingBatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createServerClient()
@@ -15,26 +19,36 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
   if (!can(user, "billing.manage")) redirect("/dashboard")
 
   const { id } = await params
+  const settings = await getGlobalSettings()
 
   async function markSubmitted() {
     "use server"
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-    if (!user) redirect("/auth/login")
-    if (!can(user, "billing.manage")) redirect("/dashboard")
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
     await supabase
       .from("insurance_billing_batches")
       .update({ status: "submitted", submitted_at: new Date().toISOString() })
       .eq("id", id)
+    await logAuditEvent({
+      action: "insurance.batch_submitted",
+      entityType: "insurance_batch",
+      entityId: id,
+      user,
+      metadata: {
+        batch_id: id,
+      },
+      before: {
+        status: "draft",
+      },
+      after: {
+        status: "submitted",
+      },
+    })
     redirect(`/dashboard/billing/insurance/${id}`)
   }
 
   async function markPaid() {
     "use server"
-    const supabase = await createServerClient()
-    const { user } = await getSessionUserAndProfile()
-    if (!user) redirect("/auth/login")
-    if (!can(user, "billing.manage")) redirect("/dashboard")
+    const { supabase, user } = await requireServerActionPermission("billing.manage")
 
     const { data: currentBatch } = await supabase
       .from("insurance_billing_batches")
@@ -76,6 +90,25 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
       })
       .eq("id", id)
 
+    await logAuditEvent({
+      action: "insurance.batch_paid",
+      entityType: "insurance_batch",
+      entityId: id,
+      user,
+      metadata: {
+        batch_id: id,
+        invoice_count: invoiceIds.length,
+      },
+      before: {
+        status: batch.status,
+        paid_amount: batch.paid_amount,
+      },
+      after: {
+        status: "paid",
+        paid_amount: Number(currentBatch?.total_amount || 0),
+      },
+    })
+
     redirect(`/dashboard/billing/insurance/${id}`)
   }
 
@@ -107,6 +140,9 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
             <Link href="/dashboard/billing/insurance">Back to Insurance Billing</Link>
           </Button>
           <Button asChild variant="outline" size="sm">
+            <Link href={`/dashboard/billing/insurance/reconciliation?batch_id=${id}`}>Reconciliation</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
             <Link href={`/api/billing/insurance/${id}/pdf`} target="_blank">Download PDF</Link>
           </Button>
           {batch.status === "draft" ? (
@@ -125,8 +161,8 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
       <div className="grid gap-4 md:grid-cols-4">
         <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Status</CardTitle></CardHeader><CardContent><Badge variant={batch.status === "paid" ? "secondary" : "outline"}>{batch.status}</Badge></CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Period</CardTitle></CardHeader><CardContent><p className="text-sm">{batch.from_date} to {batch.to_date}</p></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Grand total</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold">Le {batch.total_amount.toLocaleString()}</p></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Balance</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold">Le {balance.toLocaleString()}</p></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Grand total</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold">{formatCurrency(batch.total_amount, settings)}</p></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Balance</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold">{formatCurrency(balance, settings)}</p></CardContent></Card>
       </div>
 
       {unlinkedBeneficiaries.length > 0 ? (
@@ -159,24 +195,24 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
                     {group.principalEmployeeName ? ` · Principal: ${group.principalEmployeeName}` : ""}
                   </p>
                 </div>
-                <p className="text-sm font-semibold">Le {group.total.toLocaleString()}</p>
+                <p className="text-sm font-semibold">{formatCurrency(group.total, settings)}</p>
               </div>
               <div className="mt-4 space-y-3">
                 {group.invoices.map((invoice) => (
                   <div key={invoice.invoiceId} className="rounded-md border bg-muted/20 px-3 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-medium">{invoice.invoiceNumber}</p>
-                      <p className="text-sm font-semibold">Le {invoice.amount.toLocaleString()}</p>
+                      <p className="text-sm font-semibold">{formatCurrency(invoice.amount, settings)}</p>
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
                       <span>{invoice.visitReference}</span>
-                      <span>{invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString("en-GB") : ""}</span>
+                      <span>{formatDate(invoice.createdAt, settings, { style: "numeric" })}</span>
                     </div>
                     <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                       {invoice.lineItems.length > 0 ? invoice.lineItems.map((item, index) => (
                         <div key={`${invoice.invoiceId}-${index}`} className="flex items-center justify-between gap-3">
                           <span>{item.description}</span>
-                          <span>{item.quantity} × Le {item.unit_price.toLocaleString()} = Le {item.amount.toLocaleString()}</span>
+                          <span>{item.quantity} × {formatCurrency(item.unit_price, settings)} = {formatCurrency(item.amount, settings)}</span>
                         </div>
                       )) : (
                         <p>No invoice line items recorded.</p>

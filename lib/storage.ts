@@ -1,5 +1,5 @@
-import { createClient as createSupabaseServerClient } from "@supabase/supabase-js"
 import type { SupabaseClient } from "@supabase/supabase-js"
+import { createAdminClient } from "@/lib/supabase/admin"
 
 const STORAGE_BUCKET = process.env.NEXT_PUBLIC_PATIENT_PHOTOS_BUCKET || "patient-photos"
 const HOSPITAL_LOGO_BUCKET = process.env.NEXT_PUBLIC_HOSPITAL_LOGO_BUCKET || "hospital-logos"
@@ -19,14 +19,7 @@ function resolvePhotoExtensionFromMimeType(mimeType: string): string | null {
 }
 
 export function getSupabaseAdminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!url || !serviceRoleKey) {
-    throw new Error("Supabase storage is not configured. Please set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
-  }
-
-  return createSupabaseServerClient(url, serviceRoleKey)
+  return createAdminClient()
 }
 
 export async function uploadPatientPhotoWithClient(

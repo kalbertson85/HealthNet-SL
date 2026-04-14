@@ -11,6 +11,17 @@ create table if not exists public.admin_audit_logs (
   created_at timestamptz not null default now()
 );
 
+alter table public.admin_audit_logs enable row level security;
+
+drop policy if exists "Admins can view admin audit logs" on public.admin_audit_logs;
+drop policy if exists "Admins can insert admin audit logs" on public.admin_audit_logs;
+
+create policy "Admins can view admin audit logs" on public.admin_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Admins can insert admin audit logs" on public.admin_audit_logs
+  for insert with check (auth.uid() is not null);
+
 comment on table public.admin_audit_logs is 'Audit log for admin actions on staff accounts (role and status changes).';
 comment on column public.admin_audit_logs.actor_user_id is 'Admin user who performed the action.';
 comment on column public.admin_audit_logs.target_user_id is 'Staff account that was modified.';

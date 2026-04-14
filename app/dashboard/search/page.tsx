@@ -5,6 +5,8 @@ import { Search, User, Calendar, Pill } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate } from "@/lib/locale-format"
 
 const SEARCH_RESULT_LIMIT = 10
 const SEARCH_RESULT_WINDOW = SEARCH_RESULT_LIMIT + 1
@@ -63,6 +65,7 @@ export default async function GlobalSearchPage({
   searchParams: Promise<{ q?: string }>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const {
     data: { user },
   } = await supabase.auth.getUser()
@@ -208,7 +211,7 @@ export default async function GlobalSearchPage({
                             {patient?.first_name} {patient?.last_name}
                           </CardTitle>
                           <CardDescription>
-                            {new Date(apt.appointment_date).toLocaleDateString()} at {apt.appointment_time}
+                            {formatDate(apt.appointment_date, settings)} at {apt.appointment_time}
                           </CardDescription>
                         </div>
                         <Badge>{apt.status}</Badge>
@@ -315,7 +318,7 @@ export default async function GlobalSearchPage({
                             {patient?.first_name} {patient?.last_name}
                           </CardTitle>
                           <CardDescription>
-                            {new Date(apt.appointment_date).toLocaleDateString()} at {apt.appointment_time}
+                            {formatDate(apt.appointment_date, settings)} at {apt.appointment_time}
                           </CardDescription>
                         </div>
                         <Badge>{apt.status}</Badge>

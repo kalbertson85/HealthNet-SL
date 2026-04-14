@@ -4,18 +4,11 @@ import { DashboardSidebar } from "@/components/dashboard-sidebar"
 import { DashboardHeader } from "@/components/dashboard-header"
 import { SessionIdleGuard } from "@/components/session-idle-guard"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
-import { createServerClient } from "@/lib/supabase/server"
+import { getGlobalSettings } from "@/lib/global-settings"
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, profile } = await getSessionUserAndProfile()
-
-  const supabase = await createServerClient()
-  const { data: settings } = await supabase
-    .from("hospital_settings")
-    .select("hospital_name, billing_logo_url")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle()
+  const settings = await getGlobalSettings()
 
   if (!user) {
     redirect("/auth/login")
@@ -28,8 +21,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <DashboardHeader
           user={user}
           profile={profile}
-          hospitalName={settings?.hospital_name ?? undefined}
-          hospitalLogoUrl={settings?.billing_logo_url ?? undefined}
+          hospitalName={settings.hospitalName}
+          hospitalLogoUrl={settings.billingLogoUrl ?? undefined}
         />
         <SessionIdleGuard />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>

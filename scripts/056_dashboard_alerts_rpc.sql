@@ -1,13 +1,18 @@
 -- 056_dashboard_alerts_rpc.sql
 -- Aggregate helper for dashboard alert counts and low-stock snapshot.
 
-CREATE OR REPLACE FUNCTION public.dashboard_home_alerts(
+DROP FUNCTION IF EXISTS public.dashboard_home_alerts(integer);
+
+CREATE FUNCTION public.dashboard_home_alerts(
   p_low_stock_limit integer DEFAULT 12
 )
 RETURNS TABLE (
   pending_lab_tests bigint,
   pending_radiology_requests bigint,
   outstanding_invoices bigint,
+  expiring_drugs bigint,
+  unbilled_visits bigint,
+  pending_discharges bigint,
   low_stock_items jsonb
 )
 LANGUAGE sql
@@ -34,6 +39,30 @@ AS $$
       FROM public.invoices
       WHERE GREATEST(COALESCE(total_amount, 0) - COALESCE(paid_amount, 0), 0) > 0
     ), 0) AS outstanding_invoices,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.medication_stock
+      WHERE expiry_date IS NOT NULL
+        AND expiry_date >= CURRENT_DATE
+        AND expiry_date <= CURRENT_DATE + INTERVAL '30 days'
+        AND COALESCE(quantity_on_hand, 0) > 0
+    ), 0) AS expiring_drugs,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.visits v
+      WHERE v.visit_status = 'billing_pending'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.invoices i
+          WHERE i.visit_id = v.id
+        )
+    ), 0) AS unbilled_visits,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.admissions
+      WHERE status = 'admitted'
+        AND discharge_date IS NULL
+    ), 0) AS pending_discharges,
     COALESCE(
       (
         SELECT jsonb_agg(

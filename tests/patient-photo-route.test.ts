@@ -12,6 +12,15 @@ vi.mock("../lib/supabase/middleware", () => ({
 
 vi.mock("../lib/storage", () => ({
   uploadPatientPhotoWithClient: (...args: unknown[]) => uploadPatientPhotoWithClientMock(...args),
+  getSupabaseAdminClient: () => ({
+    from() {
+      return {
+        async insert() {
+          return { error: null }
+        },
+      }
+    },
+  }),
 }))
 
 import { POST } from "../app/api/patients/photo/route"

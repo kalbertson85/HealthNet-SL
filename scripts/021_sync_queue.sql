@@ -22,9 +22,9 @@ DROP POLICY IF EXISTS "Users can enqueue sync operations" ON sync_queue;
 DROP POLICY IF EXISTS "Admins can view sync queue" ON sync_queue;
 
 CREATE POLICY "Users can enqueue sync operations" ON sync_queue
-  FOR INSERT WITH CHECK (true);
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL AND user_id = auth.uid());
 
 CREATE POLICY "Admins can view sync queue" ON sync_queue
-  FOR SELECT USING (true);
+  FOR SELECT USING (auth.uid() IS NOT NULL);
 
 COMMIT;

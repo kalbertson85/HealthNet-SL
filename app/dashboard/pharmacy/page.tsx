@@ -8,6 +8,8 @@ import { Activity, Pill } from "lucide-react"
 import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate } from "@/lib/locale-format"
 
 export const revalidate = 0
 
@@ -46,6 +48,7 @@ interface PharmacyPageSearchParams {
 
 export default async function PharmacyPage(props: { searchParams: Promise<PharmacyPageSearchParams> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const searchParams = await props.searchParams
   const query = (await searchParams).q?.toLowerCase().trim() || ""
@@ -257,7 +260,7 @@ export default async function PharmacyPage(props: { searchParams: Promise<Pharma
                     expiryClass =
                       "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
                   } else {
-                    expiryLabel = exp.toLocaleDateString()
+                    expiryLabel = formatDate(exp, settings)
                     expiryClass =
                       "inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700"
                   }
@@ -388,7 +391,7 @@ export default async function PharmacyPage(props: { searchParams: Promise<Pharma
                     Dr. {prescription.doctor_id ? doctorMap[prescription.doctor_id]?.full_name || "Unassigned" : "Unassigned"}
                   </td>
                   <td className="py-2 text-sm">
-                    {prescription.created_at ? new Date(prescription.created_at).toLocaleDateString() : ""}
+                    {prescription.created_at ? formatDate(prescription.created_at, settings) : ""}
                   </td>
                   <td className="py-2">
                     <Badge variant={prescription.status === "pending" ? "default" : "secondary"}>

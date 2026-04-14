@@ -13,6 +13,17 @@ create table if not exists public.billing_audit_logs (
   created_at timestamptz not null default timezone('utc'::text, now())
 );
 
+alter table public.billing_audit_logs enable row level security;
+
+drop policy if exists "Authenticated staff can view billing audit logs" on public.billing_audit_logs;
+drop policy if exists "Authenticated staff can insert billing audit logs" on public.billing_audit_logs;
+
+create policy "Authenticated staff can view billing audit logs" on public.billing_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Authenticated staff can insert billing audit logs" on public.billing_audit_logs
+  for insert with check (auth.uid() is not null);
+
 create index if not exists billing_audit_logs_invoice_id_idx on public.billing_audit_logs(invoice_id);
 create index if not exists billing_audit_logs_actor_user_id_idx on public.billing_audit_logs(actor_user_id);
 create index if not exists billing_audit_logs_created_at_idx on public.billing_audit_logs(created_at desc);

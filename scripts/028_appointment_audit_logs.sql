@@ -11,6 +11,17 @@ create table if not exists public.appointment_audit_logs (
   created_at timestamptz not null default now()
 );
 
+alter table public.appointment_audit_logs enable row level security;
+
+drop policy if exists "Authenticated staff can view appointment audit logs" on public.appointment_audit_logs;
+drop policy if exists "Authenticated staff can insert appointment audit logs" on public.appointment_audit_logs;
+
+create policy "Authenticated staff can view appointment audit logs" on public.appointment_audit_logs
+  for select using (auth.uid() is not null);
+
+create policy "Authenticated staff can insert appointment audit logs" on public.appointment_audit_logs
+  for insert with check (auth.uid() is not null);
+
 comment on table public.appointment_audit_logs is 'Audit log for appointment lifecycle events (created, status changes, cancellation).';
 comment on column public.appointment_audit_logs.actor_user_id is 'User who performed the appointment action.';
 comment on column public.appointment_audit_logs.action is 'Action type, e.g. created, status_updated, cancelled.';

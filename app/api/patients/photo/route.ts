@@ -6,6 +6,7 @@ import { enforceTrustedOrigin } from "@/lib/http/request-security"
 import { detectImageMimeType } from "@/lib/files/image-signature"
 import { resolveRequestId } from "@/lib/http/request-id"
 import { logApiRequestComplete, logApiRequestFailure, logApiRequestStart } from "@/lib/http/observability"
+import { logSystemAuditEvent } from "@/lib/audit"
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 const MAX_UPLOAD_REQUEST_BYTES = 6 * 1024 * 1024
@@ -86,7 +87,7 @@ export async function POST(request: NextRequest) {
 
     const { data: patient, error: patientError } = await supabase
       .from("patients")
-      .select("id, facility_id")
+      .select("id, facility_id, photo_url")
       .eq("id", patientId)
       .maybeSingle()
 
@@ -129,6 +130,32 @@ export async function POST(request: NextRequest) {
       logApiRequestFailure(request, "api.patients.photo.upload", logCtx, 500, error)
       return apiError(500, "patient_photo_update_failed", "Failed to update patient photo", request)
     }
+
+    const auditUser = user
+      ? {
+          id: user.id,
+          role: user.role ?? null,
+          facility_id: user.facility_id ?? null,
+        }
+      : null
+
+    await logSystemAuditEvent({
+      action: "patient.photo_updated",
+      entityType: "patient",
+      entityId: patientId,
+      user: auditUser,
+      facilityId: (patient.facility_id as string | null) ?? null,
+      metadata: {
+        patient_id: patientId,
+        source: "patient_photo_upload",
+      },
+      before: {
+        photo_url: (patient.photo_url as string | null) ?? null,
+      },
+      after: {
+        photo_url: photoUrl,
+      },
+    })
 
     logApiRequestComplete(request, "api.patients.photo.upload", logCtx, 200, {
       patient_id: patientId,

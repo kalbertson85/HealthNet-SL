@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
+import { normalizeGlobalSettings } from "@/lib/locale-format"
+import { GLOBAL_SETTINGS_SELECT } from "@/lib/global-settings"
+import { ROLES } from "@/lib/utils"
 
 const EXPORT_ROW_LIMIT = 5_000
 
@@ -35,7 +38,7 @@ function categoryLabel(cat: string): string {
       return "Lactating mothers"
     case "none":
     default:
-      return "Not FHC"
+      return "Not covered"
   }
 }
 
@@ -61,7 +64,12 @@ export async function GET(request: NextRequest) {
   if (limited) return limited
 
   try {
-    const { supabase } = await requirePermission(request, "admin.export")
+    const { supabase, user } = await requirePermission(request, "admin.export")
+    if (user?.role !== ROLES.ADMIN) {
+      return apiError(403, "forbidden", "Forbidden: only admin can export public coverage reports", request)
+    }
+    const { data: rawSettings } = await supabase.from("hospital_settings").select(GLOBAL_SETTINGS_SELECT).maybeSingle()
+    const settings = normalizeGlobalSettings(rawSettings || null)
 
   const { searchParams } = new URL(request.url)
   const fromParam = (searchParams.get("from") || "").trim()
@@ -212,7 +220,7 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename=fhc_activity_${new Date().toISOString()}.csv`,
+        "Content-Disposition": `attachment; filename=${settings.publicCoverageLabel.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_activity_${new Date().toISOString()}.csv`,
         "X-Export-Truncated": String(isVisitQueryTruncated || isServiceQueryTruncated),
         "X-Export-Row-Limit": String(EXPORT_ROW_LIMIT),
         ...NO_STORE_DOWNLOAD_HEADERS,
@@ -221,7 +229,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     const authResponse = toAuthErrorResponse(error, request)
     if (authResponse) return authResponse
-    console.error("[v0] Failed to export free health care report", error)
+    console.error("[v0] Failed to export public coverage report", error)
     return new NextResponse("Internal Server Error", { status: 500 })
   }
 }

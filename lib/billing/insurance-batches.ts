@@ -71,6 +71,152 @@ export function buildInsuranceBatchNumber() {
   return `INS-${stamp}`
 }
 
+export async function createInsuranceBillingBatchTransactional(
+  supabase: unknown,
+  args: {
+    batchNumber: string
+    companyId: string
+    fromDate: string
+    toDate: string
+    createdBy: string
+    invoiceIds: string[]
+  },
+): Promise<string> {
+  const db = supabase as {
+    rpc?: (fn: string, payload: Record<string, unknown>) => Promise<{ data: unknown; error: { message?: string; code?: string } | null }>
+    from: (table: string) => unknown
+  }
+
+  if (typeof db.rpc === "function") {
+    const { data, error } = await db.rpc("create_insurance_billing_batch", {
+      p_batch_number: args.batchNumber,
+      p_company_id: args.companyId,
+      p_from_date: args.fromDate,
+      p_to_date: args.toDate,
+      p_created_by: args.createdBy,
+      p_invoice_ids: args.invoiceIds,
+    })
+
+    if (!error) {
+      const batchId = typeof data === "string" ? data : null
+      if (!batchId) {
+        throw new Error("Failed to create insurance billing batch")
+      }
+      return batchId
+    }
+
+    const errorCode = String(error.code || "")
+    if (errorCode !== "42883") {
+      throw new Error(error.message || "Failed to create insurance billing batch")
+    }
+  }
+
+  const invoicesTable = db.from("invoices") as {
+    select: (query: string) => {
+      in: (column: string, values: string[]) => Promise<{ data: unknown[] | null; error: { message?: string } | null }>
+    }
+    update: (payload: Record<string, unknown>) => {
+      in: (column: string, values: string[]) => Promise<{ error: { message?: string } | null }>
+      eq: (column: string, value: string) => Promise<{ error: { message?: string } | null }>
+    }
+  }
+  const batchesTable = db.from("insurance_billing_batches") as {
+    insert: (payload: Record<string, unknown>) => {
+      select: (query: string) => {
+        single: () => Promise<{ data: { id?: string | null } | null; error: { message?: string } | null }>
+      }
+    }
+    delete: () => {
+      eq: (column: string, value: string) => Promise<{ error: { message?: string } | null }>
+    }
+  }
+  const batchItemsTable = db.from("insurance_billing_batch_items") as {
+    insert: (payload: Record<string, unknown>[]) => Promise<{ error: { message?: string } | null }>
+    delete: () => {
+      eq: (column: string, value: string) => Promise<{ error: { message?: string } | null }>
+    }
+  }
+
+  const { data: invoicesRaw, error: invoicesError } = await invoicesTable
+    .select("id, patient_id, visit_id, total_amount, paid_amount")
+    .in("id", args.invoiceIds)
+
+  if (invoicesError) {
+    throw new Error(invoicesError.message || "Failed to load eligible invoices")
+  }
+
+  const invoices = ((invoicesRaw || []) as Array<{
+    id: string
+    patient_id?: string | null
+    visit_id?: string | null
+    total_amount?: number | string | null
+    paid_amount?: number | string | null
+  }>)
+    .map((invoice) => {
+      const totalAmount = Number(invoice.total_amount ?? 0)
+      const paidAmount = Number(invoice.paid_amount ?? 0)
+      return {
+        ...invoice,
+        balance: Math.max(totalAmount - paidAmount, 0),
+      }
+    })
+    .filter((invoice) => invoice.balance > 0)
+
+  if (invoices.length === 0) {
+    throw new Error("No eligible invoices found for insurance batch creation")
+  }
+
+  const totalAmount = invoices.reduce((sum, invoice) => sum + invoice.balance, 0)
+
+  const { data: batchRow, error: batchInsertError } = await batchesTable
+    .insert({
+      batch_number: args.batchNumber,
+      company_id: args.companyId,
+      from_date: args.fromDate,
+      to_date: args.toDate,
+      status: "draft",
+      subtotal: totalAmount,
+      total_amount: totalAmount,
+      paid_amount: 0,
+      created_by: args.createdBy,
+    })
+    .select("id")
+    .single()
+
+  if (batchInsertError || !batchRow?.id) {
+    throw new Error(batchInsertError?.message || "Failed to create insurance billing batch")
+  }
+
+  const batchId = batchRow.id as string
+
+  const { error: itemsError } = await batchItemsTable.insert(
+    invoices.map((invoice) => ({
+      batch_id: batchId,
+      invoice_id: invoice.id,
+      patient_id: invoice.patient_id ?? null,
+      visit_id: invoice.visit_id ?? null,
+      amount: invoice.balance,
+    })),
+  )
+
+  if (itemsError) {
+    await batchesTable.delete().eq("id", batchId)
+    throw new Error(itemsError.message || "Failed to create insurance billing batch items")
+  }
+
+  const { error: invoiceUpdateError } = await invoicesTable
+    .update({ insurance_batch_id: batchId })
+    .in("id", invoices.map((invoice) => invoice.id))
+
+  if (invoiceUpdateError) {
+    await batchItemsTable.delete().eq("batch_id", batchId)
+    await batchesTable.delete().eq("id", batchId)
+    throw new Error(invoiceUpdateError.message || "Failed to link invoices to insurance batch")
+  }
+
+  return batchId
+}
+
 export async function fetchEligibleInsuranceInvoices(
   supabase: unknown,
   companyId: string,

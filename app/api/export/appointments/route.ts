@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { enforceTrustedOriginOrReferer } from "@/lib/http/request-security"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
+import { ROLES } from "@/lib/utils"
 
 const EXPORT_ROW_LIMIT = 5_000
 
@@ -13,8 +15,14 @@ export async function GET(request: NextRequest) {
   })
   if (limited) return limited
 
+  const originGuard = enforceTrustedOriginOrReferer(request)
+  if (originGuard) return originGuard
+
   try {
-    const { supabase } = await requirePermission(request, "admin.export")
+    const { supabase, user } = await requirePermission(request, "admin.export")
+    if (user?.role !== ROLES.ADMIN) {
+      return apiError(403, "forbidden", "Only admin can run full appointment exports", request)
+    }
 
     const { data: fetchedAppointments, error } = await supabase
       .from("appointments")

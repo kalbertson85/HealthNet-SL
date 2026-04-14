@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableCard } from "@/components/table-card"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDateTime } from "@/lib/locale-format"
 
 const SURGERY_LIST_LIMIT = 50
 
@@ -29,6 +31,7 @@ interface SurgeryRow {
 
 export default async function SurgeryPage() {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const { user, profile } = await getSessionUserAndProfile()
 
   if (!user) {
@@ -69,7 +72,7 @@ export default async function SurgeryPage() {
       <Card>
         <CardHeader>
           <CardTitle>Recent Surgeries</CardTitle>
-          <CardDescription>Procedures recorded in the system, with Free Health Care and facility context.</CardDescription>
+          <CardDescription>Procedures recorded in the system, with public coverage and facility context.</CardDescription>
         </CardHeader>
         <CardContent>
           {(data?.length || 0) >= SURGERY_LIST_LIMIT ? (
@@ -123,7 +126,7 @@ export default async function SurgeryPage() {
                         <div className="flex flex-col gap-1 text-xs">
                           {row.visits?.is_free_health_care && (
                             <Badge variant="secondary" className="w-fit text-[10px]">
-                              Free Health Care
+                              {settings.publicCoverageLabel}
                             </Badge>
                           )}
                           {row.visits?.facilities?.name && (
@@ -137,10 +140,10 @@ export default async function SurgeryPage() {
                       <TableCell>
                         <div className="flex flex-col text-xs text-muted-foreground">
                           {row.scheduled_at && (
-                            <span>Scheduled: {new Date(row.scheduled_at).toLocaleString()}</span>
+                            <span>Scheduled: {formatDateTime(row.scheduled_at, settings)}</span>
                           )}
-                          {row.started_at && <span>Started: {new Date(row.started_at).toLocaleString()}</span>}
-                          {row.ended_at && <span>Ended: {new Date(row.ended_at).toLocaleString()}</span>}
+                          {row.started_at && <span>Started: {formatDateTime(row.started_at, settings)}</span>}
+                          {row.ended_at && <span>Ended: {formatDateTime(row.ended_at, settings)}</span>}
                         </div>
                       </TableCell>
                       <TableCell>

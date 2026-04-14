@@ -8,6 +8,8 @@ import { Edit, User, Calendar, Clock, ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { ensureActiveVisitForPatient, ensureQueueEntryForVisit } from "@/lib/visit-flow"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface AppointmentAuditRow {
   id: string
@@ -24,9 +26,17 @@ interface ActorProfile {
   role: string | null
 }
 
-export default async function AppointmentDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function AppointmentDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams?: Promise<{ error?: string }>
+}) {
   const supabase = await createServerClient()
   const { id } = await params
+  const resolvedSearchParams = searchParams ? await searchParams : undefined
+  const errorCode = resolvedSearchParams?.error
 
   const { data: appointment, error: appointmentError } = await supabase
     .from("appointments")
@@ -113,18 +123,33 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
   async function updateStatus(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
-    const status = formData.get("status") as string
+    const { supabase, user } = await requireServerActionPermission("appointments.manage")
+    const parsed = z
+      .object({
+        status: z.enum(["scheduled", "confirmed", "completed", "cancelled"]),
+      })
+      .safeParse({
+        status: formData.get("status"),
+      })
+    if (!parsed.success) {
+      redirect(`/dashboard/appointments/${id}`)
+    }
+    const status = parsed.data.status
     const oldStatus = formData.get("old_status") as string | null
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
+    const { data: currentAppointment } = await supabase
+      .from("appointments")
+      .select("id, status")
+      .eq("id", id)
+      .maybeSingle()
+    if (!currentAppointment) {
+      redirect("/dashboard/appointments")
+    }
+    if (["completed", "cancelled"].includes((currentAppointment.status as string) ?? "")) {
+      redirect(`/dashboard/appointments/${id}`)
     }
 
+    const previousStatus = (currentAppointment.status as string | null) ?? null
     const { data: updatedAppointment, error } = await supabase
       .from("appointments")
       .update({ status })
@@ -134,23 +159,23 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
 
     if (error) {
       console.error("[v0] Error updating appointment status:", error.message || error)
-      throw new Error("Failed to update appointment status")
+      redirect(`/dashboard/appointments/${id}?error=status_update_failed`)
     }
 
-    try {
-      if (updatedAppointment) {
-        await supabase.from("appointment_audit_logs").insert({
-          appointment_id: updatedAppointment.id,
-          actor_user_id: user!.id,
-          patient_id: updatedAppointment.patient_id,
-          doctor_id: updatedAppointment.doctor_id,
-          action: status === "cancelled" ? "cancelled" : "status_updated",
-          old_status: oldStatus,
-          new_status: status,
-        })
+    if (updatedAppointment) {
+      const { error: auditError } = await supabase.from("appointment_audit_logs").insert({
+        appointment_id: updatedAppointment.id,
+        actor_user_id: user.id,
+        patient_id: updatedAppointment.patient_id,
+        doctor_id: updatedAppointment.doctor_id,
+        action: status === "cancelled" ? "cancelled" : "status_updated",
+        old_status: oldStatus ?? previousStatus,
+        new_status: status,
+      })
+      if (auditError) {
+        await supabase.from("appointments").update({ status: previousStatus }).eq("id", id)
+        redirect(`/dashboard/appointments/${id}?error=audit_log_failed`)
       }
-    } catch (auditError) {
-      console.error("[v0] Error logging appointment status change:", auditError)
     }
 
     // When an appointment is marked completed, ensure a visit exists so it can flow into doctor and billing
@@ -171,6 +196,8 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
         }
       } catch (visitCreateError) {
         console.error("[v0] Unexpected error while ensuring visit for completed appointment:", visitCreateError)
+        await supabase.from("appointments").update({ status: previousStatus }).eq("id", id)
+        redirect(`/dashboard/appointments/${id}?error=workflow_sync_failed`)
       }
     }
 
@@ -218,8 +245,26 @@ export default async function AppointmentDetailPage({ params }: { params: Promis
 
   const isTerminalStatus = appointment.status === "completed" || appointment.status === "cancelled"
 
+  const errorMessage = (() => {
+    switch (errorCode) {
+      case "status_update_failed":
+        return "Appointment status could not be updated."
+      case "audit_log_failed":
+        return "Status update was rolled back because audit logging failed."
+      case "workflow_sync_failed":
+        return "Status update was rolled back because the downstream visit workflow sync failed."
+      default:
+        return null
+    }
+  })()
+
   return (
     <div className="space-y-8">
+      {errorMessage && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {errorMessage}
+        </div>
+      )}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Button asChild variant="outline" size="sm">

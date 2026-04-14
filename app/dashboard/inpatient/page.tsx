@@ -10,6 +10,8 @@ import { TableCard } from "@/components/table-card"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { buildFollowUpAppointmentHref } from "@/lib/patient-flow"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate } from "@/lib/locale-format"
 
 const PAGE_SIZE = 25
 const PAGE_SCAN_LIMIT = 250
@@ -108,6 +110,7 @@ function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
 
 export default async function InpatientPage(props: { searchParams?: Promise<{ page?: string }> }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const { user, profile } = await getSessionUserAndProfile()
 
@@ -279,7 +282,7 @@ export default async function InpatientPage(props: { searchParams?: Promise<{ pa
                         <div className="flex flex-col gap-1 text-xs">
                           {normalizeSingle(admission.visits)?.is_free_health_care && (
                             <Badge variant="secondary" className="w-fit text-[11px]">
-                              Free Health Care
+                              {settings.publicCoverageLabel}
                             </Badge>
                           )}
                           {normalizeSingle(normalizeSingle(admission.visits)?.facilities)?.name && (
@@ -292,7 +295,7 @@ export default async function InpatientPage(props: { searchParams?: Promise<{ pa
                           )}
                         </div>
                       </TableCell>
-                      <TableCell>{new Date(admission.admission_date).toLocaleDateString()}</TableCell>
+                      <TableCell>{formatDate(admission.admission_date, settings)}</TableCell>
                       <TableCell>Dr. {normalizeSingle(admission.profiles)?.full_name}</TableCell>
                       <TableCell>
                         <Badge variant={admission.status === "active" ? "default" : "secondary"}>

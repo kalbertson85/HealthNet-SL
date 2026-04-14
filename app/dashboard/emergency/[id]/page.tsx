@@ -8,6 +8,8 @@ import Link from "next/link"
 import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { PatientWorkflowPanel } from "@/components/patient-workflow-panel"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate, formatDateTime } from "@/lib/locale-format"
 
 const triageLevels = {
   red: { label: "Critical", color: "bg-red-600", textColor: "text-red-600" },
@@ -42,6 +44,7 @@ export default async function EmergencyDetailPage({
   const supabase = await createServerClient()
   const { id } = await params
   const { user, profile } = await getSessionUserAndProfile()
+  const settings = await getGlobalSettings()
 
   if (!user) {
     redirect("/auth/login")
@@ -124,14 +127,6 @@ export default async function EmergencyDetailPage({
     }
   }
 
-  const formatDateTime = (value: string) => {
-    try {
-      return new Date(value).toLocaleString()
-    } catch {
-      return value
-    }
-  }
-
   const renderActor = (actorId: string) => {
     const actor = actorProfilesById.get(actorId)
     if (!actor) return actorId
@@ -188,7 +183,7 @@ export default async function EmergencyDetailPage({
               <p className="text-xs font-medium text-muted-foreground">Date of birth</p>
               <p>
                 {triage.patient?.date_of_birth
-                  ? new Date(triage.patient.date_of_birth).toLocaleDateString()
+                  ? formatDate(triage.patient.date_of_birth, settings)
                   : "N/A"}
               </p>
             </div>
@@ -211,7 +206,7 @@ export default async function EmergencyDetailPage({
             <div className="flex items-center gap-2 text-muted-foreground">
               <Clock className="h-4 w-4" />
               <span>
-                Arrived at {arrivalTime ? arrivalTime.toLocaleString() : "Unknown"}
+                Arrived at {arrivalTime ? formatDateTime(arrivalTime, settings) : "Unknown"}
                 {waitMinutes != null && ` · ${waitMinutes} min ago`}
               </span>
             </div>
@@ -309,7 +304,7 @@ export default async function EmergencyDetailPage({
                     )}
                     <p>By: {renderActor(log.actor_user_id)}</p>
                   </div>
-                  <div className="whitespace-nowrap text-right">{formatDateTime(log.created_at)}</div>
+                  <div className="whitespace-nowrap text-right">{formatDateTime(log.created_at, settings)}</div>
                 </div>
               ))}
             </div>

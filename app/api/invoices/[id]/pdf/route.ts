@@ -1,9 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from "pdf-lib"
-import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
-import { enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { enforceTrustedOriginOrReferer } from "@/lib/http/request-security"
 import { NO_STORE_DOWNLOAD_HEADERS } from "@/lib/http/headers"
 import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
+import {
+  formatCurrency as formatLocalizedCurrency,
+  formatDateTime as formatLocalizedDateTime,
+  formatFacilityAddress,
+  type GlobalSettingsInput,
+} from "@/lib/locale-format"
+import { createTranslator } from "@/lib/i18n"
+import { requireRole, requireFacilityAccess, parseUuidParam, resolveAuthError } from "@/lib/auth-guard"
+import { ROLES } from "@/lib/utils"
 
 const PAGE_MARGIN = 40
 const SECTION_GAP = 18
@@ -42,10 +51,12 @@ type InvoiceRecord = {
   company_id?: string | null
   created_by?: string | null
   notes?: string | null
+  facility_id?: string | null
   visits?: {
     id?: string | null
     diagnosis?: string | null
     assigned_company_id?: string | null
+    facility_id?: string | null
     patients?: {
       full_name?: string | null
       patient_number?: string | null
@@ -71,33 +82,25 @@ type HospitalSettings = {
   hospital_name?: string | null
   billing_logo_url?: string | null
   address?: string | null
+  address_line_1?: string | null
+  address_line_2?: string | null
+  city?: string | null
+  state_or_province?: string | null
+  postal_code?: string | null
+  country?: string | null
   phone?: string | null
   email?: string | null
+  currency_code?: string | null
+  locale?: string | null
+  timezone?: string | null
+  date_format?: string | null
+  time_format?: string | null
+  language?: string | null
 } | null
 
 type PageState = {
   page: PDFPage
   y: number
-}
-
-function formatCurrency(value: number): string {
-  return `Le ${new Intl.NumberFormat("en-SL", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value)}`
-}
-
-function formatDateTime(value?: string | null): string {
-  if (!value) return ""
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ""
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date)
 }
 
 function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
@@ -260,9 +263,13 @@ export async function GET(
   })
   if (limited) return limited
 
+  const originGuard = enforceTrustedOriginOrReferer(request)
+  if (originGuard) return originGuard
+
   try {
-    const { supabase } = await requirePermission(request, "billing.manage")
-    const { id } = await params
+    const { supabase, user } = await requireRole([ROLES.ADMIN, ROLES.FACILITY_ADMIN, ROLES.CASHIER])
+    const { id: rawId } = await params
+    const id = parseUuidParam(rawId, "invoice id")
 
     const { data: invoice, error } = await supabase
       .from("invoices")
@@ -272,6 +279,7 @@ export async function GET(
            id,
            diagnosis,
            assigned_company_id,
+           facility_id,
            patients (full_name, patient_number, insurance_type, insurance_card_number, insurance_expiry_date, insurance_mobile)
          )`,
       )
@@ -283,6 +291,7 @@ export async function GET(
     }
 
     const typedInvoice = invoice as InvoiceRecord
+    requireFacilityAccess({ user, supabase }, typedInvoice.visits?.facility_id ?? typedInvoice.facility_id ?? null)
 
     const companyIdForInvoice = typedInvoice.company_id ?? typedInvoice.visits?.assigned_company_id ?? null
 
@@ -296,13 +305,14 @@ export async function GET(
 
     const { data: settings } = await supabase
       .from("hospital_settings")
-      .select("hospital_name, billing_logo_url, address, phone, email")
+      .select("hospital_name, billing_logo_url, address, address_line_1, address_line_2, city, state_or_province, postal_code, country, phone, email, currency_code, locale, timezone, date_format, time_format, language")
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle()
 
     const typedCompany = company as CompanyRecord
     const typedSettings = settings as HospitalSettings
+    const t = createTranslator(typedSettings?.language)
     const payerType = (typedInvoice.payer_type || "patient").toLowerCase()
     const coverageMap =
       payerType === "company" && companyIdForInvoice && typedInvoice.patient_id
@@ -317,7 +327,7 @@ export async function GET(
     let y = state.y
 
     const hospitalName = typedSettings?.hospital_name?.trim() || "Hospital"
-    const createdAt = formatDateTime(typedInvoice.created_at)
+    const createdAt = formatLocalizedDateTime(typedInvoice.created_at, typedSettings as GlobalSettingsInput)
     const patient = typedInvoice.visits?.patients ?? null
     const patientName = patient?.full_name?.trim() || "Unknown patient"
     const patientNumber = patient?.patient_number?.trim() || "Not assigned"
@@ -362,14 +372,14 @@ export async function GET(
     const headerLeft = PAGE_MARGIN + (logoHeight > 0 ? 126 : 0)
     drawTextLine(page, hospitalName, headerLeft, headerTop - 8, boldFont, 14)
     let hospitalInfoY = headerTop - 26
-    for (const line of [typedSettings?.address, typedSettings?.phone ? `Tel: ${typedSettings.phone}` : null, typedSettings?.email ? `Email: ${typedSettings.email}` : null].filter(Boolean) as string[]) {
+    for (const line of [formatFacilityAddress(typedSettings as GlobalSettingsInput), typedSettings?.phone ? `Tel: ${typedSettings.phone}` : null, typedSettings?.email ? `Email: ${typedSettings.email}` : null].filter(Boolean) as string[]) {
       drawTextLine(page, line, headerLeft, hospitalInfoY, regularFont, FONT_SIZE_BODY, MUTED_TEXT)
       hospitalInfoY -= 13
     }
 
-    drawTextLine(page, "INVOICE", 430, headerTop - 8, boldFont, FONT_SIZE_HEADING, BRAND_BLUE)
-    drawTextLine(page, `Status: ${invoiceStatus}`, 430, headerTop - 30, boldFont, FONT_SIZE_BODY)
-    drawTextLine(page, `Invoice #: ${typedInvoice.invoice_number || typedInvoice.id}`, 430, headerTop - 44, regularFont, FONT_SIZE_BODY)
+    drawTextLine(page, t("pdf.invoice", "Invoice").toUpperCase(), 430, headerTop - 8, boldFont, FONT_SIZE_HEADING, BRAND_BLUE)
+    drawTextLine(page, `${t("pdf.status", "Status")}: ${invoiceStatus}`, 430, headerTop - 30, boldFont, FONT_SIZE_BODY)
+    drawTextLine(page, `${t("pdf.invoiceNumber", "Invoice #")}: ${typedInvoice.invoice_number || typedInvoice.id}`, 430, headerTop - 44, regularFont, FONT_SIZE_BODY)
     if (createdAt) {
       drawTextLine(page, createdAt, 430, headerTop - 58, regularFont, FONT_SIZE_BODY, MUTED_TEXT)
     }
@@ -386,16 +396,16 @@ export async function GET(
     const boxWidth = (page.getSize().width - PAGE_MARGIN * 2 - 16) / 2
     const billToRows = payerType === "company"
       ? [
-          { label: "Company", value: typedCompany?.name?.trim() || "Company-linked billing" },
-          { label: "Contact", value: [typedCompany?.contact_person, typedCompany?.phone].filter(Boolean).join(" · ") || typedCompany?.email || "-" },
-          { label: "Address", value: typedCompany?.address?.trim() || "-" },
-          { label: "Email", value: typedCompany?.email?.trim() || "-" },
+          { label: t("pdf.provider", "Provider"), value: typedCompany?.name?.trim() || "Company-linked billing" },
+          { label: t("pdf.contact", "Contact"), value: [typedCompany?.contact_person, typedCompany?.phone].filter(Boolean).join(" · ") || typedCompany?.email || "-" },
+          { label: t("pdf.address", "Address"), value: typedCompany?.address?.trim() || "-" },
+          { label: t("settings.email", "Email"), value: typedCompany?.email?.trim() || "-" },
         ]
       : [
-          { label: "Patient", value: patientName },
+          { label: t("pdf.patient", "Patient"), value: patientName },
           { label: "Patient #", value: patientNumber },
           { label: "Payer", value: payerType === "patient" ? "Patient self-pay" : payerType || "Patient" },
-          { label: "Company", value: typedCompany?.name?.trim() || "-" },
+          { label: t("pdf.provider", "Provider"), value: typedCompany?.name?.trim() || "-" },
         ]
 
     const patientRows = [
@@ -408,17 +418,17 @@ export async function GET(
       },
     ]
 
-    const leftBottom = drawInfoBox(page, PAGE_MARGIN, y, boxWidth, payerType === "company" ? "Bill To" : "Billing Details", billToRows, {
+    const leftBottom = drawInfoBox(page, PAGE_MARGIN, y, boxWidth, payerType === "company" ? t("pdf.billTo", "Bill To") : "Billing Details", billToRows, {
       regular: regularFont,
       bold: boldFont,
     })
-    const rightBottom = drawInfoBox(page, PAGE_MARGIN + boxWidth + 16, y, boxWidth, "Patient", patientRows, {
+    const rightBottom = drawInfoBox(page, PAGE_MARGIN + boxWidth + 16, y, boxWidth, t("pdf.patient", "Patient"), patientRows, {
       regular: regularFont,
       bold: boldFont,
     })
     y = Math.min(leftBottom, rightBottom) - SECTION_GAP
 
-    y = drawSectionTitle(page, "Visit Information", PAGE_MARGIN, y, boldFont)
+    y = drawSectionTitle(page, t("pdf.visitInformation", "Visit Information"), PAGE_MARGIN, y, boldFont)
     y = drawKeyValueLines(
       page,
       payerType === "company"
@@ -470,7 +480,7 @@ export async function GET(
       total: PAGE_MARGIN + fullWidth - 60,
     }
 
-    drawSectionTitle(page, "Invoice Items", PAGE_MARGIN, y, boldFont)
+    drawSectionTitle(page, t("pdf.invoiceItems", "Invoice Items"), PAGE_MARGIN, y, boldFont)
     page.drawRectangle({
       x: PAGE_MARGIN,
       y: y - 24,
@@ -481,9 +491,9 @@ export async function GET(
       borderWidth: 1,
     })
     drawTextLine(page, "Description", colX.description, y - 16, boldFont, FONT_SIZE_LABEL)
-    drawTextLine(page, "Qty", colX.qty, y - 16, boldFont, FONT_SIZE_LABEL)
-    drawTextLine(page, "Unit", colX.unit, y - 16, boldFont, FONT_SIZE_LABEL)
-    drawTextLine(page, "Total", colX.total, y - 16, boldFont, FONT_SIZE_LABEL)
+    drawTextLine(page, t("pdf.qty", "Qty"), colX.qty, y - 16, boldFont, FONT_SIZE_LABEL)
+    drawTextLine(page, t("pdf.unit", "Unit"), colX.unit, y - 16, boldFont, FONT_SIZE_LABEL)
+    drawTextLine(page, t("pdf.total", "Total"), colX.total, y - 16, boldFont, FONT_SIZE_LABEL)
     y -= 24
 
     if (!items.length) {
@@ -510,8 +520,8 @@ export async function GET(
         const lineTotal = item.quantity * item.unitPrice
         drawTextLine(page, item.description, colX.description, y - 14, regularFont, FONT_SIZE_BODY)
         drawTextLine(page, String(item.quantity), colX.qty, y - 14, regularFont, FONT_SIZE_BODY)
-        drawTextLine(page, formatCurrency(item.unitPrice), colX.unit, y - 14, regularFont, FONT_SIZE_BODY)
-        drawTextLine(page, formatCurrency(lineTotal), colX.total, y - 14, regularFont, FONT_SIZE_BODY)
+        drawTextLine(page, formatLocalizedCurrency(item.unitPrice, typedSettings as GlobalSettingsInput), colX.unit, y - 14, regularFont, FONT_SIZE_BODY)
+        drawTextLine(page, formatLocalizedCurrency(lineTotal, typedSettings as GlobalSettingsInput), colX.total, y - 14, regularFont, FONT_SIZE_BODY)
         y -= rowHeight
       }
     }
@@ -529,19 +539,19 @@ export async function GET(
       color: LIGHT_FILL,
     })
     const totalsRows = [
-      ["Subtotal", formatCurrency(subtotal)],
-      ["Tax", formatCurrency(tax)],
-      ["Amount paid", formatCurrency(paidAmount)],
-      ["Balance", formatCurrency(balance)],
+      [t("pdf.subtotal", "Subtotal"), formatLocalizedCurrency(subtotal, typedSettings as GlobalSettingsInput)],
+      [t("pdf.tax", "Tax"), formatLocalizedCurrency(tax, typedSettings as GlobalSettingsInput)],
+      [t("pdf.amountPaid", "Amount paid"), formatLocalizedCurrency(paidAmount, typedSettings as GlobalSettingsInput)],
+      [t("pdf.balance", "Balance"), formatLocalizedCurrency(balance, typedSettings as GlobalSettingsInput)],
     ] as const
     let totalsY = y - 16
     for (const [label, value] of totalsRows) {
-      drawTextLine(page, label, totalsX + 12, totalsY, label === "Balance" ? boldFont : regularFont, FONT_SIZE_BODY)
-      drawTextLine(page, value, totalsX + 120, totalsY, label === "Balance" ? boldFont : regularFont, FONT_SIZE_BODY)
+      drawTextLine(page, label, totalsX + 12, totalsY, label === t("pdf.balance", "Balance") ? boldFont : regularFont, FONT_SIZE_BODY)
+      drawTextLine(page, value, totalsX + 120, totalsY, label === t("pdf.balance", "Balance") ? boldFont : regularFont, FONT_SIZE_BODY)
       totalsY -= 15
     }
-    drawTextLine(page, "Invoice total", PAGE_MARGIN, y - 20, boldFont, 11)
-    drawTextLine(page, formatCurrency(totalAmount), PAGE_MARGIN, y - 40, boldFont, 16, BRAND_BLUE)
+    drawTextLine(page, t("pdf.invoiceTotal", "Invoice total"), PAGE_MARGIN, y - 20, boldFont, 11)
+    drawTextLine(page, formatLocalizedCurrency(totalAmount, typedSettings as GlobalSettingsInput), PAGE_MARGIN, y - 40, boldFont, 16, BRAND_BLUE)
     y -= 94
 
     if (typedInvoice.notes?.trim()) {
@@ -565,7 +575,7 @@ export async function GET(
     drawTextLine(page, "Prepared by / Cashier", PAGE_MARGIN + 10, signatureY - 14, regularFont, FONT_SIZE_SMALL, MUTED_TEXT)
     drawTextLine(page, payerType === "company" ? "Company representative" : "Patient / Representative", PAGE_MARGIN + 300, signatureY - 14, regularFont, FONT_SIZE_SMALL, MUTED_TEXT)
 
-    const footerText = typedCompany?.invoice_footer_text?.trim() || `Generated on ${new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`
+    const footerText = typedCompany?.invoice_footer_text?.trim() || `${t("pdf.generated", "Generated")} ${new Intl.DateTimeFormat(typedSettings?.locale || "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: typedSettings?.timezone || "UTC" }).format(new Date())}`
     drawTextLine(page, footerText, PAGE_MARGIN, 28, regularFont, 8, MUTED_TEXT)
 
     const pdfBytes = await pdfDoc.save()
@@ -579,7 +589,7 @@ export async function GET(
       },
     })
   } catch (error) {
-    const authResponse = toAuthErrorResponse(error, request)
+    const authResponse = resolveAuthError(error, request, (status, code, message) => apiError(status, code, message, request))
     if (authResponse) return authResponse
     console.error("[v0] Failed to export invoice PDF", error)
     return new NextResponse("Internal Server Error", { status: 500 })

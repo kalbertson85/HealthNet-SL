@@ -9,6 +9,9 @@ import { ArrowLeft } from "lucide-react"
 import { redirect } from "next/navigation"
 import { startPageRenderTimer } from "@/lib/observability/page-performance"
 import { findAdmissionIdByVisitId } from "@/lib/visit-flow"
+import { ensureVisitAutoChargeLine } from "@/lib/pricing-engine"
+import { requireServerActionPermission } from "@/lib/server-action-security"
+import { z } from "zod"
 
 interface VisitRow {
   id: string
@@ -40,7 +43,7 @@ const MAX_ACTIVE_VISITS = 200
 const MAX_NOTES_SCAN = 1500
 
 interface NursingPageProps {
-  searchParams?: Promise<{ notes_table?: string }>
+  searchParams?: Promise<{ notes_table?: string; error?: string }>
 }
 
 export default async function NursingPage({ searchParams }: NursingPageProps) {
@@ -49,6 +52,7 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
   try {
     const sp = (await searchParams) ?? {}
     const notesTableMissingFromAction = sp.notes_table === "missing"
+    const actionError = sp.error
 
   const { data: visitsData, error: visitsError } = await supabase
     .from("visits")
@@ -153,34 +157,58 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
     async function addNursingNote(formData: FormData) {
     "use server"
 
-    const supabase = await createServerClient()
+    const { supabase, user } = await requireServerActionPermission("inpatient.manage")
+    const parsed = z
+      .object({
+        visit_id: z.string().uuid(),
+        patient_id: z.string().uuid(),
+        note_type: z.string().trim().max(50).optional(),
+        procedure_type: z.string().trim().max(50).optional(),
+        note: z.string().trim().min(1).max(5000),
+      })
+      .safeParse({
+        visit_id: formData.get("visit_id"),
+        patient_id: formData.get("patient_id"),
+        note_type: formData.get("note_type"),
+        procedure_type: formData.get("procedure_type"),
+        note: formData.get("note"),
+      })
 
-    const visitId = (formData.get("visit_id") as string | null) ?? null
-    const patientId = (formData.get("patient_id") as string | null) ?? null
-    const noteType = (formData.get("note_type") as string | null) ?? null
-    const procedureType = (formData.get("procedure_type") as string | null) ?? null
-    const note = (formData.get("note") as string | null) ?? ""
+    if (!parsed.success) {
+      redirect("/dashboard/nursing")
+    }
+    const visitId = parsed.data.visit_id
+    const patientId = parsed.data.patient_id
+    const noteType = parsed.data.note_type ?? null
+    const procedureType = parsed.data.procedure_type ?? null
+    const note = parsed.data.note
 
-    if (!visitId || !patientId || !note.trim()) {
+    const { data: visit } = await supabase
+      .from("visits")
+      .select("id, patient_id, visit_status")
+      .eq("id", visitId)
+      .maybeSingle()
+    if (!visit || (visit.patient_id as string | null) !== patientId) {
+      redirect("/dashboard/nursing")
+    }
+    const status = ((visit.visit_status as string | null) ?? "").toLowerCase()
+    if (status === "completed" || status === "discharged") {
       redirect("/dashboard/nursing")
     }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      redirect("/auth/login")
-    }
-
-    const { error } = await supabase.from("visit_nursing_notes").insert({
+    const performedAt = new Date().toISOString()
+    const { data: insertedNote, error } = await supabase
+      .from("visit_nursing_notes")
+      .insert({
       visit_id: visitId,
       recorded_by: user.id,
       note_type: noteType || null,
       note,
       procedure_type: procedureType || null,
-      performed_at: new Date().toISOString(),
-    })
+      performed_at: performedAt,
+      })
+      .select("id")
+      .maybeSingle()
 
     if (error) {
       const msg = error.message || ""
@@ -191,6 +219,26 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
         redirect("/dashboard/nursing?notes_table=missing")
       }
       console.error("[nursing] Error adding visit nursing note:", error.message || error)
+      redirect("/dashboard/nursing?error=note_save_failed")
+    }
+
+    try {
+      await ensureVisitAutoChargeLine(supabase, {
+        visitId,
+        actorUserId: user.id,
+        serviceType: "nursing",
+        description: procedureType
+          ? `Nursing procedure: ${procedureType.replace(/_/g, " ")}`
+          : "Nursing observation / ward monitoring",
+        quantity: 1,
+        mode: "increment",
+      })
+    } catch (chargeError) {
+      console.error("[nursing] Error creating nursing auto-charge line:", chargeError)
+      if (insertedNote?.id) {
+        await supabase.from("visit_nursing_notes").delete().eq("id", insertedNote.id as string)
+      }
+      redirect("/dashboard/nursing?error=charge_sync_failed")
     }
 
       redirect("/dashboard/nursing")
@@ -215,6 +263,16 @@ export default async function NursingPage({ searchParams }: NursingPageProps) {
 
     return (
     <div className="space-y-8">
+      {actionError === "note_save_failed" ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          Nursing note could not be saved.
+        </div>
+      ) : null}
+      {actionError === "charge_sync_failed" ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          Nursing note was rolled back because billing sync failed.
+        </div>
+      ) : null}
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-balance text-3xl font-bold tracking-tight">Nursing Notes & Procedures</h1>

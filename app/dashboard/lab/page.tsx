@@ -11,6 +11,7 @@ import { getSessionUserAndProfile } from "@/app/actions/auth"
 import { can } from "@/lib/utils"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
 import { ExportPreviewCard } from "@/components/export-preview-card"
+import { getGlobalSettings } from "@/lib/global-settings"
 
 const LAB_LIST_LIMIT = 50
 
@@ -33,6 +34,7 @@ export default async function LabTestsPage(props: {
   searchParams?: Promise<{ status?: string; priority?: string }>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
   const searchParams = props.searchParams ? await props.searchParams : undefined
   const statusFilter = (searchParams?.status || "all").trim().toLowerCase()
   const priorityFilter = (searchParams?.priority || "all").trim().toLowerCase()
@@ -267,7 +269,7 @@ export default async function LabTestsPage(props: {
                           {test.visits?.facilities?.name && <span>{test.visits.facilities.name}</span>}
                           {test.visits?.is_free_health_care && (
                             <Badge variant="default" className="w-fit text-[10px] font-normal">
-                              Free Health Care visit
+                              {settings.publicCoverageLabel} visit
                             </Badge>
                           )}
                         </div>

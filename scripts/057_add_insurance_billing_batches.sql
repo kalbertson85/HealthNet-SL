@@ -36,6 +36,28 @@ CREATE INDEX IF NOT EXISTS idx_insurance_billing_batches_status
 CREATE INDEX IF NOT EXISTS idx_insurance_billing_batch_items_batch_id
   ON public.insurance_billing_batch_items(batch_id);
 
+ALTER TABLE public.insurance_billing_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.insurance_billing_batch_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated staff can view insurance billing batches" ON public.insurance_billing_batches;
+DROP POLICY IF EXISTS "Billing staff can manage insurance billing batches" ON public.insurance_billing_batches;
+DROP POLICY IF EXISTS "Authenticated staff can view insurance billing batch items" ON public.insurance_billing_batch_items;
+DROP POLICY IF EXISTS "Billing staff can manage insurance billing batch items" ON public.insurance_billing_batch_items;
+
+CREATE POLICY "Authenticated staff can view insurance billing batches" ON public.insurance_billing_batches
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Billing staff can manage insurance billing batches" ON public.insurance_billing_batches
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated staff can view insurance billing batch items" ON public.insurance_billing_batch_items
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Billing staff can manage insurance billing batch items" ON public.insurance_billing_batch_items
+  FOR ALL USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+
 CREATE OR REPLACE FUNCTION public.set_updated_at_insurance_billing_batches()
 RETURNS trigger
 LANGUAGE plpgsql

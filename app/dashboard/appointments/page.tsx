@@ -6,6 +6,8 @@ import { Plus, Calendar } from "lucide-react"
 import Link from "next/link"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { TableCard } from "@/components/table-card"
+import { getGlobalSettings } from "@/lib/global-settings"
+import { formatDate } from "@/lib/locale-format"
 
 export const revalidate = 0
 
@@ -54,6 +56,7 @@ export default async function AppointmentsPage({
   searchParams?: Promise<AppointmentsPageSearchParams>
 }) {
   const supabase = await createServerClient()
+  const settings = await getGlobalSettings()
 
   const {
     data: { user },
@@ -286,12 +289,7 @@ export default async function AppointmentsPage({
             <div>
               <CardTitle>Today’s Appointments</CardTitle>
               <CardDescription>
-                {new Date().toLocaleDateString("en-US", {
-                  weekday: "long",
-                  year: "numeric",
-                  month: "long",
-                  day: "numeric",
-                })}
+                {formatDate(new Date(), settings, { style: "long" })}
               </CardDescription>
             </div>
             <Button asChild variant="outline" size="sm">
@@ -381,12 +379,7 @@ export default async function AppointmentsPage({
                   upcomingAppointments.map((appointment: AppointmentRow) => (
                     <TableRow key={appointment.id}>
                       <TableCell className="whitespace-nowrap">
-                        {new Date(appointment.appointment_date).toLocaleDateString("en-US", {
-                          weekday: "short",
-                          year: "numeric",
-                          month: "short",
-                          day: "numeric",
-                        })}
+                        {formatDate(appointment.appointment_date, settings)}
                       </TableCell>
                       <TableCell className="font-medium">{appointment.appointment_time}</TableCell>
                       <TableCell>

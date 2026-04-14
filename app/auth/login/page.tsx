@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Loader2, Quote } from "lucide-react"
+import { APP_BRAND_NAME, APP_TAGLINE } from "@/config/global"
 
 function LoginPageContent() {
   const router = useRouter()
@@ -26,6 +27,30 @@ function LoginPageContent() {
 
   const isBlocked = searchParams.get("blocked") === "1"
 
+  const logLoginAudit = async (payload: {
+    outcome: "success" | "failure"
+    user_id?: string
+    failure_code?: string
+  }) => {
+    try {
+      await fetch("/api/auth/login-audit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-requested-with": "XMLHttpRequest",
+        },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          outcome: payload.outcome,
+          user_id: payload.user_id,
+          failure_code: payload.failure_code,
+        }),
+      })
+    } catch {
+      // Do not block sign-in if audit logging is temporarily unavailable.
+    }
+  }
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
@@ -37,9 +62,19 @@ function LoginPageContent() {
         password,
       })
 
-      if (error) throw error
+      if (error) {
+        await logLoginAudit({
+          outcome: "failure",
+          failure_code: "invalid_credentials",
+        })
+        throw error
+      }
 
       if (data.user) {
+        await logLoginAudit({
+          outcome: "success",
+          user_id: data.user.id,
+        })
         router.push("/dashboard")
         router.refresh()
       }
@@ -62,14 +97,14 @@ function LoginPageContent() {
           <header className="flex min-w-0 flex-col items-center justify-center gap-2 sm:flex-row sm:gap-3">
             <Image
               src="/healthnet-logo.png"
-              alt="HealthNet-SL HMS logo"
+              alt="HealthNet HMS logo"
               width={64}
               height={64}
               className="h-14 w-14 rounded-md object-contain"
             />
             <div className="min-w-0 text-center sm:text-left">
-              <p className="break-words text-sm font-semibold tracking-wide text-sky-700">HealthNet-SL HMS</p>
-              <p className="hidden text-xs text-slate-500 sm:block">Smarter Health Management for Stronger Care</p>
+              <p className="break-words text-sm font-semibold tracking-wide text-sky-700">{APP_BRAND_NAME}</p>
+              <p className="hidden text-xs text-slate-500 sm:block">{APP_TAGLINE}</p>
             </div>
           </header>
 
@@ -78,11 +113,11 @@ function LoginPageContent() {
               <CardHeader className="px-0 pt-0 pb-4 items-center text-center">
                 <CardTitle className="text-2xl md:text-3xl font-semibold text-slate-900">Welcome back</CardTitle>
                 <CardDescription className="text-sm text-slate-600">
-                  Sign in to manage patients, admissions, billing, and reporting across your hospital.
+                  Sign in to manage patients, admissions, billing, and reporting across your facility.
                 </CardDescription>
               </CardHeader>
               <CardContent className="px-0 pb-0">
-                <form onSubmit={handleLogin} className="space-y-4" aria-label="HealthNet-SL HMS login form">
+                <form onSubmit={handleLogin} className="space-y-4" aria-label="HealthNet HMS login form">
                   {isBlocked && (
                     <Alert variant="destructive" aria-live="assertive">
                       <AlertDescription>
@@ -102,7 +137,7 @@ function LoginPageContent() {
                       id="email"
                       type="email"
                       autoComplete="email"
-                      placeholder="doctor@hospital.sl"
+                      placeholder="doctor@facility.org"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       required
@@ -153,11 +188,11 @@ function LoginPageContent() {
             <section className="mt-3 space-y-2 text-xs text-slate-600 sm:mt-4">
               <p className="font-semibold text-slate-800">Purpose</p>
               <p className="break-words">
-                A cloud-based hospital management platform that simplifies patient care, administration, and reporting
-                for Sierra Leone&apos;s hospitals.
+                A cloud-based health management platform that simplifies patient care, administration, and reporting
+                for hospitals and clinics.
               </p>
               <p className="mt-3 font-semibold text-slate-800">Target users</p>
-              <p className="break-words">Public and private hospitals, health centers, district hospitals, and mission hospitals.</p>
+              <p className="break-words">Public and private hospitals, clinics, health centers, and multi-site care networks.</p>
               <p className="mt-3 font-semibold text-slate-800">Core value</p>
               <p className="break-words">Efficient management, accurate data, and better patient outcomes.</p>
             </section>
@@ -168,7 +203,7 @@ function LoginPageContent() {
         <div className="relative hidden md:block bg-slate-900/80">
           <Image
             src="/login-hero-doctor.png"
-            alt="Clinician using HealthNet-SL HMS in a hospital corridor"
+            alt="Clinician using HealthNet HMS in a care setting"
             fill
             className="object-cover opacity-70"
             loading="eager"
@@ -180,18 +215,17 @@ function LoginPageContent() {
               <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-sky-500/90">
                 <Quote className="h-4 w-4" />
               </span>
-              <span>Trusted by hospitals across Sierra Leone</span>
+              <span>Trusted by healthcare teams across multiple regions</span>
             </div>
 
             <div className="mt-8 max-w-md space-y-4 text-slate-50">
               <p className="text-lg leading-relaxed font-medium">
-                &quot;HealthNet-SL HMS is a cloud-based hospital platform built in Sierra Leone, helping hospitals
-                connect emergency, outpatient, inpatient, pharmacy, lab, and billing in one place for smoother patient
-                journeys.&quot;
+                &quot;HealthNet HMS brings emergency, outpatient, inpatient, pharmacy, lab, and billing workflows into
+                one connected system for smoother patient journeys.&quot;
               </p>
               <div className="space-y-1 text-sm">
-                <p className="font-semibold">Built for Sierra Leone&apos;s health system</p>
-                <p className="text-slate-200 text-xs">Designed with hospitals, districts, and mission facilities in mind</p>
+                <p className="font-semibold">Built for adaptable healthcare operations</p>
+                <p className="text-slate-200 text-xs">Designed for hospitals, clinics, and multi-site care facilities</p>
               </div>
             </div>
 
@@ -202,7 +236,7 @@ function LoginPageContent() {
               </div>
               <div>
                 <p className="font-semibold">Improved data quality</p>
-                <p className="text-slate-300">Centralised records for reporting to MOHS and partners.</p>
+                <p className="text-slate-300">Centralized records for reporting, audits, and partner integrations.</p>
               </div>
             </div>
           </div>

@@ -8,6 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { ReportFilterSummary } from "@/components/report-filter-summary"
 import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
+import {
+  applySuggestedLinkageWithRollback,
+  summarizeLinkageSuggestions,
+  type LinkageSuggestion,
+} from "@/lib/billing/linkage-bulk"
 import { getGlobalSettings } from "@/lib/global-settings"
 import { formatCurrency, formatDate as formatLocalizedDate } from "@/lib/locale-format"
 import { logAuditEvent } from "@/lib/audit"
@@ -24,6 +29,8 @@ interface CompanyBillingReportsPageProps {
     bulk_applied?: string
     bulk_skipped?: string
     bulk_failed?: string
+    undo_applied?: string
+    undo_failed?: string
   }>
 }
 
@@ -76,13 +83,6 @@ function parseReportDate(value: string | null, fallback: Date) {
 
 function normalizeInsuranceCard(value: string | null | undefined) {
   return (value || "").trim().toUpperCase()
-}
-
-type LinkageSuggestion = {
-  linkageType: "employee" | "dependent"
-  principalEmployeeId: string
-  dependentRelationship: string
-  reason: string
 }
 
 function suggestLinkage(
@@ -517,16 +517,13 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         .map((employee) => [normalizeInsuranceCard(employee.insurance_card_number), employee]),
     )
 
+    const bulkRunId = `cbl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     let applied = 0
     let skipped = 0
     let failed = 0
 
     for (const patient of patients) {
       const suggestion = suggestLinkage(patient, employeeById, employeeByCard)
-      if (suggestion.linkageType === "dependent" && !suggestion.principalEmployeeId) {
-        skipped += 1
-        continue
-      }
 
       const [{ data: originalEmployee }, { data: originalDependentRows }] = await Promise.all([
         supabase
@@ -587,39 +584,43 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           : "expired"
         : "missing"
 
-      try {
-        if (suggestion.linkageType === "employee") {
-          const { data: employeeRow, error: employeeUpsertError } = await supabase
-            .from("company_employees")
-            .upsert(
-              {
+      const outcome = await applySuggestedLinkageWithRollback({
+        suggestion,
+        apply: async () => {
+          if (suggestion.linkageType === "employee") {
+            const { data: employeeRow, error: employeeUpsertError } = await supabase
+              .from("company_employees")
+              .upsert(
+                {
+                  company_id: companyId,
+                  patient_id: patient.id,
+                  full_name: patient.full_name || "Unknown patient",
+                  phone: patient.phone_number || null,
+                  insurance_card_number: patient.insurance_card_number || null,
+                  insurance_expiry_date: patient.insurance_expiry_date || new Date().toISOString().slice(0, 10),
+                  status: statusValue,
+                },
+                { onConflict: "patient_id" },
+              )
+              .select("id")
+              .maybeSingle()
+            if (employeeUpsertError) throw employeeUpsertError
+
+            const { error: clearDependentError } = await supabase.from("employee_dependents").delete().eq("patient_id", patient.id)
+            if (clearDependentError) throw clearDependentError
+
+            const { error: patientUpdateError } = await supabase
+              .from("patients")
+              .update({
                 company_id: companyId,
-                patient_id: patient.id,
-                full_name: patient.full_name || "Unknown patient",
-                phone: patient.phone_number || null,
-                insurance_card_number: patient.insurance_card_number || null,
-                insurance_expiry_date: patient.insurance_expiry_date || new Date().toISOString().slice(0, 10),
-                status: statusValue,
-              },
-              { onConflict: "patient_id" },
-            )
-            .select("id")
-            .maybeSingle()
-          if (employeeUpsertError) throw employeeUpsertError
+                insurance_type: "employee",
+                employee_id: employeeRow?.id ?? null,
+              })
+              .eq("id", patient.id)
+            if (patientUpdateError) throw patientUpdateError
+            return
+          }
 
-          const { error: clearDependentError } = await supabase.from("employee_dependents").delete().eq("patient_id", patient.id)
-          if (clearDependentError) throw clearDependentError
-
-          const { error: patientUpdateError } = await supabase
-            .from("patients")
-            .update({
-              company_id: companyId,
-              insurance_type: "employee",
-              employee_id: employeeRow?.id ?? null,
-            })
-            .eq("id", patient.id)
-          if (patientUpdateError) throw patientUpdateError
-        } else {
           const { error: employeeDeleteError } = await supabase.from("company_employees").delete().eq("patient_id", patient.id)
           if (employeeDeleteError) throw employeeDeleteError
 
@@ -648,35 +649,48 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
             })
             .eq("id", patient.id)
           if (patientUpdateError) throw patientUpdateError
-        }
-
-        await logAuditEvent({
-          action: "patient.coverage_linked_bulk_suggested",
-          entityType: "patient",
-          entityId: patient.id,
-          user,
-          metadata: {
-            patient_id: patient.id,
-            company_id: companyId,
-            linkage_type: suggestion.linkageType,
-            principal_employee_id: suggestion.principalEmployeeId || null,
-            source: "company_billing_bulk_suggested",
-            reason: suggestion.reason,
-          },
-          before: {
-            insurance_type: patient.insurance_type || null,
-            employee_id: patient.employee_id || null,
-          },
-          after: {
-            insurance_type: suggestion.linkageType,
-            employee_id: suggestion.linkageType === "employee" ? null : suggestion.principalEmployeeId,
-          },
-        })
-        applied += 1
-      } catch (error) {
-        await rollbackLinkage()
-        console.error("[company-billing] failed bulk suggested linkage", { patientId: patient.id, error })
-        failed += 1
+        },
+        rollback: rollbackLinkage,
+        onApplied: async () => {
+          await logAuditEvent({
+            action: "patient.coverage_linked_bulk_suggested",
+            entityType: "patient",
+            entityId: patient.id,
+            user,
+            metadata: {
+              bulk_run_id: bulkRunId,
+              patient_id: patient.id,
+              company_id: companyId,
+              linkage_type: suggestion.linkageType,
+              principal_employee_id: suggestion.principalEmployeeId || null,
+              source: "company_billing_bulk_suggested",
+              reason: suggestion.reason,
+              before_employee_row: originalEmployee || null,
+              before_dependent_rows: originalDependentRows || [],
+            },
+            before: {
+              company_id: patient.company_id || null,
+              insurance_type: patient.insurance_type || null,
+              employee_id: patient.employee_id || null,
+            },
+            after: {
+              company_id: companyId,
+              insurance_type: suggestion.linkageType,
+              employee_id: suggestion.linkageType === "employee" ? null : suggestion.principalEmployeeId,
+            },
+          })
+          applied += 1
+        },
+        onSkipped: async () => {
+          skipped += 1
+        },
+        onFailed: async (error) => {
+          console.error("[company-billing] failed bulk suggested linkage", { patientId: patient.id, error })
+          failed += 1
+        },
+      })
+      if (outcome.outcome === "failed") {
+        continue
       }
     }
 
@@ -684,7 +698,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
       actor_user_id: user.id,
       target_user_id: user.id,
       action: "patient_coverage_bulk_suggested_linking",
-      notes: `company=${companyId} applied=${applied} skipped=${skipped} failed=${failed}`,
+      notes: `company=${companyId} run=${bulkRunId} applied=${applied} skipped=${skipped} failed=${failed}`,
     })
 
     revalidatePath("/dashboard/reports/company-billing")
@@ -697,6 +711,154 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         bulk_applied: String(applied),
         bulk_skipped: String(skipped),
         bulk_failed: String(failed),
+      }).toString()}#linkage-audit`,
+    )
+  }
+
+  async function undoLastSuggestedCoverageBulk(formData: FormData) {
+    "use server"
+
+    const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+    const parsed = z
+      .object({
+        company_id: z.string().uuid(),
+        from: z.string().trim().min(10).max(10),
+        to: z.string().trim().min(10).max(10),
+        status: z.string().trim().max(50).optional(),
+      })
+      .safeParse({
+        company_id: formData.get("company_id"),
+        from: formData.get("from"),
+        to: formData.get("to"),
+        status: formData.get("status"),
+      })
+
+    if (!parsed.success) {
+      redirect("/dashboard/reports/company-billing")
+    }
+
+    const companyId = parsed.data.company_id
+    const from = parsed.data.from
+    const to = parsed.data.to
+    const status = (parsed.data.status || "all").toLowerCase()
+
+    const { data: latestAuditRows } = await supabase
+      .from("audit_logs")
+      .select("metadata, created_at")
+      .eq("action", "patient.coverage_linked_bulk_suggested")
+      .contains("metadata", { source: "company_billing_bulk_suggested", company_id: companyId })
+      .order("created_at", { ascending: false })
+      .limit(1)
+
+    const latestMetadata = (latestAuditRows?.[0]?.metadata || null) as Record<string, unknown> | null
+    const bulkRunId = (latestMetadata?.bulk_run_id as string | undefined) || ""
+    if (!bulkRunId) {
+      redirect(
+        `/dashboard/reports/company-billing?${new URLSearchParams({
+          company_id: companyId,
+          from,
+          to,
+          ...(status && status !== "all" ? { status } : {}),
+          undo_applied: "0",
+          undo_failed: "0",
+        }).toString()}#linkage-audit`,
+      )
+    }
+
+    const { data: runRowsRaw } = await supabase
+      .from("audit_logs")
+      .select("entity_id, metadata, before_state, created_at")
+      .eq("action", "patient.coverage_linked_bulk_suggested")
+      .contains("metadata", { source: "company_billing_bulk_suggested", company_id: companyId, bulk_run_id: bulkRunId })
+      .order("created_at", { ascending: false })
+      .limit(2000)
+
+    const runRows = (runRowsRaw || []) as Array<{
+      entity_id?: string | null
+      metadata?: Record<string, unknown> | null
+      before_state?: Record<string, unknown> | null
+      created_at?: string | null
+    }>
+
+    let undoApplied = 0
+    let undoFailed = 0
+    const restoredPatientIds = new Set<string>()
+    for (const row of runRows) {
+      const patientId = row.entity_id || ""
+      if (!patientId || restoredPatientIds.has(patientId)) continue
+      restoredPatientIds.add(patientId)
+      try {
+        const metadata = (row.metadata || {}) as Record<string, unknown>
+        const beforeState = (row.before_state || {}) as Record<string, unknown>
+        const beforeEmployee = (metadata.before_employee_row || null) as Record<string, unknown> | null
+        const beforeDependentRows = (metadata.before_dependent_rows || []) as Array<Record<string, unknown>>
+
+        const { error: patientRestoreError } = await supabase
+          .from("patients")
+          .update({
+            company_id: (beforeState.company_id as string | null) ?? null,
+            insurance_type: (beforeState.insurance_type as string | null) ?? null,
+            employee_id: (beforeState.employee_id as string | null) ?? null,
+          })
+          .eq("id", patientId)
+        if (patientRestoreError) throw patientRestoreError
+
+        const { error: clearDependentError } = await supabase.from("employee_dependents").delete().eq("patient_id", patientId)
+        if (clearDependentError) throw clearDependentError
+        if ((beforeDependentRows || []).length > 0) {
+          const { error: dependentRestoreError } = await supabase
+            .from("employee_dependents")
+            .upsert(beforeDependentRows || [], { onConflict: "patient_id" })
+          if (dependentRestoreError) throw dependentRestoreError
+        }
+
+        if (beforeEmployee?.id) {
+          const { error: employeeRestoreError } = await supabase
+            .from("company_employees")
+            .upsert(beforeEmployee, { onConflict: "patient_id" })
+          if (employeeRestoreError) throw employeeRestoreError
+        } else {
+          const { error: employeeClearError } = await supabase.from("company_employees").delete().eq("patient_id", patientId)
+          if (employeeClearError) throw employeeClearError
+        }
+
+        await logAuditEvent({
+          action: "patient.coverage_linked_bulk_suggested_undo",
+          entityType: "patient",
+          entityId: patientId,
+          user,
+          metadata: {
+            source: "company_billing_bulk_suggested_undo",
+            company_id: companyId,
+            bulk_run_id: bulkRunId,
+          },
+          before: null,
+          after: beforeState,
+        })
+
+        undoApplied += 1
+      } catch (error) {
+        console.error("[company-billing] failed undo of bulk suggested linkage", { patientId, error })
+        undoFailed += 1
+      }
+    }
+
+    await supabase.from("admin_audit_logs").insert({
+      actor_user_id: user.id,
+      target_user_id: user.id,
+      action: "patient_coverage_bulk_suggested_linking_undo",
+      notes: `company=${companyId} run=${bulkRunId} undo_applied=${undoApplied} undo_failed=${undoFailed}`,
+    })
+
+    revalidatePath("/dashboard/reports/company-billing")
+    redirect(
+      `/dashboard/reports/company-billing?${new URLSearchParams({
+        company_id: companyId,
+        from,
+        to,
+        ...(status && status !== "all" ? { status } : {}),
+        undo_applied: String(undoApplied),
+        undo_failed: String(undoFailed),
       }).toString()}#linkage-audit`,
     )
   }
@@ -867,25 +1029,8 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     linkageSuggestionByPatientId.set(row.patientId, suggestLinkage(patient, employeeById, employeeByCard))
   }
 
-  const suggestionStats = unlinkedRows.reduce(
-    (acc, row) => {
-      const suggestion = row.patientId ? linkageSuggestionByPatientId.get(row.patientId) : null
-      if (!suggestion) {
-        acc.blocked += 1
-        return acc
-      }
-
-      if (suggestion.linkageType === "dependent" && !suggestion.principalEmployeeId) {
-        acc.blocked += 1
-      } else {
-        acc.actionable += 1
-      }
-
-      if (suggestion.linkageType === "employee") acc.employee += 1
-      if (suggestion.linkageType === "dependent") acc.dependent += 1
-      return acc
-    },
-    { actionable: 0, blocked: 0, employee: 0, dependent: 0 },
+  const suggestionStats = summarizeLinkageSuggestions(
+    unlinkedRows.map((row) => (row.patientId ? linkageSuggestionByPatientId.get(row.patientId) : null)),
   )
 
   const unlinkedByCompanyMonth = Array.from(
@@ -948,6 +1093,11 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         <div className="rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
           Suggested bulk linkage result: applied {sp.bulk_applied || "0"}, skipped {sp.bulk_skipped || "0"}, failed{" "}
           {sp.bulk_failed || "0"}.
+        </div>
+      ) : null}
+      {sp.undo_applied || sp.undo_failed ? (
+        <div className="rounded-md border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          Undo bulk linkage result: restored {sp.undo_applied || "0"}, failed {sp.undo_failed || "0"}.
         </div>
       ) : null}
       <div className="flex items-center justify-between gap-4">
@@ -1212,15 +1362,26 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                   Review company-billed patients who are not yet linked to the employee or dependent roster. Link them here so monthly statements can identify employee, spouse, or child correctly.
                 </CardDescription>
               </div>
-              <form action={applySuggestedCoverageBulk}>
-                <input type="hidden" name="company_id" value={selectedCompanyId} />
-                <input type="hidden" name="from" value={fromDateValue} />
-                <input type="hidden" name="to" value={toDateValue} />
-                <input type="hidden" name="status" value={statusFilter} />
-                <Button type="submit" size="sm" variant="outline" disabled={suggestionStats.actionable === 0}>
-                  Apply Suggested Links ({suggestionStats.actionable})
-                </Button>
-              </form>
+              <div className="flex items-center gap-2">
+                <form action={applySuggestedCoverageBulk}>
+                  <input type="hidden" name="company_id" value={selectedCompanyId} />
+                  <input type="hidden" name="from" value={fromDateValue} />
+                  <input type="hidden" name="to" value={toDateValue} />
+                  <input type="hidden" name="status" value={statusFilter} />
+                  <Button type="submit" size="sm" variant="outline" disabled={suggestionStats.actionable === 0}>
+                    Apply Suggested Links ({suggestionStats.actionable})
+                  </Button>
+                </form>
+                <form action={undoLastSuggestedCoverageBulk}>
+                  <input type="hidden" name="company_id" value={selectedCompanyId} />
+                  <input type="hidden" name="from" value={fromDateValue} />
+                  <input type="hidden" name="to" value={toDateValue} />
+                  <input type="hidden" name="status" value={statusFilter} />
+                  <Button type="submit" size="sm" variant="ghost">
+                    Undo Last Suggested Run
+                  </Button>
+                </form>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">

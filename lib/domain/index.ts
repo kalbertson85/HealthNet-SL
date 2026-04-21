@@ -15,3 +15,4 @@ export {
   type LinkageSuggestion,
 } from "@/lib/billing/linkage-bulk"
 
+export { createApiV1Client, ApiV1ClientError } from "@/lib/api/v1-client"

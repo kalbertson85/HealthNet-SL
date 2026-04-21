@@ -122,6 +122,7 @@ Response fields:
   - `api.version`
   - `api.capabilities`
 - Unsupported capabilities should gracefully degrade in UI.
+- Shared typed client helper is available at `lib/api/v1-client.ts`.
 
 ## Change Policy
 

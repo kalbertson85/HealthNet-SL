@@ -9,6 +9,8 @@ Security policy: `SECURITY.md`
 Branch protection runbook: `BRANCH_PROTECTION.md`
 Key rotation runbook: `KEY_ROTATION_RUNBOOK.md`
 Security baseline record: `SECURITY_BASELINE_2026-04-21.md`
+Release baseline (`v1.0.0-beta`): `RELEASE_BASELINE_V1_BETA.md`
+API contract (`v1`): `API_CONTRACT_V1.md`
 
 ## Visit & Billing Workflow
 

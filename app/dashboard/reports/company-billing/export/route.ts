@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const selectedCompanyId = (searchParams.get("company_id") || "").trim() || null
   const statusFilter = (searchParams.get("status") || "all").toLowerCase().trim()
+  const scope = (searchParams.get("scope") || "all").toLowerCase().trim()
   const fromParam = (searchParams.get("from") || "").trim()
   const toParam = (searchParams.get("to") || "").trim()
 
@@ -98,7 +99,26 @@ interface CompanyLite {
       : Promise.resolve({ data: [] as PatientLite[] })
   )
 
-  const coverageMap = selectedCompanyId ? await fetchCompanyCoverageMap(supabase, selectedCompanyId, patientIds) : new Map()
+  const patientIdsByCompany = new Map<string, Set<string>>()
+  for (const inv of filteredInvoices) {
+    if (!inv.company_id || !inv.patient_id) continue
+    const existing = patientIdsByCompany.get(inv.company_id) || new Set<string>()
+    existing.add(inv.patient_id)
+    patientIdsByCompany.set(inv.company_id, existing)
+  }
+
+  const coverageMapByCompanyPatient = new Map<string, { relationshipLabel: string; principalEmployeeName: string | null }>()
+  await Promise.all(
+    Array.from(patientIdsByCompany.entries()).map(async ([companyId, companyPatientIds]) => {
+      const coverageMap = await fetchCompanyCoverageMap(supabase, companyId, Array.from(companyPatientIds))
+      for (const [patientId, coverage] of coverageMap.entries()) {
+        coverageMapByCompanyPatient.set(`${companyId}:${patientId}`, {
+          relationshipLabel: coverage.relationshipLabel,
+          principalEmployeeName: coverage.principalEmployeeName || null,
+        })
+      }
+    }),
+  )
 
   const patientById = new Map<string, { full_name?: string | null; patient_number?: string | null }>()
   for (const p of (patients || []) as PatientLite[]) {
@@ -143,7 +163,13 @@ interface CompanyLite {
   for (const inv of filteredInvoices) {
     const patient = inv.patient_id ? patientById.get(inv.patient_id) : null
     const companyName = inv.company_id ? companyNameById.get(inv.company_id) : inv.companies?.name || null
-    const coverage = inv.patient_id ? coverageMap.get(inv.patient_id) : null
+    const coverage =
+      inv.company_id && inv.patient_id ? coverageMapByCompanyPatient.get(`${inv.company_id}:${inv.patient_id}`) || null : null
+    const relationship = coverage?.relationshipLabel ?? "Unlinked"
+
+    if (scope === "unlinked" && relationship !== "Unlinked") {
+      continue
+    }
 
     const total = Number(inv.total_amount ?? 0)
     const paid = Number(inv.paid_amount ?? 0)
@@ -154,7 +180,7 @@ interface CompanyLite {
       JSON.stringify(companyName ?? ""),
       JSON.stringify(patient?.full_name ?? ""),
       JSON.stringify(patient?.patient_number ?? ""),
-      JSON.stringify(coverage?.relationshipLabel ?? "Unlinked"),
+      JSON.stringify(relationship),
       JSON.stringify(coverage?.principalEmployeeName ?? ""),
       inv.visit_id ?? "",
       inv.invoice_number ?? "",
@@ -173,7 +199,7 @@ interface CompanyLite {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename=company_billing_${new Date().toISOString()}.csv`,
+        "Content-Disposition": `attachment; filename=company_billing_${scope === "unlinked" ? "unlinked_" : ""}${new Date().toISOString()}.csv`,
         "X-Export-Truncated": String(isQueryTruncated),
         "X-Export-Row-Limit": String(EXPORT_ROW_LIMIT),
         ...NO_STORE_DOWNLOAD_HEADERS,

@@ -400,7 +400,26 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
       : Promise.resolve({ data: [] as PatientLite[] })
   )
 
-  const coverageMap = selectedCompanyId ? await fetchCompanyCoverageMap(supabase, selectedCompanyId, patientIds) : new Map()
+  const patientIdsByCompany = new Map<string, Set<string>>()
+  for (const inv of filteredInvoices) {
+    if (!inv.company_id || !inv.patient_id) continue
+    const existing = patientIdsByCompany.get(inv.company_id) || new Set<string>()
+    existing.add(inv.patient_id)
+    patientIdsByCompany.set(inv.company_id, existing)
+  }
+
+  const coverageMapByCompanyPatient = new Map<string, { relationshipLabel: string; principalEmployeeName: string | null }>()
+  await Promise.all(
+    Array.from(patientIdsByCompany.entries()).map(async ([companyId, companyPatientIds]) => {
+      const coverageMap = await fetchCompanyCoverageMap(supabase, companyId, Array.from(companyPatientIds))
+      for (const [patientId, coverage] of coverageMap.entries()) {
+        coverageMapByCompanyPatient.set(`${companyId}:${patientId}`, {
+          relationshipLabel: coverage.relationshipLabel,
+          principalEmployeeName: coverage.principalEmployeeName || null,
+        })
+      }
+    }),
+  )
 
   const patientById = new Map<string, { full_name?: string | null; patient_number?: string | null }>()
   for (const p of (patients || []) as PatientLite[]) {
@@ -412,7 +431,8 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
 
   const rows = filteredInvoices.map((inv) => {
     const patient = inv.patient_id ? patientById.get(inv.patient_id) : null
-    const coverage = inv.patient_id ? coverageMap.get(inv.patient_id) : null
+    const coverage =
+      inv.company_id && inv.patient_id ? coverageMapByCompanyPatient.get(`${inv.company_id}:${inv.patient_id}`) || null : null
 
     const total = Number(inv.total_amount ?? 0)
     const paid = Number(inv.paid_amount ?? 0)
@@ -421,6 +441,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     return {
       id: inv.id,
       invoiceNumber: inv.invoice_number || "",
+      companyId: inv.company_id || null,
       companyName: inv.companies?.name || "Unknown company",
       staffName: patient?.full_name || "Unknown",
       staffNumber: patient?.patient_number || "-",
@@ -491,11 +512,20 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           const parsedDate = row.createdAt ? new Date(row.createdAt) : null
           const monthKey = parsedDate && !Number.isNaN(parsedDate.getTime()) ? monthFormatter.format(parsedDate) : "Unknown month"
           const key = `${row.companyName}__${monthKey}`
+          const monthSort = parsedDate ? Date.UTC(parsedDate.getUTCFullYear(), parsedDate.getUTCMonth(), 1) : 0
+          const monthYear = parsedDate ? parsedDate.getUTCFullYear() : null
+          const monthIndex = parsedDate ? parsedDate.getUTCMonth() : null
+          const monthStartDate = monthSort ? new Date(monthSort) : null
+          const monthEndDate =
+            monthYear !== null && monthIndex !== null ? new Date(Date.UTC(monthYear, monthIndex + 1, 0)) : null
           const existing = acc.get(key) || {
             key,
+            companyId: row.companyId,
             companyName: row.companyName,
             monthKey,
-            monthSort: parsedDate ? Date.UTC(parsedDate.getUTCFullYear(), parsedDate.getUTCMonth(), 1) : 0,
+            monthSort,
+            monthFrom: monthStartDate ? monthStartDate.toISOString().slice(0, 10) : fromDateValue,
+            monthTo: monthEndDate ? monthEndDate.toISOString().slice(0, 10) : toDateValue,
             unlinkedBeneficiaries: 0,
             billedAmount: 0,
             outstandingBalance: 0,
@@ -510,9 +540,12 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           string,
           {
             key: string
+            companyId: string | null
             companyName: string
             monthKey: string
             monthSort: number
+            monthFrom: string
+            monthTo: string
             unlinkedBeneficiaries: number
             billedAmount: number
             outstandingBalance: number
@@ -557,6 +590,25 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
               rel="noreferrer"
             >
               Export CSV
+            </Link>
+          </Button>
+          <Button
+            asChild
+            size="sm"
+            variant="outline"
+          >
+            <Link
+              href={`/dashboard/reports/company-billing/export?${new URLSearchParams({
+                ...(selectedCompanyId ? { company_id: selectedCompanyId } : {}),
+                ...(fromParam ? { from: fromParam } : {}),
+                ...(toParam ? { to: toParam } : {}),
+                ...(statusFilter ? { status: statusFilter } : {}),
+                scope: "unlinked",
+              }).toString()}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Export Unlinked Queue
             </Link>
           </Button>
           {selectedCompanyId ? (
@@ -718,6 +770,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                     <th className="px-3 py-2 text-right font-medium">Unlinked beneficiaries</th>
                     <th className="px-3 py-2 text-right font-medium">Billed amount</th>
                     <th className="px-3 py-2 text-right font-medium">Outstanding balance</th>
+                    <th className="px-3 py-2 text-left font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -728,6 +781,22 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                       <td className="px-3 py-2 text-right whitespace-nowrap">{entry.unlinkedBeneficiaries}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">{formatCurrency(entry.billedAmount, settings)}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">{formatCurrency(entry.outstandingBalance, settings)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {entry.companyId ? (
+                          <Link
+                            href={`/dashboard/reports/company-billing?${new URLSearchParams({
+                              company_id: entry.companyId,
+                              from: entry.monthFrom,
+                              to: entry.monthTo,
+                            }).toString()}#linkage-audit`}
+                            className="text-blue-600 hover:underline"
+                          >
+                            Open linkage audit
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -7,6 +7,8 @@ Release execution checklist: `RELEASE_CHECKLIST.md`
 Release notes draft: `RELEASE_NOTES_2026-03-31.md`
 Security policy: `SECURITY.md`
 Branch protection runbook: `BRANCH_PROTECTION.md`
+Key rotation runbook: `KEY_ROTATION_RUNBOOK.md`
+Security baseline record: `SECURITY_BASELINE_2026-04-21.md`
 
 ## Visit & Billing Workflow
 

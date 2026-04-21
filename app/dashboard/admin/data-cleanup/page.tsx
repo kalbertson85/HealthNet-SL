@@ -30,6 +30,15 @@ type EmployeeRow = {
   insurance_card_number: string | null
 }
 
+type DependentRow = {
+  id: string
+  employee_id: string | null
+  patient_id: string | null
+  full_name: string | null
+  relationship: string | null
+  insurance_card_number: string | null
+}
+
 type CompanyRow = {
   id: string
   name: string | null
@@ -46,8 +55,10 @@ type CoverageSuggestion = {
   patient: PatientRow
   companyId: string
   companyName: string
+  linkageType: "employee" | "dependent"
   employeeId: string | null
   employeeName: string | null
+  dependentRelationship: string | null
   confidence: "exact" | "review"
   reasons: string[]
 }
@@ -119,6 +130,7 @@ function buildCoverageSuggestions(
   patients: PatientRow[],
   invoices: Array<{ patient_id: string | null; company_id: string | null }>,
   employees: EmployeeRow[],
+  dependents: DependentRow[],
   companies: CompanyRow[],
 ) {
   const companyNameById = new Map(companies.map((company) => [company.id, company.name || "Unknown company"]))
@@ -142,8 +154,14 @@ function buildCoverageSuggestions(
     if (!companyId) continue
 
     const companyEmployees = employees.filter((employee) => employee.company_id === companyId)
+    const employeeIdsInCompany = new Set(companyEmployees.map((employee) => employee.id))
+    const companyDependents = dependents.filter(
+      (dependent) => dependent.employee_id && employeeIdsInCompany.has(dependent.employee_id),
+    )
     const reasons: string[] = []
     let employeeMatch: EmployeeRow | null = null
+    let dependentMatch: DependentRow | null = null
+    let linkageType: "employee" | "dependent" = "employee"
     let confidence: "exact" | "review" = "review"
 
     if (patient.insurance_card_number) {
@@ -152,11 +170,23 @@ function buildCoverageSuggestions(
         null
       if (employeeMatch) {
         confidence = "exact"
+        linkageType = "employee"
         reasons.push("insurance card matches employee roster")
+      } else {
+        dependentMatch =
+          companyDependents.find(
+            (dependent) =>
+              dependent.insurance_card_number && dependent.insurance_card_number === patient.insurance_card_number,
+          ) || null
+        if (dependentMatch) {
+          confidence = "exact"
+          linkageType = "dependent"
+          reasons.push("insurance card matches dependent roster")
+        }
       }
     }
 
-    if (!employeeMatch) {
+    if (!employeeMatch && !dependentMatch) {
       const patientName = normalizeName(patient.full_name)
       const patientPhone = lastPhoneDigits(patient.phone_number)
       employeeMatch =
@@ -166,16 +196,34 @@ function buildCoverageSuggestions(
           return sameName || (sameName && samePhone)
         }) || null
       if (employeeMatch) {
+        linkageType = "employee"
         reasons.push("name or phone is similar to employee roster")
+      } else {
+        dependentMatch =
+          companyDependents.find((dependent) => {
+            const sameName = patientName && patientName === normalizeName(dependent.full_name)
+            return Boolean(sameName)
+          }) || null
+        if (dependentMatch) {
+          linkageType = "dependent"
+          reasons.push("name is similar to dependent roster")
+        }
       }
     }
+
+    const matchedEmployee =
+      linkageType === "dependent"
+        ? companyEmployees.find((employee) => employee.id === dependentMatch?.employee_id) || null
+        : employeeMatch
 
     suggestions.push({
       patient,
       companyId,
       companyName: companyNameById.get(companyId) || "Unknown company",
-      employeeId: employeeMatch?.id ?? null,
-      employeeName: employeeMatch?.full_name ?? null,
+      linkageType,
+      employeeId: matchedEmployee?.id ?? null,
+      employeeName: matchedEmployee?.full_name ?? null,
+      dependentRelationship: linkageType === "dependent" ? (dependentMatch?.relationship || "Dependent") : null,
       confidence,
       reasons: reasons.length > 0 ? reasons : ["company invoice exists but roster match needs review"],
     })
@@ -204,7 +252,7 @@ export default async function AdminDataCleanupPage({
 
     const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
 
-    const [{ data: patientsRaw }, { data: companyInvoicesRaw }, { data: employeesRaw }, { data: companiesRaw }] =
+    const [{ data: patientsRaw }, { data: companyInvoicesRaw }, { data: employeesRaw }, { data: dependentsRaw }, { data: companiesRaw }] =
       await Promise.all([
         supabase
           .from("patients")
@@ -213,6 +261,7 @@ export default async function AdminDataCleanupPage({
           .limit(PATIENT_SCAN_LIMIT),
         supabase.from("invoices").select("patient_id, company_id").eq("payer_type", "company").limit(2000),
         supabase.from("company_employees").select("id, company_id, patient_id, full_name, phone, insurance_card_number").limit(2000),
+        supabase.from("employee_dependents").select("id, employee_id, patient_id, full_name, relationship, insurance_card_number").limit(4000),
         supabase.from("companies").select("id, name").limit(500),
       ])
 
@@ -220,6 +269,7 @@ export default async function AdminDataCleanupPage({
       (patientsRaw || []) as PatientRow[],
       (companyInvoicesRaw || []) as Array<{ patient_id: string | null; company_id: string | null }>,
       (employeesRaw || []) as EmployeeRow[],
+      (dependentsRaw || []) as DependentRow[],
       (companiesRaw || []) as CompanyRow[],
     ).filter((row) => row.confidence === "exact" && row.employeeId)
 
@@ -238,12 +288,16 @@ export default async function AdminDataCleanupPage({
         redirect("/dashboard/admin/data-cleanup?error=patient_lookup_failed")
       }
       previousSnapshot.employee_id = (currentPatient.employee_id as string | null) ?? null
+      const { data: originalDependentRows } = await supabase
+        .from("employee_dependents")
+        .select("id, employee_id, patient_id, full_name, relationship, insurance_card_number, insurance_card_serial, insurance_expiry_date, status")
+        .eq("patient_id", suggestion.patient.id)
 
       const { error: patientUpdateError } = await supabase
         .from("patients")
         .update({
           company_id: suggestion.companyId,
-          insurance_type: "employee",
+          insurance_type: suggestion.linkageType,
           employee_id: suggestion.employeeId,
         })
         .eq("id", suggestion.patient.id)
@@ -251,11 +305,57 @@ export default async function AdminDataCleanupPage({
         redirect("/dashboard/admin/data-cleanup?error=patient_update_failed")
       }
 
+      const { error: clearDependentsError } = await supabase
+        .from("employee_dependents")
+        .delete()
+        .eq("patient_id", suggestion.patient.id)
+      if (clearDependentsError) {
+        await supabase
+          .from("patients")
+          .update({
+            company_id: previousSnapshot.company_id,
+            insurance_type: previousSnapshot.insurance_type,
+            employee_id: previousSnapshot.employee_id,
+          })
+          .eq("id", suggestion.patient.id)
+        redirect("/dashboard/admin/data-cleanup?error=patient_update_failed")
+      }
+
+      if (suggestion.linkageType === "dependent") {
+        const { error: dependentUpsertError } = await supabase
+          .from("employee_dependents")
+          .upsert(
+            {
+              employee_id: suggestion.employeeId,
+              patient_id: suggestion.patient.id,
+              full_name: suggestion.patient.full_name || "Unknown patient",
+              relationship: suggestion.dependentRelationship || "Dependent",
+              insurance_card_number: suggestion.patient.insurance_card_number || null,
+              status: "active",
+            },
+            { onConflict: "patient_id" },
+          )
+        if (dependentUpsertError) {
+          await supabase
+            .from("patients")
+            .update({
+              company_id: previousSnapshot.company_id,
+              insurance_type: previousSnapshot.insurance_type,
+              employee_id: previousSnapshot.employee_id,
+            })
+            .eq("id", suggestion.patient.id)
+          if ((originalDependentRows || []).length > 0) {
+            await supabase.from("employee_dependents").upsert(originalDependentRows || [], { onConflict: "patient_id" })
+          }
+          redirect("/dashboard/admin/data-cleanup?error=patient_update_failed")
+        }
+      }
+
       const { error: adminAuditError } = await supabase.from("admin_audit_logs").insert({
         actor_user_id: user.id,
         target_user_id: user.id,
         action: "patient_coverage_bulk_linked",
-        notes: `Linked patient ${suggestion.patient.id} to company ${suggestion.companyId} employee ${suggestion.employeeId}`,
+        notes: `Linked patient ${suggestion.patient.id} to company ${suggestion.companyId} ${suggestion.linkageType} ${suggestion.employeeId}`,
       })
       if (adminAuditError) {
         await supabase
@@ -266,6 +366,10 @@ export default async function AdminDataCleanupPage({
             employee_id: previousSnapshot.employee_id,
           })
           .eq("id", suggestion.patient.id)
+        await supabase.from("employee_dependents").delete().eq("patient_id", suggestion.patient.id)
+        if ((originalDependentRows || []).length > 0) {
+          await supabase.from("employee_dependents").upsert(originalDependentRows || [], { onConflict: "patient_id" })
+        }
         redirect("/dashboard/admin/data-cleanup?error=audit_log_failed")
       }
 
@@ -278,6 +382,7 @@ export default async function AdminDataCleanupPage({
           patient_id: suggestion.patient.id,
           company_id: suggestion.companyId,
           employee_id: suggestion.employeeId,
+          linkage_type: suggestion.linkageType,
           source: "admin_data_cleanup",
           confidence: suggestion.confidence,
         },
@@ -287,7 +392,7 @@ export default async function AdminDataCleanupPage({
         },
         after: {
           company_id: suggestion.companyId,
-          insurance_type: "employee",
+          insurance_type: suggestion.linkageType,
           employee_id: suggestion.employeeId,
         },
       })
@@ -296,7 +401,7 @@ export default async function AdminDataCleanupPage({
     redirect("/dashboard/admin/data-cleanup?status=applied")
   }
 
-  const [{ data: patientsRaw }, { data: companyInvoicesRaw }, { data: employeesRaw }, { data: companiesRaw }] = await Promise.all([
+  const [{ data: patientsRaw }, { data: companyInvoicesRaw }, { data: employeesRaw }, { data: dependentsRaw }, { data: companiesRaw }] = await Promise.all([
     supabase
       .from("patients")
       .select("id, full_name, patient_number, phone_number, date_of_birth, company_id, insurance_type, insurance_card_number, created_at")
@@ -304,16 +409,18 @@ export default async function AdminDataCleanupPage({
       .limit(PATIENT_SCAN_LIMIT),
     supabase.from("invoices").select("patient_id, company_id").eq("payer_type", "company").limit(2000),
     supabase.from("company_employees").select("id, company_id, patient_id, full_name, phone, insurance_card_number").limit(2000),
+    supabase.from("employee_dependents").select("id, employee_id, patient_id, full_name, relationship, insurance_card_number").limit(4000),
     supabase.from("companies").select("id, name").limit(500),
   ])
 
   const patients = (patientsRaw || []) as PatientRow[]
   const companyInvoices = (companyInvoicesRaw || []) as Array<{ patient_id: string | null; company_id: string | null }>
   const employees = (employeesRaw || []) as EmployeeRow[]
+  const dependents = (dependentsRaw || []) as DependentRow[]
   const companies = (companiesRaw || []) as CompanyRow[]
 
   const duplicateCandidates = buildDuplicateCandidates(patients)
-  const coverageSuggestions = buildCoverageSuggestions(patients, companyInvoices, employees, companies)
+  const coverageSuggestions = buildCoverageSuggestions(patients, companyInvoices, employees, dependents, companies)
   const exactCoverageSuggestions = coverageSuggestions.filter((row) => row.confidence === "exact")
   const reviewCoverageSuggestions = coverageSuggestions.filter((row) => row.confidence === "review")
 
@@ -464,6 +571,13 @@ export default async function AdminDataCleanupPage({
                     </Badge>
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">{suggestion.reasons.join(", ")}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Suggested linkage: {suggestion.linkageType}
+                    {suggestion.linkageType === "dependent" && suggestion.dependentRelationship
+                      ? ` (${suggestion.dependentRelationship})`
+                      : ""}
+                    {suggestion.employeeName ? ` · Principal employee: ${suggestion.employeeName}` : ""}
+                  </p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button asChild size="sm" variant="outline">
                       <Link href={`/dashboard/patients/${suggestion.patient.id}`}>Open patient</Link>

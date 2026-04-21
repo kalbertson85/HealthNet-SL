@@ -6,6 +6,7 @@ export const API_V1_CAPABILITIES = [
   "dashboard.summary",
   "visits.summary",
   "appointments.summary",
+  "prescriptions.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -99,6 +100,19 @@ export type ApiV1AppointmentsSummaryResponse = {
     scheduled_or_confirmed: number
     completed: number
     cancelled: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1PrescriptionsSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  prescriptions: {
+    total_in_range: number
+    pending: number
+    dispensed: number
+    other: number
   }
   server_time_utc: string
 }

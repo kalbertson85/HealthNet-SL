@@ -5,6 +5,7 @@ import type {
   ApiV1BillingSummaryResponse,
   ApiV1MetaResponse,
   ApiV1PatientsSummaryResponse,
+  ApiV1PrescriptionsSummaryResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -115,6 +116,22 @@ const appointmentsSummarySchema = z.object({
     scheduled_or_confirmed: z.number(),
     completed: z.number(),
     cancelled: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
+const prescriptionsSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  range: z.object({
+    from: z.string(),
+    to: z.string(),
+  }),
+  prescriptions: z.object({
+    total_in_range: z.number(),
+    pending: z.number(),
+    dispensed: z.number(),
+    other: z.number(),
   }),
   server_time_utc: z.string(),
 })
@@ -234,6 +251,15 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/appointments/summary${suffix}`, appointmentsSummarySchema) as Promise<ApiV1AppointmentsSummaryResponse>
+    },
+    async getPrescriptionsSummary(
+      params?: { from?: string; to?: string },
+    ): Promise<ApiV1PrescriptionsSummaryResponse> {
+      const query = new URLSearchParams()
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/prescriptions/summary${suffix}`, prescriptionsSummarySchema) as Promise<ApiV1PrescriptionsSummaryResponse>
     },
   }
 }

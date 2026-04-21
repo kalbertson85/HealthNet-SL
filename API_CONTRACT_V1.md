@@ -52,6 +52,7 @@ Example:
       "dashboard.summary",
       "visits.summary",
       "appointments.summary",
+      "prescriptions.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -154,6 +155,26 @@ Response fields:
 - `appointments.scheduled_or_confirmed`
 - `appointments.completed`
 - `appointments.cancelled`
+
+## `GET /api/v1/prescriptions/summary`
+
+Purpose:
+- Return prescription processing totals for selected range.
+
+Access:
+- Requires `prescriptions.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `prescriptions.total_in_range`
+- `prescriptions.pending`
+- `prescriptions.dispensed`
+- `prescriptions.other`
 
 ## `GET /api/v1/billing/summary`
 

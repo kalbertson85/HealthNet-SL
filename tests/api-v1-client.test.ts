@@ -154,4 +154,33 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses prescriptions summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        prescriptions: {
+          total_in_range: 63,
+          pending: 14,
+          dispensed: 44,
+          other: 5,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getPrescriptionsSummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+
+    expect(payload.prescriptions.dispensed).toBe(44)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/prescriptions/summary?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

@@ -51,6 +51,7 @@ interface PatientLite {
 interface EmployeeRosterLite {
   id: string
   full_name: string | null
+  patient_id?: string | null
   insurance_card_number?: string | null
   status?: string | null
 }
@@ -62,6 +63,10 @@ function parseReportDate(value: string | null, fallback: Date) {
   if (!value) return fallback
   const parsed = new Date(`${value}T00:00:00`)
   return Number.isNaN(parsed.getTime()) ? fallback : parsed
+}
+
+function normalizeInsuranceCard(value: string | null | undefined) {
+  return (value || "").trim().toUpperCase()
 }
 
 export default async function CompanyBillingReportsPage({ searchParams }: CompanyBillingReportsPageProps) {
@@ -370,7 +375,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     selectedCompanyId
       ? supabase
           .from("company_employees")
-          .select("id, full_name, insurance_card_number, status")
+          .select("id, full_name, patient_id, insurance_card_number, status")
           .eq("company_id", selectedCompanyId)
           .order("full_name")
       : Promise.resolve({ data: [] as EmployeeRosterLite[] }),
@@ -484,6 +489,12 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   })
 
   const employeeRoster = (employeeRosterRaw || []) as EmployeeRosterLite[]
+  const employeeById = new Map(employeeRoster.map((employee) => [employee.id, employee]))
+  const employeeByCard = new Map(
+    employeeRoster
+      .filter((employee) => normalizeInsuranceCard(employee.insurance_card_number))
+      .map((employee) => [normalizeInsuranceCard(employee.insurance_card_number), employee]),
+  )
   const unlinkedRows = selectedCompanyId
     ? rows
         .filter((row) => row.relationship === "Unlinked")
@@ -503,6 +514,67 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         })
         .filter((row, index, array) => row.patientId && array.findIndex((candidate) => candidate.patientId === row.patientId) === index)
     : []
+
+  const linkageSuggestionByPatientId = new Map<
+    string,
+    {
+      linkageType: "employee" | "dependent"
+      principalEmployeeId: string
+      dependentRelationship: string
+      reason: string
+    }
+  >()
+
+  for (const row of unlinkedRows) {
+    if (!row.patientId || !row.patientRecord) continue
+    const patient = row.patientRecord
+    const patientCard = normalizeInsuranceCard(patient.insurance_card_number)
+    const cardMatchedEmployee = patientCard ? employeeByCard.get(patientCard) || null : null
+    const employeeIdFromPatient = patient.employee_id && employeeById.has(patient.employee_id) ? patient.employee_id : ""
+
+    let linkageType: "employee" | "dependent" = "employee"
+    let principalEmployeeId = ""
+    let dependentRelationship = "Spouse"
+    let reason = "Default employee linkage"
+
+    if ((patient.insurance_type || "").toLowerCase() === "dependent") {
+      linkageType = "dependent"
+      principalEmployeeId = employeeIdFromPatient || cardMatchedEmployee?.id || ""
+      dependentRelationship = "Dependent"
+      reason = employeeIdFromPatient
+        ? "Suggested from patient insurance type + employee reference"
+        : cardMatchedEmployee
+          ? "Suggested from insurance card roster match"
+          : "Dependent selected from patient insurance type"
+    } else if ((patient.insurance_type || "").toLowerCase() === "employee") {
+      if (cardMatchedEmployee && cardMatchedEmployee.patient_id && cardMatchedEmployee.patient_id !== row.patientId) {
+        linkageType = "dependent"
+        principalEmployeeId = cardMatchedEmployee.id
+        dependentRelationship = "Dependent"
+        reason = "Card matches another employee record; dependent linkage suggested"
+      } else {
+        linkageType = "employee"
+        reason = cardMatchedEmployee ? "Suggested from insurance card roster match" : "Suggested from patient insurance type"
+      }
+    } else if (cardMatchedEmployee) {
+      if (cardMatchedEmployee.patient_id && cardMatchedEmployee.patient_id !== row.patientId) {
+        linkageType = "dependent"
+        principalEmployeeId = cardMatchedEmployee.id
+        dependentRelationship = "Dependent"
+        reason = "Card matches principal employee in roster"
+      } else {
+        linkageType = "employee"
+        reason = "Card matches employee roster"
+      }
+    }
+
+    linkageSuggestionByPatientId.set(row.patientId, {
+      linkageType,
+      principalEmployeeId,
+      dependentRelationship,
+      reason,
+    })
+  }
 
   const unlinkedByCompanyMonth = Array.from(
     rows
@@ -844,6 +916,10 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
               <div className="space-y-3">
                 {unlinkedRows.map((row) => (
                   <form key={row.patientId} action={backfillCompanyCoverage} className="rounded-md border px-4 py-3 space-y-3">
+                    {(() => {
+                      const suggestion = row.patientId ? linkageSuggestionByPatientId.get(row.patientId) : null
+                      return (
+                        <>
                     <input type="hidden" name="company_id" value={selectedCompanyId} />
                     <input type="hidden" name="patient_id" value={row.patientId || ""} />
                     <input type="hidden" name="from" value={fromDateValue} />
@@ -858,6 +934,13 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                         <p className="text-xs text-muted-foreground">
                           Patient insurance type: {row.patientRecord?.insurance_type || "not set"} · Card: {row.patientRecord?.insurance_card_number || "not set"}
                         </p>
+                        {suggestion ? (
+                          <p className="text-xs text-blue-700">
+                            Suggested: {suggestion.linkageType}
+                            {suggestion.principalEmployeeId ? " with principal employee preselected" : ""}
+                            . {suggestion.reason}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         <p>Total billed: {formatCurrency(row.total, settings)}</p>
@@ -873,7 +956,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                         <select
                           id={`linkage-type-${row.patientId}`}
                           name="linkage_type"
-                          defaultValue="employee"
+                          defaultValue={suggestion?.linkageType || "employee"}
                           className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm"
                         >
                           <option value="employee">Employee</option>
@@ -887,7 +970,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                         <select
                           id={`principal-employee-${row.patientId}`}
                           name="principal_employee_id"
-                          defaultValue=""
+                          defaultValue={suggestion?.principalEmployeeId || ""}
                           className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm"
                         >
                           <option value="">Select employee</option>
@@ -906,7 +989,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                         <input
                           id={`dependent-relationship-${row.patientId}`}
                           name="dependent_relationship"
-                          defaultValue="Spouse"
+                          defaultValue={suggestion?.dependentRelationship || "Spouse"}
                           className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm"
                           placeholder="Spouse, Child, Parent"
                         />
@@ -919,6 +1002,9 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                         Save roster linkage
                       </Button>
                     </div>
+                        </>
+                      )
+                    })()}
                   </form>
                 ))}
               </div>

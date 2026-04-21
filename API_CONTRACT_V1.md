@@ -53,6 +53,7 @@ Example:
       "visits.summary",
       "appointments.summary",
       "prescriptions.summary",
+      "lab.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -175,6 +176,27 @@ Response fields:
 - `prescriptions.pending`
 - `prescriptions.dispensed`
 - `prescriptions.other`
+
+## `GET /api/v1/lab/summary`
+
+Purpose:
+- Return lab test workload totals for selected range.
+
+Access:
+- Requires `lab.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `lab.total_in_range`
+- `lab.pending`
+- `lab.in_progress`
+- `lab.completed`
+- `lab.cancelled`
 
 ## `GET /api/v1/billing/summary`
 

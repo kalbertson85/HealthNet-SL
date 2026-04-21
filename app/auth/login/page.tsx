@@ -80,7 +80,18 @@ function LoginPageContent() {
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
-        setError(err.message || "Failed to sign in")
+        const message = err.message || "Failed to sign in"
+        const isNetworkFetchError =
+          err.name === "TypeError" &&
+          /failed to fetch|networkerror|load failed|fetch/i.test(message)
+
+        if (isNetworkFetchError) {
+          setError(
+            "Unable to reach the authentication service. Check internet/VPN, DNS, firewall or browser extensions, then try again.",
+          )
+        } else {
+          setError(message)
+        }
       } else {
         setError("Failed to sign in")
       }

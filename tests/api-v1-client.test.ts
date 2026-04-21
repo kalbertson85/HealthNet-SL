@@ -75,5 +75,25 @@ describe("api v1 client", () => {
       status: 0,
     })
   })
-})
 
+  it("parses dashboard summary response", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        dashboard: {
+          patients_total: 120,
+          visits_active: 9,
+          invoices_open: 14,
+          invoices_open_balance: 2220.5,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getDashboardSummary()
+    expect(payload.dashboard.invoices_open).toBe(14)
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/dashboard/summary", expect.any(Object))
+  })
+})

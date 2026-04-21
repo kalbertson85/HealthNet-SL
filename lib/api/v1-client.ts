@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type {
+  ApiV1DashboardSummaryResponse,
   ApiV1BillingSummaryResponse,
   ApiV1MetaResponse,
   ApiV1PatientsSummaryResponse,
@@ -68,6 +69,18 @@ const billingSummarySchema = z.object({
     paid_amount: z.number(),
     outstanding_balance: z.number(),
     open_invoice_count: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
+const dashboardSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  dashboard: z.object({
+    patients_total: z.number(),
+    visits_active: z.number(),
+    invoices_open: z.number(),
+    invoices_open_balance: z.number(),
   }),
   server_time_utc: z.string(),
 })
@@ -171,6 +184,8 @@ export function createApiV1Client(opts?: {
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/billing/summary${suffix}`, billingSummarySchema) as Promise<ApiV1BillingSummaryResponse>
     },
+    async getDashboardSummary(): Promise<ApiV1DashboardSummaryResponse> {
+      return request("/dashboard/summary", dashboardSummarySchema) as Promise<ApiV1DashboardSummaryResponse>
+    },
   }
 }
-

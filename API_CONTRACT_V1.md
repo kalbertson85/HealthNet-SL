@@ -78,6 +78,20 @@ Response fields:
 - `session.permissions[]`
 - `api.version`
 
+## `GET /api/v1/dashboard/summary`
+
+Purpose:
+- Return a compact dashboard snapshot suitable for mobile and desktop landing screens.
+
+Access:
+- Requires `dashboard.view`.
+
+Response fields:
+- `dashboard.patients_total`
+- `dashboard.visits_active`
+- `dashboard.invoices_open`
+- `dashboard.invoices_open_balance`
+
 ## `GET /api/v1/patients/summary`
 
 Purpose:

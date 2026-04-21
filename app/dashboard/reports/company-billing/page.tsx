@@ -804,12 +804,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
 
   const linkageSuggestionByPatientId = new Map<
     string,
-    {
-      linkageType: "employee" | "dependent"
-      principalEmployeeId: string
-      dependentRelationship: string
-      reason: string
-    }
+    LinkageSuggestion
   >()
 
   for (const row of unlinkedRows) {
@@ -817,6 +812,27 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     const patient = row.patientRecord
     linkageSuggestionByPatientId.set(row.patientId, suggestLinkage(patient, employeeById, employeeByCard))
   }
+
+  const suggestionStats = unlinkedRows.reduce(
+    (acc, row) => {
+      const suggestion = row.patientId ? linkageSuggestionByPatientId.get(row.patientId) : null
+      if (!suggestion) {
+        acc.blocked += 1
+        return acc
+      }
+
+      if (suggestion.linkageType === "dependent" && !suggestion.principalEmployeeId) {
+        acc.blocked += 1
+      } else {
+        acc.actionable += 1
+      }
+
+      if (suggestion.linkageType === "employee") acc.employee += 1
+      if (suggestion.linkageType === "dependent") acc.dependent += 1
+      return acc
+    },
+    { actionable: 0, blocked: 0, employee: 0, dependent: 0 },
+  )
 
   const unlinkedByCompanyMonth = Array.from(
     rows
@@ -1147,8 +1163,8 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                 <input type="hidden" name="from" value={fromDateValue} />
                 <input type="hidden" name="to" value={toDateValue} />
                 <input type="hidden" name="status" value={statusFilter} />
-                <Button type="submit" size="sm" variant="outline" disabled={unlinkedRows.length === 0}>
-                  Apply Suggested Links
+                <Button type="submit" size="sm" variant="outline" disabled={suggestionStats.actionable === 0}>
+                  Apply Suggested Links ({suggestionStats.actionable})
                 </Button>
               </form>
             </div>
@@ -1168,6 +1184,26 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
                 <p className="text-sm font-medium">{fromDateValue} to {toDateValue}</p>
               </div>
             </div>
+            {unlinkedRows.length > 0 ? (
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="rounded-md border bg-muted/20 px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Suggested actionable</p>
+                  <p className="text-lg font-semibold">{suggestionStats.actionable}</p>
+                </div>
+                <div className="rounded-md border bg-muted/20 px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Blocked suggestions</p>
+                  <p className="text-lg font-semibold">{suggestionStats.blocked}</p>
+                </div>
+                <div className="rounded-md border bg-muted/20 px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Employee links</p>
+                  <p className="text-lg font-semibold">{suggestionStats.employee}</p>
+                </div>
+                <div className="rounded-md border bg-muted/20 px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Dependent links</p>
+                  <p className="text-lg font-semibold">{suggestionStats.dependent}</p>
+                </div>
+              </div>
+            ) : null}
 
             {unlinkedRows.length === 0 ? (
               <p className="text-sm text-muted-foreground">

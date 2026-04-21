@@ -264,4 +264,30 @@ describe("api v1 client", () => {
     expect(payload.pharmacy.low_stock_items).toBe(5)
     expect(fetchImpl).toHaveBeenCalledWith("/api/v1/pharmacy/summary", expect.any(Object))
   })
+
+  it("parses queue summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        queue: {
+          total_in_range: 72,
+          waiting: 18,
+          in_progress: 11,
+          completed: 39,
+          cancelled: 4,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getQueueSummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.queue.completed).toBe(39)
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/queue/summary?from=2026-04-01&to=2026-04-30", expect.any(Object))
+  })
 })

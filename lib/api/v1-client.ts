@@ -8,6 +8,7 @@ import type {
   ApiV1PatientsSummaryResponse,
   ApiV1PrescriptionsSummaryResponse,
   ApiV1PharmacySummaryResponse,
+  ApiV1QueueSummaryResponse,
   ApiV1RadiologySummaryResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
@@ -185,6 +186,23 @@ const pharmacySummarySchema = z.object({
   server_time_utc: z.string(),
 })
 
+const queueSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  range: z.object({
+    from: z.string(),
+    to: z.string(),
+  }),
+  queue: z.object({
+    total_in_range: z.number(),
+    waiting: z.number(),
+    in_progress: z.number(),
+    completed: z.number(),
+    cancelled: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -326,6 +344,13 @@ export function createApiV1Client(opts?: {
     },
     async getPharmacySummary(): Promise<ApiV1PharmacySummaryResponse> {
       return request("/pharmacy/summary", pharmacySummarySchema) as Promise<ApiV1PharmacySummaryResponse>
+    },
+    async getQueueSummary(params?: { from?: string; to?: string }): Promise<ApiV1QueueSummaryResponse> {
+      const query = new URLSearchParams()
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/queue/summary${suffix}`, queueSummarySchema) as Promise<ApiV1QueueSummaryResponse>
     },
   }
 }

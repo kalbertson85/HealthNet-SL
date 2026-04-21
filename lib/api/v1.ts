@@ -10,6 +10,7 @@ export const API_V1_CAPABILITIES = [
   "lab.summary",
   "radiology.summary",
   "pharmacy.summary",
+  "queue.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -156,6 +157,20 @@ export type ApiV1PharmacySummaryResponse = {
     low_stock_items: number
     expiring_soon_items: number
     expired_items: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1QueueSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  queue: {
+    total_in_range: number
+    waiting: number
+    in_progress: number
+    completed: number
+    cancelled: number
   }
   server_time_utc: string
 }

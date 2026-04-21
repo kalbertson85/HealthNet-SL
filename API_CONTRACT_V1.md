@@ -56,6 +56,7 @@ Example:
       "lab.summary",
       "radiology.summary",
       "pharmacy.summary",
+      "queue.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -234,6 +235,27 @@ Response fields:
 - `pharmacy.low_stock_items`
 - `pharmacy.expiring_soon_items`
 - `pharmacy.expired_items`
+
+## `GET /api/v1/queue/summary`
+
+Purpose:
+- Return queue workflow totals for selected range.
+
+Access:
+- Requires `queue.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `queue.total_in_range`
+- `queue.waiting`
+- `queue.in_progress`
+- `queue.completed`
+- `queue.cancelled`
 
 ## `GET /api/v1/billing/summary`
 

@@ -51,6 +51,7 @@ Example:
       "auth.session",
       "dashboard.summary",
       "visits.summary",
+      "appointments.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -133,6 +134,26 @@ Response fields:
 - `visits.active`
 - `visits.pending`
 - `visits.completed_or_discharged`
+
+## `GET /api/v1/appointments/summary`
+
+Purpose:
+- Return appointment lifecycle totals for selected range.
+
+Access:
+- Requires `appointments.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `appointments.total_in_range`
+- `appointments.scheduled_or_confirmed`
+- `appointments.completed`
+- `appointments.cancelled`
 
 ## `GET /api/v1/billing/summary`
 

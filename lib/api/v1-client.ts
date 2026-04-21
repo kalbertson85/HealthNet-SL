@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type {
+  ApiV1AppointmentsSummaryResponse,
   ApiV1DashboardSummaryResponse,
   ApiV1BillingSummaryResponse,
   ApiV1MetaResponse,
@@ -98,6 +99,22 @@ const visitsSummarySchema = z.object({
     active: z.number(),
     pending: z.number(),
     completed_or_discharged: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
+const appointmentsSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  range: z.object({
+    from: z.string(),
+    to: z.string(),
+  }),
+  appointments: z.object({
+    total_in_range: z.number(),
+    scheduled_or_confirmed: z.number(),
+    completed: z.number(),
+    cancelled: z.number(),
   }),
   server_time_utc: z.string(),
 })
@@ -210,6 +227,13 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/visits/summary${suffix}`, visitsSummarySchema) as Promise<ApiV1VisitsSummaryResponse>
+    },
+    async getAppointmentsSummary(params?: { from?: string; to?: string }): Promise<ApiV1AppointmentsSummaryResponse> {
+      const query = new URLSearchParams()
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/appointments/summary${suffix}`, appointmentsSummarySchema) as Promise<ApiV1AppointmentsSummaryResponse>
     },
   }
 }

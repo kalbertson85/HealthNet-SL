@@ -13,7 +13,8 @@
     "perf:smoke": "bash scripts/perf-smoke.sh",
     "webhook:test:local": "bash scripts/test-mobile-money-mutation-local.sh",
     "repo:check": "bash scripts/repo-hygiene-check.sh",
-    "repo:secrets": "bash scripts/repo-secret-scan.sh"
+    "repo:secrets": "bash scripts/repo-secret-scan.sh",
+    "audit:gate": "node scripts/ci-audit-gate.mjs artifacts/pnpm-audit-prod.json"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

@@ -19,6 +19,10 @@ Use this once in GitHub repository settings to enforce release governance.
 - Require status checks to pass before merging
 - Required checks:
   - `validate` (from `.github/workflows/ci.yml`)
+  - Confirm validate includes:
+    - repo hygiene check
+    - secret scan
+    - dependency audit gate (fails on high/critical vulnerabilities)
 - Require branches to be up to date before merging
 - Require conversation resolution before merging
 - Do not allow force pushes

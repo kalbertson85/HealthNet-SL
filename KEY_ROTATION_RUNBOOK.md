@@ -12,6 +12,23 @@ Rotate these first:
 - SMS provider API key
 - Any third-party API keys used in `.env*` or deployment secrets
 
+## Current Environment Secret Inventory (This App)
+
+High-priority secrets to rotate:
+
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `MOBILE_MONEY_WEBHOOK_SECRET`
+- `MOBILE_MONEY_WEBHOOK_HEALTH_TOKEN`
+- `SMS_API_KEY`
+
+Related runtime/config values to verify during rotation:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `SMS_API_URL`
+- `SENTRY_RELEASE`
+- `NEXT_PUBLIC_SENTRY_DSN`
+
 ## Sequence (Do Not Skip)
 
 1. Inventory all active secrets by environment:
@@ -34,6 +51,7 @@ Rotate these first:
 - SMS/notification delivery works
 - Billing PDF/export endpoints work
 - CI pipeline remains green
+- Background jobs/webhooks still authenticate with rotated secrets
 
 ## Incident Mode (Suspected Exposure)
 
@@ -50,4 +68,3 @@ If exposure is suspected:
 - Never commit secrets or token-bearing config files.
 - Use least-privilege credentials where supported.
 - Rotate secrets on schedule (for example, every 90 days) and on staff offboarding.
-

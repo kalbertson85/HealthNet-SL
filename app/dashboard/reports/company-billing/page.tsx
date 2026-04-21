@@ -500,7 +500,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     const [{ data: patientsRaw }, { data: employeeRosterRaw }] = await Promise.all([
       supabase
         .from("patients")
-        .select("id, full_name, phone_number, insurance_type, insurance_card_number, insurance_expiry_date, employee_id")
+        .select("id, full_name, phone_number, company_id, insurance_type, insurance_card_number, insurance_expiry_date, employee_id")
         .in("id", unlinkedPatientIds),
       supabase
         .from("company_employees")
@@ -526,6 +526,59 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
       if (suggestion.linkageType === "dependent" && !suggestion.principalEmployeeId) {
         skipped += 1
         continue
+      }
+
+      const [{ data: originalEmployee }, { data: originalDependentRows }] = await Promise.all([
+        supabase
+          .from("company_employees")
+          .select(
+            "id, company_id, patient_id, full_name, phone, insurance_card_number, insurance_card_serial, insurance_expiry_date, status",
+          )
+          .eq("patient_id", patient.id)
+          .maybeSingle(),
+        supabase
+          .from("employee_dependents")
+          .select(
+            "id, employee_id, patient_id, full_name, relationship, insurance_card_number, insurance_card_serial, insurance_expiry_date, status",
+          )
+          .eq("patient_id", patient.id),
+      ])
+
+      const rollbackLinkage = async () => {
+        await supabase
+          .from("patients")
+          .update({
+            company_id: patient.company_id ?? null,
+            insurance_type: patient.insurance_type ?? null,
+            employee_id: patient.employee_id ?? null,
+          })
+          .eq("id", patient.id)
+
+        await supabase.from("employee_dependents").delete().eq("patient_id", patient.id)
+        if ((originalDependentRows || []).length > 0) {
+          await supabase.from("employee_dependents").upsert(originalDependentRows || [], { onConflict: "patient_id" })
+        }
+
+        if (originalEmployee?.id) {
+          await supabase
+            .from("company_employees")
+            .upsert(
+              {
+                id: originalEmployee.id,
+                company_id: originalEmployee.company_id,
+                patient_id: originalEmployee.patient_id,
+                full_name: originalEmployee.full_name,
+                phone: originalEmployee.phone,
+                insurance_card_number: originalEmployee.insurance_card_number,
+                insurance_card_serial: originalEmployee.insurance_card_serial,
+                insurance_expiry_date: originalEmployee.insurance_expiry_date,
+                status: originalEmployee.status,
+              },
+              { onConflict: "patient_id" },
+            )
+        } else {
+          await supabase.from("company_employees").delete().eq("patient_id", patient.id)
+        }
       }
 
       const statusValue = patient.insurance_expiry_date
@@ -621,6 +674,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         })
         applied += 1
       } catch (error) {
+        await rollbackLinkage()
         console.error("[company-billing] failed bulk suggested linkage", { patientId: patient.id, error })
         failed += 1
       }

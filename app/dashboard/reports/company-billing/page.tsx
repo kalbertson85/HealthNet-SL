@@ -15,7 +15,16 @@ import { requireServerActionPermission } from "@/lib/server-action-security"
 import { z } from "zod"
 
 interface CompanyBillingReportsPageProps {
-  searchParams: Promise<{ company_id?: string; from?: string; to?: string; status?: string; page?: string }>
+  searchParams: Promise<{
+    company_id?: string
+    from?: string
+    to?: string
+    status?: string
+    page?: string
+    bulk_applied?: string
+    bulk_skipped?: string
+    bulk_failed?: string
+  }>
 }
 
 interface InvoiceRow {
@@ -67,6 +76,77 @@ function parseReportDate(value: string | null, fallback: Date) {
 
 function normalizeInsuranceCard(value: string | null | undefined) {
   return (value || "").trim().toUpperCase()
+}
+
+type LinkageSuggestion = {
+  linkageType: "employee" | "dependent"
+  principalEmployeeId: string
+  dependentRelationship: string
+  reason: string
+}
+
+function suggestLinkage(
+  patient: Pick<PatientLite, "id" | "insurance_type" | "insurance_card_number" | "employee_id">,
+  employeeById: Map<string, EmployeeRosterLite>,
+  employeeByCard: Map<string, EmployeeRosterLite>,
+) {
+  const patientCard = normalizeInsuranceCard(patient.insurance_card_number)
+  const cardMatchedEmployee = patientCard ? employeeByCard.get(patientCard) || null : null
+  const employeeIdFromPatient = patient.employee_id && employeeById.has(patient.employee_id) ? patient.employee_id : ""
+
+  let suggestion: LinkageSuggestion = {
+    linkageType: "employee",
+    principalEmployeeId: "",
+    dependentRelationship: "Spouse",
+    reason: "Default employee linkage",
+  }
+
+  if ((patient.insurance_type || "").toLowerCase() === "dependent") {
+    suggestion = {
+      linkageType: "dependent",
+      principalEmployeeId: employeeIdFromPatient || cardMatchedEmployee?.id || "",
+      dependentRelationship: "Dependent",
+      reason: employeeIdFromPatient
+        ? "Suggested from patient insurance type + employee reference"
+        : cardMatchedEmployee
+          ? "Suggested from insurance card roster match"
+          : "Dependent selected from patient insurance type",
+    }
+  } else if ((patient.insurance_type || "").toLowerCase() === "employee") {
+    if (cardMatchedEmployee && cardMatchedEmployee.patient_id && cardMatchedEmployee.patient_id !== patient.id) {
+      suggestion = {
+        linkageType: "dependent",
+        principalEmployeeId: cardMatchedEmployee.id,
+        dependentRelationship: "Dependent",
+        reason: "Card matches another employee record; dependent linkage suggested",
+      }
+    } else {
+      suggestion = {
+        linkageType: "employee",
+        principalEmployeeId: "",
+        dependentRelationship: "Spouse",
+        reason: cardMatchedEmployee ? "Suggested from insurance card roster match" : "Suggested from patient insurance type",
+      }
+    }
+  } else if (cardMatchedEmployee) {
+    if (cardMatchedEmployee.patient_id && cardMatchedEmployee.patient_id !== patient.id) {
+      suggestion = {
+        linkageType: "dependent",
+        principalEmployeeId: cardMatchedEmployee.id,
+        dependentRelationship: "Dependent",
+        reason: "Card matches principal employee in roster",
+      }
+    } else {
+      suggestion = {
+        linkageType: "employee",
+        principalEmployeeId: "",
+        dependentRelationship: "Spouse",
+        reason: "Card matches employee roster",
+      }
+    }
+  }
+
+  return suggestion
 }
 
 export default async function CompanyBillingReportsPage({ searchParams }: CompanyBillingReportsPageProps) {
@@ -360,6 +440,213 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
     redirect(`/dashboard/reports/company-billing?${redirectParams.toString()}#linkage-audit`)
   }
 
+  async function applySuggestedCoverageBulk(formData: FormData) {
+    "use server"
+
+    const { supabase, user } = await requireServerActionPermission("admin.settings.manage")
+    const parsed = z
+      .object({
+        company_id: z.string().uuid(),
+        from: z.string().trim().min(10).max(10),
+        to: z.string().trim().min(10).max(10),
+        status: z.string().trim().max(50).optional(),
+      })
+      .safeParse({
+        company_id: formData.get("company_id"),
+        from: formData.get("from"),
+        to: formData.get("to"),
+        status: formData.get("status"),
+      })
+
+    if (!parsed.success) {
+      redirect("/dashboard/reports/company-billing")
+    }
+
+    const companyId = parsed.data.company_id
+    const from = parsed.data.from
+    const to = parsed.data.to
+    const status = (parsed.data.status || "all").toLowerCase()
+    const fromIso = new Date(`${from}T00:00:00`).toISOString()
+    const toIso = new Date(`${to}T23:59:59.999`).toISOString()
+
+    const { data: invoicesRaw } = await supabase
+      .from("invoices")
+      .select("id, patient_id, status")
+      .eq("payer_type", "company")
+      .eq("company_id", companyId)
+      .gte("created_at", fromIso)
+      .lte("created_at", toIso)
+      .limit(MAX_COMPANY_BILLING_ROWS)
+
+    const invoices = ((invoicesRaw || []) as Array<{ patient_id?: string | null; status?: string | null }>).filter((invoice) =>
+      status === "all" ? true : (invoice.status || "").toLowerCase() === status,
+    )
+
+    const patientIds = Array.from(new Set(invoices.map((invoice) => invoice.patient_id).filter((id): id is string => Boolean(id))))
+    if (patientIds.length === 0) {
+      redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status}#linkage-audit`)
+    }
+
+    const coverageMap = await fetchCompanyCoverageMap(supabase, companyId, patientIds)
+    const unlinkedPatientIds = patientIds.filter((id) => {
+      const coverage = coverageMap.get(id)
+      return !coverage || coverage.relationshipLabel === "Unlinked"
+    })
+
+    if (unlinkedPatientIds.length === 0) {
+      redirect(`/dashboard/reports/company-billing?company_id=${companyId}&from=${from}&to=${to}&status=${status}&bulk_applied=0&bulk_skipped=0&bulk_failed=0#linkage-audit`)
+    }
+
+    const [{ data: patientsRaw }, { data: employeeRosterRaw }] = await Promise.all([
+      supabase
+        .from("patients")
+        .select("id, full_name, phone_number, insurance_type, insurance_card_number, insurance_expiry_date, employee_id")
+        .in("id", unlinkedPatientIds),
+      supabase
+        .from("company_employees")
+        .select("id, full_name, patient_id, insurance_card_number")
+        .eq("company_id", companyId),
+    ])
+
+    const patients = (patientsRaw || []) as Array<PatientLite & { insurance_expiry_date?: string | null; phone_number?: string | null }>
+    const employeeRoster = (employeeRosterRaw || []) as EmployeeRosterLite[]
+    const employeeById = new Map(employeeRoster.map((employee) => [employee.id, employee]))
+    const employeeByCard = new Map(
+      employeeRoster
+        .filter((employee) => normalizeInsuranceCard(employee.insurance_card_number))
+        .map((employee) => [normalizeInsuranceCard(employee.insurance_card_number), employee]),
+    )
+
+    let applied = 0
+    let skipped = 0
+    let failed = 0
+
+    for (const patient of patients) {
+      const suggestion = suggestLinkage(patient, employeeById, employeeByCard)
+      if (suggestion.linkageType === "dependent" && !suggestion.principalEmployeeId) {
+        skipped += 1
+        continue
+      }
+
+      const statusValue = patient.insurance_expiry_date
+        ? new Date(patient.insurance_expiry_date).getTime() >= new Date(new Date().setHours(0, 0, 0, 0)).getTime()
+          ? "active"
+          : "expired"
+        : "missing"
+
+      try {
+        if (suggestion.linkageType === "employee") {
+          const { data: employeeRow, error: employeeUpsertError } = await supabase
+            .from("company_employees")
+            .upsert(
+              {
+                company_id: companyId,
+                patient_id: patient.id,
+                full_name: patient.full_name || "Unknown patient",
+                phone: patient.phone_number || null,
+                insurance_card_number: patient.insurance_card_number || null,
+                insurance_expiry_date: patient.insurance_expiry_date || new Date().toISOString().slice(0, 10),
+                status: statusValue,
+              },
+              { onConflict: "patient_id" },
+            )
+            .select("id")
+            .maybeSingle()
+          if (employeeUpsertError) throw employeeUpsertError
+
+          const { error: clearDependentError } = await supabase.from("employee_dependents").delete().eq("patient_id", patient.id)
+          if (clearDependentError) throw clearDependentError
+
+          const { error: patientUpdateError } = await supabase
+            .from("patients")
+            .update({
+              company_id: companyId,
+              insurance_type: "employee",
+              employee_id: employeeRow?.id ?? null,
+            })
+            .eq("id", patient.id)
+          if (patientUpdateError) throw patientUpdateError
+        } else {
+          const { error: employeeDeleteError } = await supabase.from("company_employees").delete().eq("patient_id", patient.id)
+          if (employeeDeleteError) throw employeeDeleteError
+
+          const { error: dependentUpsertError } = await supabase
+            .from("employee_dependents")
+            .upsert(
+              {
+                employee_id: suggestion.principalEmployeeId,
+                patient_id: patient.id,
+                full_name: patient.full_name || "Unknown patient",
+                relationship: suggestion.dependentRelationship || "Dependent",
+                insurance_card_number: patient.insurance_card_number || null,
+                insurance_expiry_date: patient.insurance_expiry_date || new Date().toISOString().slice(0, 10),
+                status: statusValue,
+              },
+              { onConflict: "patient_id" },
+            )
+          if (dependentUpsertError) throw dependentUpsertError
+
+          const { error: patientUpdateError } = await supabase
+            .from("patients")
+            .update({
+              company_id: companyId,
+              insurance_type: "dependent",
+              employee_id: suggestion.principalEmployeeId,
+            })
+            .eq("id", patient.id)
+          if (patientUpdateError) throw patientUpdateError
+        }
+
+        await logAuditEvent({
+          action: "patient.coverage_linked_bulk_suggested",
+          entityType: "patient",
+          entityId: patient.id,
+          user,
+          metadata: {
+            patient_id: patient.id,
+            company_id: companyId,
+            linkage_type: suggestion.linkageType,
+            principal_employee_id: suggestion.principalEmployeeId || null,
+            source: "company_billing_bulk_suggested",
+            reason: suggestion.reason,
+          },
+          before: {
+            insurance_type: patient.insurance_type || null,
+            employee_id: patient.employee_id || null,
+          },
+          after: {
+            insurance_type: suggestion.linkageType,
+            employee_id: suggestion.linkageType === "employee" ? null : suggestion.principalEmployeeId,
+          },
+        })
+        applied += 1
+      } catch (error) {
+        console.error("[company-billing] failed bulk suggested linkage", { patientId: patient.id, error })
+        failed += 1
+      }
+    }
+
+    await supabase.from("admin_audit_logs").insert({
+      actor_user_id: user.id,
+      target_user_id: user.id,
+      action: "patient_coverage_bulk_suggested_linking",
+      notes: `company=${companyId} applied=${applied} skipped=${skipped} failed=${failed}`,
+    })
+
+    revalidatePath("/dashboard/reports/company-billing")
+    redirect(
+      `/dashboard/reports/company-billing?${new URLSearchParams({
+        company_id: companyId,
+        from,
+        to,
+        ...(status && status !== "all" ? { status } : {}),
+        bulk_applied: String(applied),
+        bulk_skipped: String(skipped),
+        bulk_failed: String(failed),
+      }).toString()}#linkage-audit`,
+    )
+  }
+
   const [{ data: companies }, { data: invoices }, { data: employeeRosterRaw }] = await Promise.all([
     supabase.from("companies").select("id, name").order("name"),
     supabase
@@ -528,52 +815,7 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   for (const row of unlinkedRows) {
     if (!row.patientId || !row.patientRecord) continue
     const patient = row.patientRecord
-    const patientCard = normalizeInsuranceCard(patient.insurance_card_number)
-    const cardMatchedEmployee = patientCard ? employeeByCard.get(patientCard) || null : null
-    const employeeIdFromPatient = patient.employee_id && employeeById.has(patient.employee_id) ? patient.employee_id : ""
-
-    let linkageType: "employee" | "dependent" = "employee"
-    let principalEmployeeId = ""
-    let dependentRelationship = "Spouse"
-    let reason = "Default employee linkage"
-
-    if ((patient.insurance_type || "").toLowerCase() === "dependent") {
-      linkageType = "dependent"
-      principalEmployeeId = employeeIdFromPatient || cardMatchedEmployee?.id || ""
-      dependentRelationship = "Dependent"
-      reason = employeeIdFromPatient
-        ? "Suggested from patient insurance type + employee reference"
-        : cardMatchedEmployee
-          ? "Suggested from insurance card roster match"
-          : "Dependent selected from patient insurance type"
-    } else if ((patient.insurance_type || "").toLowerCase() === "employee") {
-      if (cardMatchedEmployee && cardMatchedEmployee.patient_id && cardMatchedEmployee.patient_id !== row.patientId) {
-        linkageType = "dependent"
-        principalEmployeeId = cardMatchedEmployee.id
-        dependentRelationship = "Dependent"
-        reason = "Card matches another employee record; dependent linkage suggested"
-      } else {
-        linkageType = "employee"
-        reason = cardMatchedEmployee ? "Suggested from insurance card roster match" : "Suggested from patient insurance type"
-      }
-    } else if (cardMatchedEmployee) {
-      if (cardMatchedEmployee.patient_id && cardMatchedEmployee.patient_id !== row.patientId) {
-        linkageType = "dependent"
-        principalEmployeeId = cardMatchedEmployee.id
-        dependentRelationship = "Dependent"
-        reason = "Card matches principal employee in roster"
-      } else {
-        linkageType = "employee"
-        reason = "Card matches employee roster"
-      }
-    }
-
-    linkageSuggestionByPatientId.set(row.patientId, {
-      linkageType,
-      principalEmployeeId,
-      dependentRelationship,
-      reason,
-    })
+    linkageSuggestionByPatientId.set(row.patientId, suggestLinkage(patient, employeeById, employeeByCard))
   }
 
   const unlinkedByCompanyMonth = Array.from(
@@ -632,6 +874,12 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
 
   return (
     <div className="space-y-6">
+      {sp.bulk_applied || sp.bulk_failed || sp.bulk_skipped ? (
+        <div className="rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          Suggested bulk linkage result: applied {sp.bulk_applied || "0"}, skipped {sp.bulk_skipped || "0"}, failed{" "}
+          {sp.bulk_failed || "0"}.
+        </div>
+      ) : null}
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-3xl font-bold tracking-tight">Company billing statement</h1>
@@ -887,10 +1135,23 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
       {selectedCompanyId ? (
         <Card id="linkage-audit">
           <CardHeader>
-            <CardTitle>Roster linkage audit</CardTitle>
-            <CardDescription>
-              Review company-billed patients who are not yet linked to the employee or dependent roster. Link them here so monthly statements can identify employee, spouse, or child correctly.
-            </CardDescription>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle>Roster linkage audit</CardTitle>
+                <CardDescription>
+                  Review company-billed patients who are not yet linked to the employee or dependent roster. Link them here so monthly statements can identify employee, spouse, or child correctly.
+                </CardDescription>
+              </div>
+              <form action={applySuggestedCoverageBulk}>
+                <input type="hidden" name="company_id" value={selectedCompanyId} />
+                <input type="hidden" name="from" value={fromDateValue} />
+                <input type="hidden" name="to" value={toDateValue} />
+                <input type="hidden" name="status" value={statusFilter} />
+                <Button type="submit" size="sm" variant="outline" disabled={unlinkedRows.length === 0}>
+                  Apply Suggested Links
+                </Button>
+              </form>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-3">

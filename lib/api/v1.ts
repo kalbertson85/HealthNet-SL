@@ -4,6 +4,7 @@ export const API_V1_RELEASE_CHANNEL = "beta"
 export const API_V1_CAPABILITIES = [
   "auth.session",
   "dashboard.summary",
+  "visits.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -71,6 +72,19 @@ export type ApiV1DashboardSummaryResponse = {
     visits_active: number
     invoices_open: number
     invoices_open_balance: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1VisitsSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  visits: {
+    total_in_range: number
+    active: number
+    pending: number
+    completed_or_discharged: number
   }
   server_time_utc: string
 }

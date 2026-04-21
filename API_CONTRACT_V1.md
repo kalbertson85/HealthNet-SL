@@ -49,8 +49,12 @@ Example:
     "release_channel": "beta",
     "capabilities": [
       "auth.session",
+      "dashboard.summary",
+      "visits.summary",
       "patients.workflow",
+      "patients.summary",
       "billing.insurance",
+      "billing.summary",
       "reports.company_billing",
       "audit.trail"
     ]
@@ -109,6 +113,26 @@ Response fields:
 - `range.to`
 - `patients.total`
 - `patients.created_in_range`
+
+## `GET /api/v1/visits/summary`
+
+Purpose:
+- Return visit activity mix for selected range for dashboard trend tiles.
+
+Access:
+- Requires `reports.view`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `visits.total_in_range`
+- `visits.active`
+- `visits.pending`
+- `visits.completed_or_discharged`
 
 ## `GET /api/v1/billing/summary`
 

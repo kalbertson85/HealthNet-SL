@@ -213,4 +213,34 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses radiology summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        radiology: {
+          total_in_range: 33,
+          pending: 9,
+          scheduled: 7,
+          completed: 14,
+          cancelled: 3,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getRadiologySummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+
+    expect(payload.radiology.completed).toBe(14)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/radiology/summary?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

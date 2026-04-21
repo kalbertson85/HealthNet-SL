@@ -8,6 +8,7 @@ export const API_V1_CAPABILITIES = [
   "appointments.summary",
   "prescriptions.summary",
   "lab.summary",
+  "radiology.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -126,6 +127,20 @@ export type ApiV1LabSummaryResponse = {
     total_in_range: number
     pending: number
     in_progress: number
+    completed: number
+    cancelled: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1RadiologySummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  radiology: {
+    total_in_range: number
+    pending: number
+    scheduled: number
     completed: number
     cancelled: number
   }

@@ -54,6 +54,7 @@ Example:
       "appointments.summary",
       "prescriptions.summary",
       "lab.summary",
+      "radiology.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -197,6 +198,27 @@ Response fields:
 - `lab.in_progress`
 - `lab.completed`
 - `lab.cancelled`
+
+## `GET /api/v1/radiology/summary`
+
+Purpose:
+- Return radiology request workload totals for selected range.
+
+Access:
+- Requires `lab.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `radiology.total_in_range`
+- `radiology.pending`
+- `radiology.scheduled`
+- `radiology.completed`
+- `radiology.cancelled`
 
 ## `GET /api/v1/billing/summary`
 

@@ -24,6 +24,17 @@ yarn-error.log*
 # env files
 .env*
 
+# sensitive cert/key artifacts
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+*.mobileprovision
+
 # vercel
 .vercel
 

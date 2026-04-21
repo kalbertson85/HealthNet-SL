@@ -16,6 +16,13 @@ forbidden_patterns=(
   '/\.DS_Store$'
   '\.pem$'
   '\.key$'
+  '\.p12$'
+  '\.pfx$'
+  '\.crt$'
+  '\.cer$'
+  '\.jks$'
+  '\.keystore$'
+  '\.mobileprovision$'
   '^id_rsa$'
   '^id_ed25519$'
 )

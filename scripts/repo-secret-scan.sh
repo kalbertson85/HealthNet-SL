@@ -29,7 +29,13 @@ fi
 patterns=(
   'ghp_[A-Za-z0-9]{36}'
   'github_pat_[A-Za-z0-9_]{50,}'
+  'gho_[A-Za-z0-9]{36}'
+  'ghu_[A-Za-z0-9]{36}'
+  'ghs_[A-Za-z0-9]{36}'
   'AKIA[0-9A-Z]{16}'
+  'ASIA[0-9A-Z]{16}'
+  'AIza[0-9A-Za-z\-_]{35}'
+  'sk-[A-Za-z0-9]{20,}'
   '-----BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY-----'
   'xox[baprs]-[A-Za-z0-9-]{10,}'
   '(?i)(api[_-]?key|service[_-]?role[_-]?key|private[_-]?key|access[_-]?token)\s*[:=]\s*["'"'"'][^"'"'"'\n]{20,}["'"'"']'

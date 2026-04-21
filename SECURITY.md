@@ -47,3 +47,4 @@ Priority classes include:
 - Never commit `.env*` files or raw secrets.
 - Rotate exposed secrets immediately (Supabase keys, webhook secrets, API tokens).
 - Keep branch protection and required checks enabled for `main`.
+- Follow `KEY_ROTATION_RUNBOOK.md` for planned and incident-driven key rotation.

@@ -37,6 +37,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Production dependency audit (report-only)
+        continue-on-error: true
+        run: |
+          mkdir -p artifacts
+          pnpm audit --prod --json > artifacts/pnpm-audit-prod.json || true
+          echo "Generated artifacts/pnpm-audit-prod.json"
+
+      - name: Upload dependency audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pnpm-audit-prod
+          path: artifacts/pnpm-audit-prod.json
+          if-no-files-found: error
+
       - name: Cache Next.js build cache
         uses: actions/cache@v4
         with:

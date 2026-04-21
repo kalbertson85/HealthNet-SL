@@ -57,6 +57,7 @@ Example:
       "radiology.summary",
       "pharmacy.summary",
       "queue.summary",
+      "emergency.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -256,6 +257,28 @@ Response fields:
 - `queue.in_progress`
 - `queue.completed`
 - `queue.cancelled`
+
+## `GET /api/v1/emergency/summary`
+
+Purpose:
+- Return emergency and triage workload totals for selected range.
+
+Access:
+- Requires `emergency.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `emergency.total_in_range`
+- `emergency.pending`
+- `emergency.in_treatment`
+- `emergency.admitted`
+- `emergency.discharged_or_transferred`
+- `emergency.critical_or_emergency`
 
 ## `GET /api/v1/billing/summary`
 

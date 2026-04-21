@@ -11,6 +11,7 @@ export const API_V1_CAPABILITIES = [
   "radiology.summary",
   "pharmacy.summary",
   "queue.summary",
+  "emergency.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -171,6 +172,21 @@ export type ApiV1QueueSummaryResponse = {
     in_progress: number
     completed: number
     cancelled: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1EmergencySummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  emergency: {
+    total_in_range: number
+    pending: number
+    in_treatment: number
+    admitted: number
+    discharged_or_transferred: number
+    critical_or_emergency: number
   }
   server_time_utc: string
 }

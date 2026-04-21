@@ -290,4 +290,34 @@ describe("api v1 client", () => {
     expect(payload.queue.completed).toBe(39)
     expect(fetchImpl).toHaveBeenCalledWith("/api/v1/queue/summary?from=2026-04-01&to=2026-04-30", expect.any(Object))
   })
+
+  it("parses emergency summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        emergency: {
+          total_in_range: 21,
+          pending: 6,
+          in_treatment: 7,
+          admitted: 3,
+          discharged_or_transferred: 5,
+          critical_or_emergency: 8,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getEmergencySummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.emergency.critical_or_emergency).toBe(8)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/emergency/summary?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

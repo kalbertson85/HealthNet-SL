@@ -10,12 +10,15 @@ function parseAuditJson(raw) {
   const trimmed = raw.trim()
   if (!trimmed) return null
 
-  // pnpm may occasionally output line-delimited JSON fragments.
-  const lines = trimmed.split(/\r?\n/).filter(Boolean)
-  if (lines.length === 1) {
-    return JSON.parse(lines[0])
+  // Prefer standard JSON parsing first (normal pnpm output).
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    // Fall through to line-delimited JSON parsing.
   }
 
+  // pnpm may occasionally output line-delimited JSON fragments.
+  const lines = trimmed.split(/\r?\n/).filter(Boolean)
   const parsedLines = []
   for (const line of lines) {
     parsedLines.push(JSON.parse(line))

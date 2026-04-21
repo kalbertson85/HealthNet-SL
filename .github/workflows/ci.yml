@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 20
     env:
       CI: "true"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout
@@ -46,7 +47,7 @@ jobs:
 
       - name: Upload dependency audit artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pnpm-audit-prod
           path: artifacts/pnpm-audit-prod.json

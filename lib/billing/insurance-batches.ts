@@ -29,6 +29,8 @@ export interface InsuranceBatchPatientInvoice {
   createdAt: string | null
   visitId: string | null
   visitReference: string
+  beneficiaryName: string
+  beneficiaryRelationship: string | null
   amount: number
   lineItems: InsuranceBatchPatientInvoiceLineItem[]
 }
@@ -39,6 +41,8 @@ export interface InsuranceBatchPatientGroup {
   patientNumber: string
   relationship: string | null
   principalEmployeeName: string | null
+  memberCount: number
+  hasUnlinked: boolean
   total: number
   invoices: InsuranceBatchPatientInvoice[]
 }
@@ -328,6 +332,72 @@ export function groupInvoicesByPatient(rows: EligibleInsuranceInvoice[]) {
   return Array.from(grouped.values())
 }
 
+type CoverageForGrouping = {
+  beneficiaryName: string | null
+  relationshipLabel: string
+  principalEmployeeName: string | null
+  principalEmployeeId: string | null
+}
+
+export function groupInvoicesForInsurer(
+  rows: EligibleInsuranceInvoice[],
+  coverageByPatientId: Map<string, CoverageForGrouping>,
+) {
+  const grouped = new Map<
+    string,
+    {
+      patientId: string | null
+      patientName: string
+      patientNumber: string
+      relationship: string | null
+      principalEmployeeName: string | null
+      memberKeys: Set<string>
+      hasUnlinked: boolean
+      invoices: EligibleInsuranceInvoice[]
+      total: number
+    }
+  >()
+
+  for (const invoice of rows) {
+    const coverage = invoice.patient_id ? coverageByPatientId.get(invoice.patient_id) : null
+    const groupKey = coverage?.principalEmployeeId || invoice.patient_id || invoice.id
+    const hasPrincipal = Boolean(coverage?.principalEmployeeId)
+    const beneficiaryName = invoice.patients?.full_name || coverage?.beneficiaryName || "Unknown patient"
+    const existing = grouped.get(groupKey) || {
+      patientId: coverage?.principalEmployeeId || invoice.patient_id,
+      patientName:
+        hasPrincipal && coverage?.principalEmployeeName
+          ? `${coverage.principalEmployeeName} household`
+          : beneficiaryName,
+      patientNumber: hasPrincipal ? "Household" : (invoice.patients?.patient_number || "-"),
+      relationship: hasPrincipal ? "Household" : (coverage?.relationshipLabel || null),
+      principalEmployeeName: coverage?.principalEmployeeName || null,
+      memberKeys: new Set<string>(),
+      hasUnlinked: false,
+      invoices: [],
+      total: 0,
+    }
+
+    existing.invoices.push(invoice)
+    existing.total += invoice.balance
+    existing.hasUnlinked = existing.hasUnlinked || !coverage || coverage.relationshipLabel === "Unlinked"
+    existing.memberKeys.add(invoice.patient_id || beneficiaryName)
+    grouped.set(groupKey, existing)
+  }
+
+  return Array.from(grouped.values()).map((group) => ({
+    patientId: group.patientId,
+    patientName: group.patientName,
+    patientNumber: group.patientNumber,
+    relationship: group.relationship,
+    principalEmployeeName: group.principalEmployeeName,
+    memberCount: Math.max(group.memberKeys.size, 1),
+    hasUnlinked: group.hasUnlinked,
+    invoices: group.invoices,
+    total: group.total,
+  }))
+}
+
 function normalizeSingle<T>(relation: T | T[] | null | undefined): T | null {
   if (!relation) return null
   return Array.isArray(relation) ? (relation[0] ?? null) : relation
@@ -455,7 +525,12 @@ export async function fetchInsuranceBatchDetails(supabase: unknown, batchId: str
     lineItemsByInvoiceId.set(item.invoice_id, existing)
   }
 
-  const groupedPatients = new Map<string, InsuranceBatchPatientGroup>()
+  const groupedPatients = new Map<
+    string,
+    InsuranceBatchPatientGroup & {
+      memberKeys: Set<string>
+    }
+  >()
   for (const row of batchItems) {
     const patient = normalizeSingle(
       row.patients as
@@ -470,24 +545,36 @@ export async function fetchInsuranceBatchDetails(supabase: unknown, batchId: str
         | null,
     )
     const coverage = row.patient_id ? coverageMap.get(row.patient_id) : null
-    const key = row.patient_id || row.id
+    const key = coverage?.principalEmployeeId || row.patient_id || row.id
+    const beneficiaryName = patient?.full_name || coverage?.beneficiaryName || "Unknown patient"
+    const hasPrincipal = Boolean(coverage?.principalEmployeeId)
     const existing = groupedPatients.get(key) || {
-      patientId: row.patient_id ?? null,
-      patientName: patient?.full_name || coverage?.beneficiaryName || "Unknown patient",
-      patientNumber: patient?.patient_number || "-",
-      relationship: coverage?.relationshipLabel || null,
+      patientId: coverage?.principalEmployeeId || row.patient_id || null,
+      patientName:
+        hasPrincipal && coverage?.principalEmployeeName
+          ? `${coverage.principalEmployeeName} household`
+          : beneficiaryName,
+      patientNumber: hasPrincipal ? "Household" : (patient?.patient_number || "-"),
+      relationship: hasPrincipal ? "Household" : (coverage?.relationshipLabel || null),
       principalEmployeeName: coverage?.principalEmployeeName || null,
+      memberCount: 0,
+      hasUnlinked: false,
       total: 0,
       invoices: [],
+      memberKeys: new Set<string>(),
     }
     const amount = Number(row.amount || 0)
     existing.total += amount
+    existing.hasUnlinked = existing.hasUnlinked || !coverage || coverage.relationshipLabel === "Unlinked"
+    existing.memberKeys.add(row.patient_id || beneficiaryName)
     existing.invoices.push({
       invoiceId: invoice?.id || row.invoice_id || "",
       invoiceNumber: invoice?.invoice_number || "Unnumbered invoice",
       createdAt: invoice?.created_at || null,
       visitId: row.visit_id ?? null,
       visitReference: buildVisitReference(row.visit_id),
+      beneficiaryName,
+      beneficiaryRelationship: coverage?.relationshipLabel || null,
       amount,
       lineItems: lineItemsByInvoiceId.get(invoice?.id || row.invoice_id || "") || [],
     })
@@ -514,6 +601,9 @@ export async function fetchInsuranceBatchDetails(supabase: unknown, batchId: str
       companyPhone: company?.phone ?? null,
       companyEmail: company?.email ?? null,
     },
-    groupedPatients: Array.from(groupedPatients.values()),
+    groupedPatients: Array.from(groupedPatients.values()).map(({ memberKeys, ...group }) => ({
+      ...group,
+      memberCount: Math.max(memberKeys.size, 1),
+    })),
   }
 }

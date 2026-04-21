@@ -122,7 +122,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       {
         title: t("pdf.batchSummary", "Batch Summary"),
         rows: [
-          { label: t("pdf.beneficiaries", "Beneficiaries"), value: String(groupedPatients.length) },
+          { label: t("pdf.beneficiaries", "Beneficiaries"), value: String(groupedPatients.reduce((sum, group) => sum + group.memberCount, 0)) },
           { label: t("pdf.grandTotal", "Grand total"), value: formatCurrency(batch.total_amount, settings as GlobalSettingsInput) },
           { label: t("pdf.amountPaid", "Amount paid"), value: formatCurrency(batch.paid_amount, settings as GlobalSettingsInput) },
           { label: t("pdf.balance", "Balance"), value: formatCurrency(Math.max(batch.total_amount - batch.paid_amount, 0), settings as GlobalSettingsInput) },
@@ -183,6 +183,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         group.patientNumber,
         group.relationship || null,
         group.principalEmployeeName ? `Principal: ${group.principalEmployeeName}` : null,
+        group.memberCount > 1 ? `Members: ${group.memberCount}` : null,
       ].filter(Boolean)
       drawText(page, group.patientName, PAGE_MARGIN + 8, y - 16, 11, bold)
       drawText(page, relationshipParts.join(" · "), PAGE_MARGIN + 200, y - 16, 8, regular, MUTED)
@@ -223,7 +224,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           })
           drawText(page, formatDate(invoice.createdAt, settings as GlobalSettingsInput), columns[0].x, y - 11, 8, regular)
           drawText(page, invoice.visitReference, columns[1].x, y - 11, 8, regular)
-          drawText(page, item.description.slice(0, 44), columns[2].x, y - 11, 8, regular)
+          const serviceLabel = group.memberCount > 1
+            ? `${invoice.beneficiaryName}: ${item.description}`.slice(0, 44)
+            : item.description.slice(0, 44)
+          drawText(page, serviceLabel, columns[2].x, y - 11, 8, regular)
           drawText(page, String(item.quantity), columns[3].x, y - 11, 8, regular)
           drawText(page, formatCurrency(item.unit_price, settings as GlobalSettingsInput), columns[4].x, y - 11, 8, regular)
           drawText(page, formatCurrency(item.amount, settings as GlobalSettingsInput), columns[5].x, y - 11, 8, regular)

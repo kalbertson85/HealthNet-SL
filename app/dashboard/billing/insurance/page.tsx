@@ -7,7 +7,7 @@ import {
   buildInsuranceBatchNumber,
   createInsuranceBillingBatchTransactional,
   fetchEligibleInsuranceInvoices,
-  groupInvoicesByPatient,
+  groupInvoicesForInsurer,
 } from "@/lib/billing/insurance-batches"
 import { fetchCompanyCoverageMap } from "@/lib/billing/company-coverage"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -139,11 +139,11 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
     .filter((batch) => (statusFilter !== "all" ? ((batch.status as string | null) || "").toLowerCase() === statusFilter : true))
 
   const eligibleInvoices = selectedCompanyId ? await fetchEligibleInsuranceInvoices(supabase, selectedCompanyId, fromIso, toIso) : []
-  const groupedPreview = groupInvoicesByPatient(eligibleInvoices)
   const previewTotal = eligibleInvoices.reduce((sum, invoice) => sum + invoice.balance, 0)
   const selectedCompanyName = (companies || []).find((company) => company.id === selectedCompanyId)?.name || selectedCompanyId
   const eligiblePatientIds = Array.from(new Set(eligibleInvoices.map((invoice) => invoice.patient_id).filter((id): id is string => Boolean(id))))
   const coverageMap = selectedCompanyId ? await fetchCompanyCoverageMap(supabase, selectedCompanyId, eligiblePatientIds) : new Map()
+  const groupedPreview = groupInvoicesForInsurer(eligibleInvoices, coverageMap)
   const unlinkedEligibleCount = eligiblePatientIds.filter((patientId) => {
     const coverage = coverageMap.get(patientId)
     return !coverage || coverage.relationshipLabel === "Unlinked"
@@ -237,7 +237,7 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
                 <CardContent><p className="text-2xl font-bold">{eligibleInvoices.length}</p></CardContent>
               </Card>
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">Patients in batch</CardTitle></CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Employee households</CardTitle></CardHeader>
                 <CardContent><p className="text-2xl font-bold">{groupedPreview.length}</p></CardContent>
               </Card>
               <Card>
@@ -266,10 +266,13 @@ export default async function InsuranceBillingPage({ searchParams }: InsuranceBi
                         </div>
                         <p className="text-sm font-semibold">{formatCurrency(group.total, settings)}</p>
                       </div>
-                      {group.patientId && (!coverageMap.get(group.patientId) || coverageMap.get(group.patientId)?.relationshipLabel === "Unlinked") ? (
+                      {group.hasUnlinked ? (
                         <p className="mt-2 text-xs text-amber-700">
                           Beneficiary relationship is not linked to the employee roster yet.
                         </p>
+                      ) : null}
+                      {group.memberCount > 1 ? (
+                        <p className="mt-1 text-xs text-muted-foreground">Household members in this period: {group.memberCount}</p>
                       ) : null}
                       <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                         {group.invoices.map((invoice) => (

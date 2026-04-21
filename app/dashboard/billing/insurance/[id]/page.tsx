@@ -117,7 +117,7 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
 
   const { batch, groupedPatients } = batchDetails
   const balance = Math.max(batch.total_amount - batch.paid_amount, 0)
-  const unlinkedBeneficiaries = groupedPatients.filter((group) => !group.relationship || group.relationship === "Unlinked")
+  const unlinkedBeneficiaries = groupedPatients.filter((group) => group.hasUnlinked)
   const auditHref = batch.company_id
     ? `/dashboard/reports/company-billing?${new URLSearchParams({
         company_id: batch.company_id,
@@ -178,9 +178,9 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
 
       <Card>
         <CardHeader>
-          <CardTitle>Beneficiaries and services</CardTitle>
+          <CardTitle>Employee households and services</CardTitle>
           <CardDescription>
-            Each beneficiary keeps the original visit invoice lines, with totals rolled up into one payer-facing insurer invoice.
+            Services are grouped by principal employee household while preserving invoice and beneficiary-level traceability.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -193,6 +193,7 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
                     {group.patientNumber}
                     {group.relationship ? ` · ${group.relationship}` : ""}
                     {group.principalEmployeeName ? ` · Principal: ${group.principalEmployeeName}` : ""}
+                    {group.memberCount > 1 ? ` · Members: ${group.memberCount}` : ""}
                   </p>
                 </div>
                 <p className="text-sm font-semibold">{formatCurrency(group.total, settings)}</p>
@@ -205,7 +206,11 @@ export default async function InsuranceBillingBatchDetailPage({ params }: { para
                       <p className="text-sm font-semibold">{formatCurrency(invoice.amount, settings)}</p>
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                      <span>{invoice.visitReference}</span>
+                      <span>
+                        {invoice.visitReference}
+                        {invoice.beneficiaryName ? ` · ${invoice.beneficiaryName}` : ""}
+                        {invoice.beneficiaryRelationship ? ` (${invoice.beneficiaryRelationship})` : ""}
+                      </span>
                       <span>{formatDate(invoice.createdAt, settings, { style: "numeric" })}</span>
                     </div>
                     <div className="mt-2 space-y-1 text-xs text-muted-foreground">

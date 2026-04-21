@@ -7,6 +7,8 @@ export const API_V1_CAPABILITIES = [
   "billing.insurance",
   "reports.company_billing",
   "audit.trail",
+  "patients.summary",
+  "billing.summary",
 ] as const
 
 export type ApiV1MetaResponse = {
@@ -23,3 +25,39 @@ export type ApiV1MetaResponse = {
   server_time_utc: string
 }
 
+export type ApiV1SessionResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  session: {
+    user_id: string
+    role: string | null
+    facility_id: string | null
+    permissions: string[]
+  }
+  server_time_utc: string
+}
+
+export type ApiV1PatientsSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  patients: {
+    total: number
+    created_in_range: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1BillingSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  billing: {
+    invoice_count: number
+    total_amount: number
+    paid_amount: number
+    outstanding_balance: number
+    open_invoice_count: number
+  }
+  server_time_utc: string
+}

@@ -63,6 +63,59 @@ Example:
 }
 ```
 
+## `GET /api/v1/session`
+
+Purpose:
+- Return authenticated user session context for client bootstrap.
+
+Access:
+- Requires `dashboard.view`.
+
+Response fields:
+- `session.user_id`
+- `session.role`
+- `session.facility_id`
+- `session.permissions[]`
+- `api.version`
+
+## `GET /api/v1/patients/summary`
+
+Purpose:
+- Return patient volume summary for selected range.
+
+Access:
+- Requires `reports.view`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `patients.total`
+- `patients.created_in_range`
+
+## `GET /api/v1/billing/summary`
+
+Purpose:
+- Return billing totals and open-invoice indicators for selected range.
+
+Access:
+- Requires `billing.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+- `payer_type` (optional: `all | patient | company`)
+
+Response fields:
+- `billing.invoice_count`
+- `billing.total_amount`
+- `billing.paid_amount`
+- `billing.outstanding_balance`
+- `billing.open_invoice_count`
+
 ## Cross-Platform Guidance
 
 - Mobile/desktop clients should call `/api/v1/meta` on startup and cache:
@@ -74,4 +127,3 @@ Example:
 
 - Backward-compatible additions are allowed in `v1`.
 - Breaking changes require `v2` endpoint namespace.
-

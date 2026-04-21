@@ -456,6 +456,11 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
   }
 
   const formatDate = (value: string | null) => formatLocalizedDate(value, settings, { style: "numeric" })
+  const monthFormatter = new Intl.DateTimeFormat(settings.locale || "en-GB", {
+    month: "short",
+    year: "numeric",
+    timeZone: settings.timezone || "UTC",
+  })
 
   const employeeRoster = (employeeRosterRaw || []) as EmployeeRosterLite[]
   const unlinkedRows = selectedCompanyId
@@ -477,6 +482,48 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
         })
         .filter((row, index, array) => row.patientId && array.findIndex((candidate) => candidate.patientId === row.patientId) === index)
     : []
+
+  const unlinkedByCompanyMonth = Array.from(
+    rows
+      .filter((row) => row.relationship === "Unlinked")
+      .reduce(
+        (acc, row) => {
+          const parsedDate = row.createdAt ? new Date(row.createdAt) : null
+          const monthKey = parsedDate && !Number.isNaN(parsedDate.getTime()) ? monthFormatter.format(parsedDate) : "Unknown month"
+          const key = `${row.companyName}__${monthKey}`
+          const existing = acc.get(key) || {
+            key,
+            companyName: row.companyName,
+            monthKey,
+            monthSort: parsedDate ? Date.UTC(parsedDate.getUTCFullYear(), parsedDate.getUTCMonth(), 1) : 0,
+            unlinkedBeneficiaries: 0,
+            billedAmount: 0,
+            outstandingBalance: 0,
+          }
+          existing.unlinkedBeneficiaries += 1
+          existing.billedAmount += row.total
+          existing.outstandingBalance += row.balance
+          acc.set(key, existing)
+          return acc
+        },
+        new Map<
+          string,
+          {
+            key: string
+            companyName: string
+            monthKey: string
+            monthSort: number
+            unlinkedBeneficiaries: number
+            billedAmount: number
+            outstandingBalance: number
+          }
+        >(),
+      )
+      .values(),
+  ).sort((a, b) => {
+    if (a.monthSort === b.monthSort) return a.companyName.localeCompare(b.companyName)
+    return b.monthSort - a.monthSort
+  })
 
   return (
     <div className="space-y-6">
@@ -648,6 +695,47 @@ export default async function CompanyBillingReportsPage({ searchParams }: Compan
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Unlinked reconciliation queue</CardTitle>
+          <CardDescription>
+            Remaining unlinked billed beneficiaries grouped by company and billing month for targeted backfill.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {unlinkedByCompanyMonth.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No unlinked billed beneficiaries in the selected reporting window.
+            </p>
+          ) : (
+            <div className="overflow-x-auto text-sm">
+              <table className="min-w-full border divide-y divide-border text-xs">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Company</th>
+                    <th className="px-3 py-2 text-left font-medium">Billing month</th>
+                    <th className="px-3 py-2 text-right font-medium">Unlinked beneficiaries</th>
+                    <th className="px-3 py-2 text-right font-medium">Billed amount</th>
+                    <th className="px-3 py-2 text-right font-medium">Outstanding balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unlinkedByCompanyMonth.map((entry) => (
+                    <tr key={entry.key} className="border-b last:border-0">
+                      <td className="px-3 py-2 whitespace-nowrap">{entry.companyName}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{entry.monthKey}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">{entry.unlinkedBeneficiaries}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">{formatCurrency(entry.billedAmount, settings)}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">{formatCurrency(entry.outstandingBalance, settings)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {invoicesTruncated ? (
         <div className="rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-xs text-amber-900">

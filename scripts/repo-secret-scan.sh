@@ -38,6 +38,9 @@ patterns=(
   'sk-[A-Za-z0-9]{20,}'
   '-----BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY-----'
   'xox[baprs]-[A-Za-z0-9-]{10,}'
+  '(?i)supabase[_-]service[_-]role[_-]key\s*[:=]\s*["'"'"'][^"'"'"'\n]{20,}["'"'"']'
+  '(?i)aws[_-]?secret[_-]?access[_-]?key\s*[:=]\s*["'"'"'][^"'"'"'\n]{20,}["'"'"']'
+  '(?i)x-api-key\s*[:=]\s*["'"'"'][^"'"'"'\n]{16,}["'"'"']'
   '(?i)(api[_-]?key|service[_-]?role[_-]?key|private[_-]?key|access[_-]?token)\s*[:=]\s*["'"'"'][^"'"'"'\n]{20,}["'"'"']'
   'Bearer\s+[A-Za-z0-9._-]{20,}'
 )

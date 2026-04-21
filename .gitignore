@@ -23,6 +23,7 @@ yarn-error.log*
 
 # env files
 .env*
+.envrc
 
 # sensitive cert/key artifacts
 *.pem
@@ -34,6 +35,20 @@ yarn-error.log*
 *.jks
 *.keystore
 *.mobileprovision
+
+# token-bearing config files
+.npmrc
+.pypirc
+**/.npmrc
+**/.pypirc
+
+# cloud and infra credentials/state
+.aws/
+.kube/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
 
 # vercel
 .vercel

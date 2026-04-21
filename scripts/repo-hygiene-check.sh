@@ -7,6 +7,7 @@ echo "Checking tracked files for forbidden paths..."
 
 forbidden_patterns=(
   '^\.env($|\.)'
+  '^\.envrc$'
   '^\.next/'
   '^out/'
   '^build/'
@@ -23,6 +24,16 @@ forbidden_patterns=(
   '\.jks$'
   '\.keystore$'
   '\.mobileprovision$'
+  '^\.npmrc$'
+  '/\.npmrc$'
+  '^\.pypirc$'
+  '/\.pypirc$'
+  '^\.aws/'
+  '^\.kube/'
+  '\.tfstate$'
+  '\.tfstate\..*$'
+  '\.tfvars$'
+  '\.tfvars\.json$'
   '^id_rsa$'
   '^id_ed25519$'
 )

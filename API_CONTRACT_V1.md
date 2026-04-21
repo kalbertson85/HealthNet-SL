@@ -55,6 +55,7 @@ Example:
       "prescriptions.summary",
       "lab.summary",
       "radiology.summary",
+      "pharmacy.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -219,6 +220,20 @@ Response fields:
 - `radiology.scheduled`
 - `radiology.completed`
 - `radiology.cancelled`
+
+## `GET /api/v1/pharmacy/summary`
+
+Purpose:
+- Return pharmacy queue and stock-risk counters for operational dashboards.
+
+Access:
+- Requires `pharmacy.manage`.
+
+Response fields:
+- `pharmacy.pending_prescriptions`
+- `pharmacy.low_stock_items`
+- `pharmacy.expiring_soon_items`
+- `pharmacy.expired_items`
 
 ## `GET /api/v1/billing/summary`
 

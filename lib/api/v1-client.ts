@@ -7,6 +7,7 @@ import type {
   ApiV1LabSummaryResponse,
   ApiV1PatientsSummaryResponse,
   ApiV1PrescriptionsSummaryResponse,
+  ApiV1PharmacySummaryResponse,
   ApiV1RadiologySummaryResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
@@ -172,6 +173,18 @@ const radiologySummarySchema = z.object({
   server_time_utc: z.string(),
 })
 
+const pharmacySummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  pharmacy: z.object({
+    pending_prescriptions: z.number(),
+    low_stock_items: z.number(),
+    expiring_soon_items: z.number(),
+    expired_items: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -310,6 +323,9 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/radiology/summary${suffix}`, radiologySummarySchema) as Promise<ApiV1RadiologySummaryResponse>
+    },
+    async getPharmacySummary(): Promise<ApiV1PharmacySummaryResponse> {
+      return request("/pharmacy/summary", pharmacySummarySchema) as Promise<ApiV1PharmacySummaryResponse>
     },
   }
 }

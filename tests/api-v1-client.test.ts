@@ -243,4 +243,25 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses pharmacy summary response", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        pharmacy: {
+          pending_prescriptions: 12,
+          low_stock_items: 5,
+          expiring_soon_items: 4,
+          expired_items: 1,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getPharmacySummary()
+    expect(payload.pharmacy.low_stock_items).toBe(5)
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/pharmacy/summary", expect.any(Object))
+  })
 })

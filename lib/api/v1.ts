@@ -9,6 +9,7 @@ export const API_V1_CAPABILITIES = [
   "prescriptions.summary",
   "lab.summary",
   "radiology.summary",
+  "pharmacy.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -143,6 +144,18 @@ export type ApiV1RadiologySummaryResponse = {
     scheduled: number
     completed: number
     cancelled: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1PharmacySummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  pharmacy: {
+    pending_prescriptions: number
+    low_stock_items: number
+    expiring_soon_items: number
+    expired_items: number
   }
   server_time_utc: string
 }

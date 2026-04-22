@@ -106,6 +106,10 @@ if [[ "$missing" -ne 0 ]]; then
 fi
 
 echo
+echo "Running API v1 contract verifier..."
+npm run api:v1:verify
+
+echo
 echo "Running test suite..."
 npm test -- --run
 

@@ -193,6 +193,12 @@ Run globalization hardcoding guardrails:
 npm run test:globalization:guardrails
 ```
 
+Run security guardrails:
+
+```bash
+npm run test:security:guardrails
+```
+
 Run the full release gate (predeploy readiness, tests, build, then lint):
 
 ```bash

@@ -79,6 +79,9 @@ jobs:
       - name: API v1 contract guardrails
         run: pnpm run test:api-v1:contract
 
+      - name: Security guardrail suite
+        run: pnpm run test:security:guardrails
+
       - name: Globalization hardcoding guardrails
         run: pnpm run test:globalization:guardrails
 

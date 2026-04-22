@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { API_V1_CAPABILITIES } from "@/lib/api/v1"
 import { API_V1_CAPABILITY_MAP } from "@/lib/api/v1-capability-map"
+import { getApiV1Endpoint } from "@/lib/api/v1-endpoints"
 
 describe("api v1 capability parity", () => {
   it("maps every declared capability to a route and client method", async () => {
@@ -16,6 +17,7 @@ describe("api v1 capability parity", () => {
       const absoluteRoutePath = path.join(process.cwd(), entry.routePath)
       await expect(fs.access(absoluteRoutePath)).resolves.toBeUndefined()
       expect(clientSource).toContain(`async ${entry.clientMethod}(`)
+      expect(getApiV1Endpoint(entry.capability)).toMatch(/^\/[a-z0-9/-]+$/)
     }
   })
 })

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { getApiV1Endpoint } from "@/lib/api/v1-endpoints"
 import type {
   ApiV1AppointmentsSummaryResponse,
   ApiV1DashboardSummaryResponse,
@@ -538,20 +539,21 @@ export function createApiV1Client(opts?: {
     }
     return parsed.data
   }
+  const endpoint = getApiV1Endpoint
 
   return {
     async getMeta(): Promise<ApiV1MetaResponse> {
       return request("/meta", metaSchema) as Promise<ApiV1MetaResponse>
     },
     async getSession(): Promise<ApiV1SessionResponse> {
-      return request("/session", sessionSchema) as Promise<ApiV1SessionResponse>
+      return request(endpoint("auth.session"), sessionSchema) as Promise<ApiV1SessionResponse>
     },
     async getPatientsSummary(params?: { from?: string; to?: string }): Promise<ApiV1PatientsSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/patients/summary${suffix}`, patientsSummarySchema) as Promise<ApiV1PatientsSummaryResponse>
+      return request(`${endpoint("patients.summary")}${suffix}`, patientsSummarySchema) as Promise<ApiV1PatientsSummaryResponse>
     },
     async getBillingSummary(params?: {
       from?: string
@@ -563,24 +565,24 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       if (params?.payerType) query.set("payer_type", params.payerType)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/billing/summary${suffix}`, billingSummarySchema) as Promise<ApiV1BillingSummaryResponse>
+      return request(`${endpoint("billing.summary")}${suffix}`, billingSummarySchema) as Promise<ApiV1BillingSummaryResponse>
     },
     async getDashboardSummary(): Promise<ApiV1DashboardSummaryResponse> {
-      return request("/dashboard/summary", dashboardSummarySchema) as Promise<ApiV1DashboardSummaryResponse>
+      return request(endpoint("dashboard.summary"), dashboardSummarySchema) as Promise<ApiV1DashboardSummaryResponse>
     },
     async getVisitsSummary(params?: { from?: string; to?: string }): Promise<ApiV1VisitsSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/visits/summary${suffix}`, visitsSummarySchema) as Promise<ApiV1VisitsSummaryResponse>
+      return request(`${endpoint("visits.summary")}${suffix}`, visitsSummarySchema) as Promise<ApiV1VisitsSummaryResponse>
     },
     async getAppointmentsSummary(params?: { from?: string; to?: string }): Promise<ApiV1AppointmentsSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/appointments/summary${suffix}`, appointmentsSummarySchema) as Promise<ApiV1AppointmentsSummaryResponse>
+      return request(`${endpoint("appointments.summary")}${suffix}`, appointmentsSummarySchema) as Promise<ApiV1AppointmentsSummaryResponse>
     },
     async getPrescriptionsSummary(
       params?: { from?: string; to?: string },
@@ -589,89 +591,89 @@ export function createApiV1Client(opts?: {
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/prescriptions/summary${suffix}`, prescriptionsSummarySchema) as Promise<ApiV1PrescriptionsSummaryResponse>
+      return request(`${endpoint("prescriptions.summary")}${suffix}`, prescriptionsSummarySchema) as Promise<ApiV1PrescriptionsSummaryResponse>
     },
     async getLabSummary(params?: { from?: string; to?: string }): Promise<ApiV1LabSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/lab/summary${suffix}`, labSummarySchema) as Promise<ApiV1LabSummaryResponse>
+      return request(`${endpoint("lab.summary")}${suffix}`, labSummarySchema) as Promise<ApiV1LabSummaryResponse>
     },
     async getRadiologySummary(params?: { from?: string; to?: string }): Promise<ApiV1RadiologySummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/radiology/summary${suffix}`, radiologySummarySchema) as Promise<ApiV1RadiologySummaryResponse>
+      return request(`${endpoint("radiology.summary")}${suffix}`, radiologySummarySchema) as Promise<ApiV1RadiologySummaryResponse>
     },
     async getPharmacySummary(): Promise<ApiV1PharmacySummaryResponse> {
-      return request("/pharmacy/summary", pharmacySummarySchema) as Promise<ApiV1PharmacySummaryResponse>
+      return request(endpoint("pharmacy.summary"), pharmacySummarySchema) as Promise<ApiV1PharmacySummaryResponse>
     },
     async getQueueSummary(params?: { from?: string; to?: string }): Promise<ApiV1QueueSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/queue/summary${suffix}`, queueSummarySchema) as Promise<ApiV1QueueSummaryResponse>
+      return request(`${endpoint("queue.summary")}${suffix}`, queueSummarySchema) as Promise<ApiV1QueueSummaryResponse>
     },
     async getEmergencySummary(params?: { from?: string; to?: string }): Promise<ApiV1EmergencySummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/emergency/summary${suffix}`, emergencySummarySchema) as Promise<ApiV1EmergencySummaryResponse>
+      return request(`${endpoint("emergency.summary")}${suffix}`, emergencySummarySchema) as Promise<ApiV1EmergencySummaryResponse>
     },
     async getInpatientSummary(params?: { from?: string; to?: string }): Promise<ApiV1InpatientSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/inpatient/summary${suffix}`, inpatientSummarySchema) as Promise<ApiV1InpatientSummaryResponse>
+      return request(`${endpoint("inpatient.summary")}${suffix}`, inpatientSummarySchema) as Promise<ApiV1InpatientSummaryResponse>
     },
     async getSurgerySummary(params?: { from?: string; to?: string }): Promise<ApiV1SurgerySummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/surgery/summary${suffix}`, surgerySummarySchema) as Promise<ApiV1SurgerySummaryResponse>
+      return request(`${endpoint("surgery.summary")}${suffix}`, surgerySummarySchema) as Promise<ApiV1SurgerySummaryResponse>
     },
     async getNursingSummary(params?: { from?: string; to?: string }): Promise<ApiV1NursingSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/nursing/summary${suffix}`, nursingSummarySchema) as Promise<ApiV1NursingSummaryResponse>
+      return request(`${endpoint("nursing.summary")}${suffix}`, nursingSummarySchema) as Promise<ApiV1NursingSummaryResponse>
     },
     async getDoctorSummary(): Promise<ApiV1DoctorSummaryResponse> {
-      return request("/doctor/summary", doctorSummarySchema) as Promise<ApiV1DoctorSummaryResponse>
+      return request(endpoint("doctor.summary"), doctorSummarySchema) as Promise<ApiV1DoctorSummaryResponse>
     },
     async getTriageSummary(params?: { from?: string; to?: string }): Promise<ApiV1TriageSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/triage/summary${suffix}`, triageSummarySchema) as Promise<ApiV1TriageSummaryResponse>
+      return request(`${endpoint("triage.summary")}${suffix}`, triageSummarySchema) as Promise<ApiV1TriageSummaryResponse>
     },
     async getRecordsSummary(params?: { from?: string; to?: string }): Promise<ApiV1RecordsSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/records/summary${suffix}`, recordsSummarySchema) as Promise<ApiV1RecordsSummaryResponse>
+      return request(`${endpoint("records.summary")}${suffix}`, recordsSummarySchema) as Promise<ApiV1RecordsSummaryResponse>
     },
     async getNotificationsSummary(): Promise<ApiV1NotificationsSummaryResponse> {
-      return request("/notifications/summary", notificationsSummarySchema) as Promise<ApiV1NotificationsSummaryResponse>
+      return request(endpoint("notifications.summary"), notificationsSummarySchema) as Promise<ApiV1NotificationsSummaryResponse>
     },
     async getAdminSummary(): Promise<ApiV1AdminSummaryResponse> {
-      return request("/admin/summary", adminSummarySchema) as Promise<ApiV1AdminSummaryResponse>
+      return request(endpoint("admin.summary"), adminSummarySchema) as Promise<ApiV1AdminSummaryResponse>
     },
     async getReportsSummary(params?: { from?: string; to?: string }): Promise<ApiV1ReportsSummaryResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/reports/summary${suffix}`, reportsSummarySchema) as Promise<ApiV1ReportsSummaryResponse>
+      return request(`${endpoint("reports.summary")}${suffix}`, reportsSummarySchema) as Promise<ApiV1ReportsSummaryResponse>
     },
     async getAuditTrail(params?: { limit?: number; from?: string; to?: string }): Promise<ApiV1AuditTrailResponse> {
       const query = new URLSearchParams()
@@ -679,7 +681,7 @@ export function createApiV1Client(opts?: {
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/audit/trail${suffix}`, auditTrailSchema) as Promise<ApiV1AuditTrailResponse>
+      return request(`${endpoint("audit.trail")}${suffix}`, auditTrailSchema) as Promise<ApiV1AuditTrailResponse>
     },
     async getReportsCompanyBilling(params?: {
       from?: string
@@ -691,20 +693,20 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       if (typeof params?.limit === "number") query.set("limit", String(params.limit))
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/reports/company-billing${suffix}`, reportsCompanyBillingSchema) as Promise<ApiV1ReportsCompanyBillingResponse>
+      return request(`${endpoint("reports.company_billing")}${suffix}`, reportsCompanyBillingSchema) as Promise<ApiV1ReportsCompanyBillingResponse>
     },
     async getBillingInsurance(params?: { limit?: number }): Promise<ApiV1BillingInsuranceResponse> {
       const query = new URLSearchParams()
       if (typeof params?.limit === "number") query.set("limit", String(params.limit))
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/billing/insurance${suffix}`, billingInsuranceSchema) as Promise<ApiV1BillingInsuranceResponse>
+      return request(`${endpoint("billing.insurance")}${suffix}`, billingInsuranceSchema) as Promise<ApiV1BillingInsuranceResponse>
     },
     async getPatientsWorkflow(params?: { from?: string; to?: string }): Promise<ApiV1PatientsWorkflowResponse> {
       const query = new URLSearchParams()
       if (params?.from) query.set("from", params.from)
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
-      return request(`/patients/workflow${suffix}`, patientsWorkflowSchema) as Promise<ApiV1PatientsWorkflowResponse>
+      return request(`${endpoint("patients.workflow")}${suffix}`, patientsWorkflowSchema) as Promise<ApiV1PatientsWorkflowResponse>
     },
   }
 }

@@ -1,5 +1,5 @@
 -- 042_free_health_care_and_clinical_notes.sql
--- Sierra Leone Free Health Care tagging and structured doctor consultation fields.
+-- Free Health Care tagging and structured doctor consultation fields.
 
 BEGIN;
 

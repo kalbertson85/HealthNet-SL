@@ -146,7 +146,7 @@ export function EmergencyIntakeForm({
                   <Input
                     id="ambulance_vehicle"
                     name="ambulance_vehicle"
-                    placeholder="e.g. SL-AMB-01"
+                    placeholder="e.g. AMB-01"
                     value={value.ambulance_vehicle}
                     onChange={(e) => setValue({ ...value, ambulance_vehicle: e.target.value })}
                   />

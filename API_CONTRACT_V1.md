@@ -59,6 +59,7 @@ Example:
       "queue.summary",
       "emergency.summary",
       "inpatient.summary",
+      "surgery.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -300,6 +301,27 @@ Response fields:
 - `inpatient.admitted_or_active`
 - `inpatient.discharged`
 - `inpatient.other`
+
+## `GET /api/v1/surgery/summary`
+
+Purpose:
+- Return surgical workload totals for selected range.
+
+Access:
+- Requires `inpatient.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `surgery.total_in_range`
+- `surgery.scheduled_or_pending`
+- `surgery.in_progress`
+- `surgery.completed`
+- `surgery.other`
 
 ## `GET /api/v1/billing/summary`
 

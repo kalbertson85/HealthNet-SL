@@ -187,6 +187,12 @@ Run the API v1 contract guardrail test suite:
 npm run test:api-v1:contract
 ```
 
+Run globalization hardcoding guardrails:
+
+```bash
+npm run test:globalization:guardrails
+```
+
 Run the full release gate (predeploy readiness, tests, build, then lint):
 
 ```bash

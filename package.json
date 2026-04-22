@@ -12,9 +12,10 @@
     "start": "next start",
     "test": "vitest",
     "test:api-v1:contract": "vitest run tests/api-v1-endpoints.test.ts tests/api-v1-contract-invariants.test.ts tests/api-v1-doc-parity.test.ts tests/api-v1-capability-parity.test.ts tests/api-v1-client.test.ts tests/api-v1-contract.test.ts tests/api-route-auth-coverage.test.ts",
+    "test:globalization:guardrails": "vitest run tests/globalization-hardcoding.test.ts",
     "perf:smoke": "bash scripts/perf-smoke.sh",
     "webhook:test:local": "bash scripts/test-mobile-money-mutation-local.sh",
-    "repo:check": "bash scripts/repo-hygiene-check.sh && npm run api:v1:verify",
+    "repo:check": "bash scripts/repo-hygiene-check.sh && pnpm run api:v1:verify",
     "repo:secrets": "bash scripts/repo-secret-scan.sh",
     "audit:gate": "node scripts/ci-audit-gate.mjs artifacts/pnpm-audit-prod.json"
   },

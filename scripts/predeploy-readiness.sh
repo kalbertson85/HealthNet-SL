@@ -4,6 +4,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if command -v pnpm >/dev/null 2>&1; then
+  RUNNER="pnpm run"
+  TEST_CMD="pnpm exec vitest run"
+elif command -v npm >/dev/null 2>&1; then
+  RUNNER="npm run"
+  TEST_CMD="npm test -- --run"
+else
+  echo "Pre-deploy readiness failed: neither pnpm nor npm is available in PATH."
+  exit 1
+fi
+
 REQUIRED_KEYS=(
   "MOBILE_MONEY_WEBHOOK_SECRET"
   "NEXT_PUBLIC_SUPABASE_URL"
@@ -107,19 +118,19 @@ fi
 
 echo
 echo "Running API v1 contract verifier..."
-npm run api:v1:verify
+$RUNNER api:v1:verify
 
 echo
 echo "Running test suite..."
-npm test -- --run
+$TEST_CMD
 
 echo
 echo "Running production build..."
-if ! npm run build; then
+if ! $RUNNER build; then
   echo
   echo "Build failed on first attempt. Retrying once in 3s..."
   sleep 3
-  npm run build
+  $RUNNER build
 fi
 
 echo

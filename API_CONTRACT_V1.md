@@ -580,3 +580,12 @@ Response fields:
 
 - Backward-compatible additions are allowed in `v1`.
 - Breaking changes require `v2` endpoint namespace.
+
+## Validation Suite
+
+- Run the dedicated v1 contract guardrails locally:
+  - `npm run test:api-v1:contract`
+- This suite validates:
+  - declared capabilities ↔ route files ↔ client methods
+  - capabilities ↔ contract documentation headers
+  - meta endpoint capability wiring invariants

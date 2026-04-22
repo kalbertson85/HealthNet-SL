@@ -425,4 +425,34 @@ describe("api v1 client", () => {
     expect(payload.doctor.total_open_cases).toBe(17)
     expect(fetchImpl).toHaveBeenCalledWith("/api/v1/doctor/summary", expect.any(Object))
   })
+
+  it("parses triage summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        triage: {
+          total_in_range: 29,
+          pending: 10,
+          in_treatment: 8,
+          critical_or_emergency: 9,
+          red: 4,
+          orange: 5,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getTriageSummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.triage.critical_or_emergency).toBe(9)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/triage/summary?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

@@ -62,6 +62,7 @@ Example:
       "surgery.summary",
       "nursing.summary",
       "doctor.summary",
+      "triage.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -357,6 +358,28 @@ Response fields:
 - `doctor.doctor_pending`
 - `doctor.doctor_review`
 - `doctor.lab_pending`
+
+## `GET /api/v1/triage/summary`
+
+Purpose:
+- Return triage throughput and acuity totals for selected range.
+
+Access:
+- Requires `emergency.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `triage.total_in_range`
+- `triage.pending`
+- `triage.in_treatment`
+- `triage.critical_or_emergency`
+- `triage.red`
+- `triage.orange`
 
 ## `GET /api/v1/billing/summary`
 

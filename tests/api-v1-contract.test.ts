@@ -16,13 +16,14 @@ const FILES = {
   emergencySummary: path.join(process.cwd(), "app", "api", "v1", "emergency", "summary", "route.ts"),
   inpatientSummary: path.join(process.cwd(), "app", "api", "v1", "inpatient", "summary", "route.ts"),
   surgerySummary: path.join(process.cwd(), "app", "api", "v1", "surgery", "summary", "route.ts"),
+  nursingSummary: path.join(process.cwd(), "app", "api", "v1", "nursing", "summary", "route.ts"),
   patientsSummary: path.join(process.cwd(), "app", "api", "v1", "patients", "summary", "route.ts"),
   billingSummary: path.join(process.cwd(), "app", "api", "v1", "billing", "summary", "route.ts"),
 }
 
 describe("api v1 contract coverage", () => {
   it("protects v1 endpoints with permission guards", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, patientsSummary, billingSummary] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, patientsSummary, billingSummary] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -37,6 +38,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.emergencySummary, "utf8"),
         fs.readFile(FILES.inpatientSummary, "utf8"),
         fs.readFile(FILES.surgerySummary, "utf8"),
+        fs.readFile(FILES.nursingSummary, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
       ])
@@ -54,12 +56,13 @@ describe("api v1 contract coverage", () => {
     expect(emergencySummary).toContain("requirePermission(")
     expect(inpatientSummary).toContain("requirePermission(")
     expect(surgerySummary).toContain("requirePermission(")
+    expect(nursingSummary).toContain("requirePermission(")
     expect(patientsSummary).toContain("requirePermission(")
     expect(billingSummary).toContain("requirePermission(")
   })
 
   it("returns versioned payload fields for cross-platform clients", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, patientsSummary, billingSummary] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, patientsSummary, billingSummary] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -74,6 +77,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.emergencySummary, "utf8"),
         fs.readFile(FILES.inpatientSummary, "utf8"),
         fs.readFile(FILES.surgerySummary, "utf8"),
+        fs.readFile(FILES.nursingSummary, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
       ])
@@ -92,6 +96,7 @@ describe("api v1 contract coverage", () => {
     expect(emergencySummary).toContain("critical_or_emergency")
     expect(inpatientSummary).toContain("admitted_or_active")
     expect(surgerySummary).toContain("scheduled_or_pending")
+    expect(nursingSummary).toContain("pending_ward_requests_in_range")
     expect(patientsSummary).toContain("created_in_range")
     expect(billingSummary).toContain("outstanding_balance")
     expect(billingSummary).toContain("open_invoice_count")

@@ -60,6 +60,7 @@ Example:
       "emergency.summary",
       "inpatient.summary",
       "surgery.summary",
+      "nursing.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -322,6 +323,25 @@ Response fields:
 - `surgery.in_progress`
 - `surgery.completed`
 - `surgery.other`
+
+## `GET /api/v1/nursing/summary`
+
+Purpose:
+- Return nursing workload and ward medication request totals for selected range.
+
+Access:
+- Requires `inpatient.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `nursing.active_visits`
+- `nursing.notes_in_range`
+- `nursing.pending_ward_requests_in_range`
 
 ## `GET /api/v1/billing/summary`
 

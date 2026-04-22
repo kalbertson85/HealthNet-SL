@@ -377,4 +377,31 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses nursing summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        nursing: {
+          active_visits: 24,
+          notes_in_range: 51,
+          pending_ward_requests_in_range: 7,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getNursingSummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.nursing.notes_in_range).toBe(51)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/nursing/summary?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

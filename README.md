@@ -175,6 +175,18 @@ Run pre-deploy readiness checks (required env vars + tests + production build):
 npm run predeploy:check
 ```
 
+Run the fast API v1 contract verifier (map/doc/client parity and endpoint derivation):
+
+```bash
+npm run api:v1:verify
+```
+
+Run the API v1 contract guardrail test suite:
+
+```bash
+npm run test:api-v1:contract
+```
+
 Run the full release gate (predeploy readiness, tests, build, then lint):
 
 ```bash
@@ -226,5 +238,12 @@ Current tests include:
 - `tests/mobile-money-mutation.test.ts` – feature-flagged invoice mutation computation for webhook payments.
 - `tests/replay-store.test.ts` – persistent replay-store fallback behavior.
 - `tests/system-activity-export.test.ts` – system activity CSV header shape regression checks.
+- `tests/api-v1-endpoints.test.ts` – endpoint derivation and deterministic path guardrails.
+- `tests/api-v1-contract-invariants.test.ts` – API v1 meta map/client invariants.
+- `tests/api-v1-doc-parity.test.ts` – documented route parity checks against runtime map.
+- `tests/api-v1-capability-parity.test.ts` – capability map parity checks.
+- `tests/api-v1-client.test.ts` – API v1 client contract checks.
+- `tests/api-v1-contract.test.ts` – core API v1 contract assertions.
+- `tests/api-route-auth-coverage.test.ts` – route-level auth coverage guardrails.
 
 All of these are designed to validate the critical business logic around visits, billing, pharmacy, notifications, and auditing.

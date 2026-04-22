@@ -483,4 +483,24 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses notifications summary response", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        notifications: {
+          total: 88,
+          unread: 12,
+          live_alerts: 6,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getNotificationsSummary()
+    expect(payload.notifications.unread).toBe(12)
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/notifications/summary", expect.any(Object))
+  })
 })

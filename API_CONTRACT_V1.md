@@ -64,6 +64,7 @@ Example:
       "doctor.summary",
       "triage.summary",
       "records.summary",
+      "notifications.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -401,6 +402,19 @@ Response fields:
 - `records.active`
 - `records.completed`
 - `records.discharged`
+
+## `GET /api/v1/notifications/summary`
+
+Purpose:
+- Return user notification counters and live alert counts.
+
+Access:
+- Requires `dashboard.view`.
+
+Response fields:
+- `notifications.total`
+- `notifications.unread`
+- `notifications.live_alerts`
 
 ## `GET /api/v1/billing/summary`
 

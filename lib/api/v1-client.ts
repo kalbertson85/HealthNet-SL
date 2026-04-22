@@ -21,6 +21,7 @@ import type {
   ApiV1AdminSummaryResponse,
   ApiV1ReportsSummaryResponse,
   ApiV1AuditTrailResponse,
+  ApiV1ReportsCompanyBillingResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -392,6 +393,26 @@ const auditTrailSchema = z.object({
   server_time_utc: z.string(),
 })
 
+const reportsCompanyBillingSchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  range: z.object({
+    from: z.string(),
+    to: z.string(),
+  }),
+  company_billing: z.object({
+    companies: z.array(
+      z.object({
+        company_id: z.string(),
+        company_name: z.string(),
+        outstanding: z.number(),
+      }),
+    ),
+    source: z.union([z.literal("rpc"), z.literal("fallback")]),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -606,6 +627,18 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/audit/trail${suffix}`, auditTrailSchema) as Promise<ApiV1AuditTrailResponse>
+    },
+    async getReportsCompanyBilling(params?: {
+      from?: string
+      to?: string
+      limit?: number
+    }): Promise<ApiV1ReportsCompanyBillingResponse> {
+      const query = new URLSearchParams()
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      if (typeof params?.limit === "number") query.set("limit", String(params.limit))
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/reports/company-billing${suffix}`, reportsCompanyBillingSchema) as Promise<ApiV1ReportsCompanyBillingResponse>
     },
   }
 }

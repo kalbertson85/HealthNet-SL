@@ -368,11 +368,13 @@ export async function fetchTopCompanies(
   supabase: SupabaseClient,
   fromIso: string,
   toIso: string,
+  limit = 5,
 ) {
+  const safeLimit = Math.max(1, Math.min(limit, 50))
   const rpcResult = await supabase.rpc("dashboard_report_top_company_outstanding", {
     p_from: fromIso,
     p_to: toIso,
-    p_limit: 5,
+    p_limit: safeLimit,
   })
   const rpcError = (rpcResult as { error?: { message?: string } | null }).error
   const rpcRows = ((rpcResult as { data?: TopCompanyOutstandingRpcRow[] | null }).data || []) as TopCompanyOutstandingRpcRow[]
@@ -421,7 +423,7 @@ export async function fetchTopCompanies(
 
   const topCompanies = Array.from(companyOutstandingMap.entries())
     .sort((a, b) => b[1].outstanding - a[1].outstanding)
-    .slice(0, 5)
+    .slice(0, safeLimit)
 
   return {
     companyInvoiceRows: companyInvoices || [],

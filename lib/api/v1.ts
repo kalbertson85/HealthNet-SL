@@ -339,3 +339,18 @@ export type ApiV1AuditTrailResponse = {
   }
   server_time_utc: string
 }
+
+export type ApiV1ReportsCompanyBillingResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  company_billing: {
+    companies: Array<{
+      company_id: string
+      company_name: string
+      outstanding: number
+    }>
+    source: "rpc" | "fallback"
+  }
+  server_time_utc: string
+}

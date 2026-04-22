@@ -595,4 +595,37 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses reports company billing response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        company_billing: {
+          companies: [
+            {
+              company_id: "cmp_1",
+              company_name: "Acme Insurance",
+              outstanding: 8500.25,
+            },
+          ],
+          source: "rpc",
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getReportsCompanyBilling({
+      from: "2026-04-01",
+      to: "2026-04-30",
+      limit: 10,
+    })
+    expect(payload.company_billing.companies[0]?.company_name).toBe("Acme Insurance")
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/reports/company-billing?from=2026-04-01&to=2026-04-30&limit=10",
+      expect.any(Object),
+    )
+  })
 })

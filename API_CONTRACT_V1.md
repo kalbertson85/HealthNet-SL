@@ -500,6 +500,27 @@ Response fields:
 - `audit.events[].actor_role`
 - `audit.events[].facility_id`
 
+## `GET /api/v1/reports/company-billing`
+
+Purpose:
+- Return top outstanding company balances for selected range.
+
+Access:
+- Requires `reports.view`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+- `limit` (optional, `1..50`, default `5`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `company_billing.companies[].company_id`
+- `company_billing.companies[].company_name`
+- `company_billing.companies[].outstanding`
+- `company_billing.source` (`rpc | fallback`)
+
 ## Cross-Platform Guidance
 
 - Mobile/desktop clients should call `/api/v1/meta` on startup and cache:

@@ -258,6 +258,7 @@ Current tests include:
 - `tests/api-v1-contract.test.ts` – core API v1 contract assertions.
 - `tests/api-v1-no-store-coverage.test.ts` – API v1 no-store response header guardrails.
 - `tests/api-route-auth-coverage.test.ts` – route-level auth coverage guardrails.
+- `tests/api-route-auth-error-mapping-coverage.test.ts` – private mutation route auth error normalization guardrails.
 - `tests/api-route-payload-limits.test.ts` – JSON POST payload-size enforcement guardrails.
 - `tests/export-route-security-coverage.test.ts` – export endpoint rate-limit/origin/permission guardrails.
 - `tests/export-route-bounds-coverage.test.ts` – export endpoint result-size and truncation metadata guardrails.

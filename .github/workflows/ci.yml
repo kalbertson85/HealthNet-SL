@@ -73,5 +73,8 @@ jobs:
       - name: Test
         run: pnpm exec vitest run
 
+      - name: API v1 contract guardrails
+        run: pnpm run test:api-v1:contract
+
       - name: Build
         run: pnpm run build

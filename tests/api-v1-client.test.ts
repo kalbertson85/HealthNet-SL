@@ -628,4 +628,42 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses billing insurance response", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        billing_insurance: {
+          totals: {
+            total_batches: 8,
+            draft_batches: 2,
+            submitted_batches: 3,
+            paid_batches: 3,
+            total_amount: 52100,
+            paid_amount: 40350,
+            outstanding_amount: 11750,
+          },
+          recent_batches: [
+            {
+              id: "batch_1",
+              batch_number: "INS-2026-001",
+              company_id: "cmp_1",
+              company_name: "Acme Insurance",
+              status: "submitted",
+              total_amount: 14500,
+              paid_amount: 7000,
+              created_at: "2026-04-25T11:30:00.000Z",
+            },
+          ],
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getBillingInsurance({ limit: 15 })
+    expect(payload.billing_insurance.totals.total_batches).toBe(8)
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/billing/insurance?limit=15", expect.any(Object))
+  })
 })

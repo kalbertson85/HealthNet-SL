@@ -354,3 +354,30 @@ export type ApiV1ReportsCompanyBillingResponse = {
   }
   server_time_utc: string
 }
+
+export type ApiV1BillingInsuranceResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  billing_insurance: {
+    totals: {
+      total_batches: number
+      draft_batches: number
+      submitted_batches: number
+      paid_batches: number
+      total_amount: number
+      paid_amount: number
+      outstanding_amount: number
+    }
+    recent_batches: Array<{
+      id: string
+      batch_number: string
+      company_id: string | null
+      company_name: string | null
+      status: string
+      total_amount: number
+      paid_amount: number
+      created_at: string
+    }>
+  }
+  server_time_utc: string
+}

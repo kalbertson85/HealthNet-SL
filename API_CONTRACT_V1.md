@@ -453,6 +453,27 @@ Response fields:
 - `billing.outstanding_balance`
 - `billing.open_invoice_count`
 
+## `GET /api/v1/billing/insurance`
+
+Purpose:
+- Return insurance-batch totals and recent batch list for billing operations.
+
+Access:
+- Requires `billing.manage`.
+
+Query parameters:
+- `limit` (optional, `1..100`, default `20`)
+
+Response fields:
+- `billing_insurance.totals.total_batches`
+- `billing_insurance.totals.draft_batches`
+- `billing_insurance.totals.submitted_batches`
+- `billing_insurance.totals.paid_batches`
+- `billing_insurance.totals.total_amount`
+- `billing_insurance.totals.paid_amount`
+- `billing_insurance.totals.outstanding_amount`
+- `billing_insurance.recent_batches[]`
+
 ## `GET /api/v1/reports/summary`
 
 Purpose:

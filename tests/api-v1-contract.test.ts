@@ -27,11 +27,12 @@ const FILES = {
   auditTrail: path.join(process.cwd(), "app", "api", "v1", "audit", "trail", "route.ts"),
   patientsSummary: path.join(process.cwd(), "app", "api", "v1", "patients", "summary", "route.ts"),
   billingSummary: path.join(process.cwd(), "app", "api", "v1", "billing", "summary", "route.ts"),
+  billingInsurance: path.join(process.cwd(), "app", "api", "v1", "billing", "insurance", "route.ts"),
 }
 
 describe("api v1 contract coverage", () => {
   it("protects v1 endpoints with permission guards", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, billingSummary] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, billingSummary, billingInsurance] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -57,6 +58,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.auditTrail, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
+        fs.readFile(FILES.billingInsurance, "utf8"),
       ])
 
     expect(meta).toContain("requirePermission(")
@@ -83,10 +85,11 @@ describe("api v1 contract coverage", () => {
     expect(auditTrail).toContain("requirePermission(")
     expect(patientsSummary).toContain("requirePermission(")
     expect(billingSummary).toContain("requirePermission(")
+    expect(billingInsurance).toContain("requirePermission(")
   })
 
   it("returns versioned payload fields for cross-platform clients", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, billingSummary] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, billingSummary, billingInsurance] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -112,6 +115,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.auditTrail, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
+        fs.readFile(FILES.billingInsurance, "utf8"),
       ])
 
     expect(meta).toContain("API_V1_VERSION")
@@ -143,5 +147,7 @@ describe("api v1 contract coverage", () => {
     expect(patientsSummary).toContain("created_in_range")
     expect(billingSummary).toContain("outstanding_balance")
     expect(billingSummary).toContain("open_invoice_count")
+    expect(billingInsurance).toContain("outstanding_amount")
+    expect(billingInsurance).toContain("recent_batches")
   })
 })

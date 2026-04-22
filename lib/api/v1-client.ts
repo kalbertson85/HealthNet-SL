@@ -22,6 +22,7 @@ import type {
   ApiV1ReportsSummaryResponse,
   ApiV1AuditTrailResponse,
   ApiV1ReportsCompanyBillingResponse,
+  ApiV1BillingInsuranceResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -413,6 +414,35 @@ const reportsCompanyBillingSchema = z.object({
   server_time_utc: z.string(),
 })
 
+const billingInsuranceSchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  billing_insurance: z.object({
+    totals: z.object({
+      total_batches: z.number(),
+      draft_batches: z.number(),
+      submitted_batches: z.number(),
+      paid_batches: z.number(),
+      total_amount: z.number(),
+      paid_amount: z.number(),
+      outstanding_amount: z.number(),
+    }),
+    recent_batches: z.array(
+      z.object({
+        id: z.string(),
+        batch_number: z.string(),
+        company_id: z.string().nullable(),
+        company_name: z.string().nullable(),
+        status: z.string(),
+        total_amount: z.number(),
+        paid_amount: z.number(),
+        created_at: z.string(),
+      }),
+    ),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -639,6 +669,12 @@ export function createApiV1Client(opts?: {
       if (typeof params?.limit === "number") query.set("limit", String(params.limit))
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/reports/company-billing${suffix}`, reportsCompanyBillingSchema) as Promise<ApiV1ReportsCompanyBillingResponse>
+    },
+    async getBillingInsurance(params?: { limit?: number }): Promise<ApiV1BillingInsuranceResponse> {
+      const query = new URLSearchParams()
+      if (typeof params?.limit === "number") query.set("limit", String(params.limit))
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/billing/insurance${suffix}`, billingInsuranceSchema) as Promise<ApiV1BillingInsuranceResponse>
     },
   }
 }

@@ -63,6 +63,7 @@ Example:
       "nursing.summary",
       "doctor.summary",
       "triage.summary",
+      "records.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -380,6 +381,26 @@ Response fields:
 - `triage.critical_or_emergency`
 - `triage.red`
 - `triage.orange`
+
+## `GET /api/v1/records/summary`
+
+Purpose:
+- Return records workflow totals for selected range.
+
+Access:
+- Requires `patients.view`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `records.total_in_range`
+- `records.active`
+- `records.completed`
+- `records.discharged`
 
 ## `GET /api/v1/billing/summary`
 

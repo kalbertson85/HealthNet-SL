@@ -16,6 +16,7 @@ import type {
   ApiV1NursingSummaryResponse,
   ApiV1DoctorSummaryResponse,
   ApiV1TriageSummaryResponse,
+  ApiV1RecordsSummaryResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -305,6 +306,22 @@ const triageSummarySchema = z.object({
   server_time_utc: z.string(),
 })
 
+const recordsSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  range: z.object({
+    from: z.string(),
+    to: z.string(),
+  }),
+  records: z.object({
+    total_in_range: z.number(),
+    active: z.number(),
+    completed: z.number(),
+    discharged: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -491,6 +508,13 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/triage/summary${suffix}`, triageSummarySchema) as Promise<ApiV1TriageSummaryResponse>
+    },
+    async getRecordsSummary(params?: { from?: string; to?: string }): Promise<ApiV1RecordsSummaryResponse> {
+      const query = new URLSearchParams()
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/records/summary${suffix}`, recordsSummarySchema) as Promise<ApiV1RecordsSummaryResponse>
     },
   }
 }

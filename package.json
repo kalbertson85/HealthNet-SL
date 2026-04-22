@@ -6,6 +6,7 @@
     "build": "next build --webpack",
     "dev": "next dev --webpack",
     "lint": "eslint .",
+    "api:v1:verify": "node scripts/verify-api-v1-contract.mjs",
     "predeploy:check": "bash scripts/predeploy-readiness.sh",
     "release:check": "bash scripts/release-check.sh",
     "start": "next start",
@@ -13,7 +14,7 @@
     "test:api-v1:contract": "vitest run tests/api-v1-endpoints.test.ts tests/api-v1-contract-invariants.test.ts tests/api-v1-doc-parity.test.ts tests/api-v1-capability-parity.test.ts tests/api-v1-client.test.ts tests/api-v1-contract.test.ts tests/api-route-auth-coverage.test.ts",
     "perf:smoke": "bash scripts/perf-smoke.sh",
     "webhook:test:local": "bash scripts/test-mobile-money-mutation-local.sh",
-    "repo:check": "bash scripts/repo-hygiene-check.sh",
+    "repo:check": "bash scripts/repo-hygiene-check.sh && npm run api:v1:verify",
     "repo:secrets": "bash scripts/repo-secret-scan.sh",
     "audit:gate": "node scripts/ci-audit-gate.mjs artifacts/pnpm-audit-prod.json"
   },

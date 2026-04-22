@@ -20,6 +20,7 @@ export const API_V1_CAPABILITIES = [
   "records.summary",
   "notifications.summary",
   "admin.summary",
+  "reports.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -298,6 +299,20 @@ export type ApiV1AdminSummaryResponse = {
     blocked_staff_profiles: number
     total_facilities: number
     audit_events_24h: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1ReportsSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  reports: {
+    monthly_revenue: number
+    new_patients: number
+    completed_visits: number
+    pending_lab_tests: number
+    source: "rpc" | "fallback"
   }
   server_time_utc: string
 }

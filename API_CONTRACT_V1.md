@@ -66,6 +66,7 @@ Example:
       "records.summary",
       "notifications.summary",
       "admin.summary",
+      "reports.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -451,6 +452,27 @@ Response fields:
 - `billing.paid_amount`
 - `billing.outstanding_balance`
 - `billing.open_invoice_count`
+
+## `GET /api/v1/reports/summary`
+
+Purpose:
+- Return high-level reports KPIs for selected range with RPC/fallback source indicator.
+
+Access:
+- Requires `reports.view`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `reports.monthly_revenue`
+- `reports.new_patients`
+- `reports.completed_visits`
+- `reports.pending_lab_tests`
+- `reports.source` (`rpc | fallback`)
 
 ## Cross-Platform Guidance
 

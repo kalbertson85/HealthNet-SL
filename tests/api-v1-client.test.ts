@@ -525,4 +525,33 @@ describe("api v1 client", () => {
     expect(payload.admin.total_facilities).toBe(5)
     expect(fetchImpl).toHaveBeenCalledWith("/api/v1/admin/summary", expect.any(Object))
   })
+
+  it("parses reports summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        reports: {
+          monthly_revenue: 12900.75,
+          new_patients: 25,
+          completed_visits: 63,
+          pending_lab_tests: 11,
+          source: "rpc",
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getReportsSummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.reports.monthly_revenue).toBe(12900.75)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/reports/summary?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

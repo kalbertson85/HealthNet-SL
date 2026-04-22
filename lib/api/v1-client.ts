@@ -19,6 +19,7 @@ import type {
   ApiV1RecordsSummaryResponse,
   ApiV1NotificationsSummaryResponse,
   ApiV1AdminSummaryResponse,
+  ApiV1ReportsSummaryResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -348,6 +349,23 @@ const adminSummarySchema = z.object({
   server_time_utc: z.string(),
 })
 
+const reportsSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  range: z.object({
+    from: z.string(),
+    to: z.string(),
+  }),
+  reports: z.object({
+    monthly_revenue: z.number(),
+    new_patients: z.number(),
+    completed_visits: z.number(),
+    pending_lab_tests: z.number(),
+    source: z.union([z.literal("rpc"), z.literal("fallback")]),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -547,6 +565,13 @@ export function createApiV1Client(opts?: {
     },
     async getAdminSummary(): Promise<ApiV1AdminSummaryResponse> {
       return request("/admin/summary", adminSummarySchema) as Promise<ApiV1AdminSummaryResponse>
+    },
+    async getReportsSummary(params?: { from?: string; to?: string }): Promise<ApiV1ReportsSummaryResponse> {
+      const query = new URLSearchParams()
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/reports/summary${suffix}`, reportsSummarySchema) as Promise<ApiV1ReportsSummaryResponse>
     },
   }
 }

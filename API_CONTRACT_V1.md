@@ -61,6 +61,7 @@ Example:
       "inpatient.summary",
       "surgery.summary",
       "nursing.summary",
+      "doctor.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -342,6 +343,20 @@ Response fields:
 - `nursing.active_visits`
 - `nursing.notes_in_range`
 - `nursing.pending_ward_requests_in_range`
+
+## `GET /api/v1/doctor/summary`
+
+Purpose:
+- Return doctor-facing open case workload counters.
+
+Access:
+- Requires `dashboard.view`.
+
+Response fields:
+- `doctor.total_open_cases`
+- `doctor.doctor_pending`
+- `doctor.doctor_review`
+- `doctor.lab_pending`
 
 ## `GET /api/v1/billing/summary`
 

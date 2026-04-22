@@ -15,6 +15,7 @@ export const API_V1_CAPABILITIES = [
   "inpatient.summary",
   "surgery.summary",
   "nursing.summary",
+  "doctor.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -229,6 +230,18 @@ export type ApiV1NursingSummaryResponse = {
     active_visits: number
     notes_in_range: number
     pending_ward_requests_in_range: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1DoctorSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  doctor: {
+    total_open_cases: number
+    doctor_pending: number
+    doctor_review: number
+    lab_pending: number
   }
   server_time_utc: string
 }

@@ -404,4 +404,25 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses doctor summary response", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        doctor: {
+          total_open_cases: 17,
+          doctor_pending: 9,
+          doctor_review: 4,
+          lab_pending: 4,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getDoctorSummary()
+    expect(payload.doctor.total_open_cases).toBe(17)
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/doctor/summary", expect.any(Object))
+  })
 })

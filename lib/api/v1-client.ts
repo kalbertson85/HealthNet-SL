@@ -14,6 +14,7 @@ import type {
   ApiV1InpatientSummaryResponse,
   ApiV1SurgerySummaryResponse,
   ApiV1NursingSummaryResponse,
+  ApiV1DoctorSummaryResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -273,6 +274,18 @@ const nursingSummarySchema = z.object({
   server_time_utc: z.string(),
 })
 
+const doctorSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  doctor: z.object({
+    total_open_cases: z.number(),
+    doctor_pending: z.number(),
+    doctor_review: z.number(),
+    lab_pending: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -449,6 +462,9 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/nursing/summary${suffix}`, nursingSummarySchema) as Promise<ApiV1NursingSummaryResponse>
+    },
+    async getDoctorSummary(): Promise<ApiV1DoctorSummaryResponse> {
+      return request("/doctor/summary", doctorSummarySchema) as Promise<ApiV1DoctorSummaryResponse>
     },
   }
 }

@@ -256,6 +256,7 @@ Current tests include:
 - `tests/api-v1-capability-parity.test.ts` – capability map parity checks.
 - `tests/api-v1-client.test.ts` – API v1 client contract checks.
 - `tests/api-v1-contract.test.ts` – core API v1 contract assertions.
+- `tests/api-v1-no-store-coverage.test.ts` – API v1 no-store response header guardrails.
 - `tests/api-route-auth-coverage.test.ts` – route-level auth coverage guardrails.
 - `tests/api-route-payload-limits.test.ts` – JSON POST payload-size enforcement guardrails.
 - `tests/export-route-security-coverage.test.ts` – export endpoint rate-limit/origin/permission guardrails.

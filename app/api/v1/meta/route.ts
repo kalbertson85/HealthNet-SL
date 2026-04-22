@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { requirePermission, toAuthErrorResponse } from "@/lib/supabase/middleware"
 import { apiError, enforceFixedWindowRateLimit } from "@/lib/http/api"
+import { NO_STORE_JSON_HEADERS } from "@/lib/http/headers"
 import {
   API_V1_CAPABILITIES,
   API_V1_RELEASE_CHANNEL,
@@ -33,7 +34,10 @@ export async function GET(request: NextRequest) {
       server_time_utc: new Date().toISOString(),
     }
 
-    return NextResponse.json(payload, { status: 200 })
+    return NextResponse.json(payload, {
+      status: 200,
+      headers: NO_STORE_JSON_HEADERS,
+    })
   } catch (error) {
     const authResponse = toAuthErrorResponse(error, request)
     if (authResponse) return authResponse
@@ -41,4 +45,3 @@ export async function GET(request: NextRequest) {
     return apiError(500, "internal_error", "Internal Server Error", request)
   }
 }
-

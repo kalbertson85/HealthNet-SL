@@ -320,4 +320,32 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses inpatient summary response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        inpatient: {
+          total_in_range: 19,
+          admitted_or_active: 8,
+          discharged: 9,
+          other: 2,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getInpatientSummary({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.inpatient.discharged).toBe(9)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/inpatient/summary?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

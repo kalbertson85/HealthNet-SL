@@ -12,6 +12,7 @@ export const API_V1_CAPABILITIES = [
   "pharmacy.summary",
   "queue.summary",
   "emergency.summary",
+  "inpatient.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -187,6 +188,19 @@ export type ApiV1EmergencySummaryResponse = {
     admitted: number
     discharged_or_transferred: number
     critical_or_emergency: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1InpatientSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  inpatient: {
+    total_in_range: number
+    admitted_or_active: number
+    discharged: number
+    other: number
   }
   server_time_utc: string
 }

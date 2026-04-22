@@ -58,6 +58,7 @@ Example:
       "pharmacy.summary",
       "queue.summary",
       "emergency.summary",
+      "inpatient.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -279,6 +280,26 @@ Response fields:
 - `emergency.admitted`
 - `emergency.discharged_or_transferred`
 - `emergency.critical_or_emergency`
+
+## `GET /api/v1/inpatient/summary`
+
+Purpose:
+- Return inpatient admission/discharge totals for selected range.
+
+Access:
+- Requires `inpatient.manage`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `inpatient.total_in_range`
+- `inpatient.admitted_or_active`
+- `inpatient.discharged`
+- `inpatient.other`
 
 ## `GET /api/v1/billing/summary`
 

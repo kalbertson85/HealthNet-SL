@@ -474,6 +474,32 @@ Response fields:
 - `reports.pending_lab_tests`
 - `reports.source` (`rpc | fallback`)
 
+## `GET /api/v1/audit/trail`
+
+Purpose:
+- Return recent audit events for administrative traceability.
+
+Access:
+- Requires `admin.settings.manage`.
+
+Query parameters:
+- `limit` (optional, `1..200`, default `50`)
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `filters.limit`
+- `filters.from`
+- `filters.to`
+- `audit.events[].id`
+- `audit.events[].occurred_at`
+- `audit.events[].action`
+- `audit.events[].resource_type`
+- `audit.events[].resource_id`
+- `audit.events[].actor_user_id`
+- `audit.events[].actor_role`
+- `audit.events[].facility_id`
+
 ## Cross-Platform Guidance
 
 - Mobile/desktop clients should call `/api/v1/meta` on startup and cache:

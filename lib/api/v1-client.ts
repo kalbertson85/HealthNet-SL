@@ -20,6 +20,7 @@ import type {
   ApiV1NotificationsSummaryResponse,
   ApiV1AdminSummaryResponse,
   ApiV1ReportsSummaryResponse,
+  ApiV1AuditTrailResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -366,6 +367,31 @@ const reportsSummarySchema = z.object({
   server_time_utc: z.string(),
 })
 
+const auditTrailSchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  filters: z.object({
+    limit: z.number(),
+    from: z.string().nullable(),
+    to: z.string().nullable(),
+  }),
+  audit: z.object({
+    events: z.array(
+      z.object({
+        id: z.string(),
+        occurred_at: z.string(),
+        action: z.string(),
+        resource_type: z.string().nullable(),
+        resource_id: z.string().nullable(),
+        actor_user_id: z.string().nullable(),
+        actor_role: z.string().nullable(),
+        facility_id: z.string().nullable(),
+      }),
+    ),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -572,6 +598,14 @@ export function createApiV1Client(opts?: {
       if (params?.to) query.set("to", params.to)
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/reports/summary${suffix}`, reportsSummarySchema) as Promise<ApiV1ReportsSummaryResponse>
+    },
+    async getAuditTrail(params?: { limit?: number; from?: string; to?: string }): Promise<ApiV1AuditTrailResponse> {
+      const query = new URLSearchParams()
+      if (typeof params?.limit === "number") query.set("limit", String(params.limit))
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/audit/trail${suffix}`, auditTrailSchema) as Promise<ApiV1AuditTrailResponse>
     },
   }
 }

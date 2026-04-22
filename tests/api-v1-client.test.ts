@@ -554,4 +554,45 @@ describe("api v1 client", () => {
       expect.any(Object),
     )
   })
+
+  it("parses audit trail response with query filters", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        filters: {
+          limit: 25,
+          from: "2026-04-01",
+          to: "2026-04-30",
+        },
+        audit: {
+          events: [
+            {
+              id: "evt_1",
+              occurred_at: "2026-04-10T12:00:00.000Z",
+              action: "billing.invoice_created",
+              resource_type: "invoice",
+              resource_id: "inv_1",
+              actor_user_id: "user_1",
+              actor_role: "cashier",
+              facility_id: "fac_1",
+            },
+          ],
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getAuditTrail({
+      limit: 25,
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.audit.events[0]?.action).toBe("billing.invoice_created")
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/audit/trail?limit=25&from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

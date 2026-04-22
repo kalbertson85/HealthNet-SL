@@ -316,3 +316,26 @@ export type ApiV1ReportsSummaryResponse = {
   }
   server_time_utc: string
 }
+
+export type ApiV1AuditTrailResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  filters: {
+    limit: number
+    from: string | null
+    to: string | null
+  }
+  audit: {
+    events: Array<{
+      id: string
+      occurred_at: string
+      action: string
+      resource_type: string | null
+      resource_id: string | null
+      actor_user_id: string | null
+      actor_role: string | null
+      facility_id: string | null
+    }>
+  }
+  server_time_utc: string
+}

@@ -65,6 +65,7 @@ Example:
       "triage.summary",
       "records.summary",
       "notifications.summary",
+      "admin.summary",
       "patients.workflow",
       "patients.summary",
       "billing.insurance",
@@ -415,6 +416,21 @@ Response fields:
 - `notifications.total`
 - `notifications.unread`
 - `notifications.live_alerts`
+
+## `GET /api/v1/admin/summary`
+
+Purpose:
+- Return admin operations counters (staff, facilities, audit activity).
+
+Access:
+- Requires `admin.settings.manage`.
+
+Response fields:
+- `admin.total_staff_profiles`
+- `admin.active_staff_profiles`
+- `admin.blocked_staff_profiles`
+- `admin.total_facilities`
+- `admin.audit_events_24h`
 
 ## `GET /api/v1/billing/summary`
 

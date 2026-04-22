@@ -503,4 +503,26 @@ describe("api v1 client", () => {
     expect(payload.notifications.unread).toBe(12)
     expect(fetchImpl).toHaveBeenCalledWith("/api/v1/notifications/summary", expect.any(Object))
   })
+
+  it("parses admin summary response", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        admin: {
+          total_staff_profiles: 42,
+          active_staff_profiles: 39,
+          blocked_staff_profiles: 3,
+          total_facilities: 5,
+          audit_events_24h: 17,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getAdminSummary()
+    expect(payload.admin.total_facilities).toBe(5)
+    expect(fetchImpl).toHaveBeenCalledWith("/api/v1/admin/summary", expect.any(Object))
+  })
 })

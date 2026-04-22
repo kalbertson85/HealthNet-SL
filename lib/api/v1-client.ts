@@ -18,6 +18,7 @@ import type {
   ApiV1TriageSummaryResponse,
   ApiV1RecordsSummaryResponse,
   ApiV1NotificationsSummaryResponse,
+  ApiV1AdminSummaryResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -334,6 +335,19 @@ const notificationsSummarySchema = z.object({
   server_time_utc: z.string(),
 })
 
+const adminSummarySchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  admin: z.object({
+    total_staff_profiles: z.number(),
+    active_staff_profiles: z.number(),
+    blocked_staff_profiles: z.number(),
+    total_facilities: z.number(),
+    audit_events_24h: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -530,6 +544,9 @@ export function createApiV1Client(opts?: {
     },
     async getNotificationsSummary(): Promise<ApiV1NotificationsSummaryResponse> {
       return request("/notifications/summary", notificationsSummarySchema) as Promise<ApiV1NotificationsSummaryResponse>
+    },
+    async getAdminSummary(): Promise<ApiV1AdminSummaryResponse> {
+      return request("/admin/summary", adminSummarySchema) as Promise<ApiV1AdminSummaryResponse>
     },
   }
 }

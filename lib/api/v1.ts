@@ -19,6 +19,7 @@ export const API_V1_CAPABILITIES = [
   "triage.summary",
   "records.summary",
   "notifications.summary",
+  "admin.summary",
   "patients.workflow",
   "billing.insurance",
   "reports.company_billing",
@@ -284,6 +285,19 @@ export type ApiV1NotificationsSummaryResponse = {
     total: number
     unread: number
     live_alerts: number
+  }
+  server_time_utc: string
+}
+
+export type ApiV1AdminSummaryResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  admin: {
+    total_staff_profiles: number
+    active_staff_profiles: number
+    blocked_staff_profiles: number
+    total_facilities: number
+    audit_events_24h: number
   }
   server_time_utc: string
 }

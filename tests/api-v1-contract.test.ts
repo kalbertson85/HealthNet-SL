@@ -21,13 +21,14 @@ const FILES = {
   triageSummary: path.join(process.cwd(), "app", "api", "v1", "triage", "summary", "route.ts"),
   recordsSummary: path.join(process.cwd(), "app", "api", "v1", "records", "summary", "route.ts"),
   notificationsSummary: path.join(process.cwd(), "app", "api", "v1", "notifications", "summary", "route.ts"),
+  adminSummary: path.join(process.cwd(), "app", "api", "v1", "admin", "summary", "route.ts"),
   patientsSummary: path.join(process.cwd(), "app", "api", "v1", "patients", "summary", "route.ts"),
   billingSummary: path.join(process.cwd(), "app", "api", "v1", "billing", "summary", "route.ts"),
 }
 
 describe("api v1 contract coverage", () => {
   it("protects v1 endpoints with permission guards", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, patientsSummary, billingSummary] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, patientsSummary, billingSummary] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -47,6 +48,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.triageSummary, "utf8"),
         fs.readFile(FILES.recordsSummary, "utf8"),
         fs.readFile(FILES.notificationsSummary, "utf8"),
+        fs.readFile(FILES.adminSummary, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
       ])
@@ -69,12 +71,13 @@ describe("api v1 contract coverage", () => {
     expect(triageSummary).toContain("requirePermission(")
     expect(recordsSummary).toContain("requirePermission(")
     expect(notificationsSummary).toContain("requirePermission(")
+    expect(adminSummary).toContain("requirePermission(")
     expect(patientsSummary).toContain("requirePermission(")
     expect(billingSummary).toContain("requirePermission(")
   })
 
   it("returns versioned payload fields for cross-platform clients", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, patientsSummary, billingSummary] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, patientsSummary, billingSummary] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -94,6 +97,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.triageSummary, "utf8"),
         fs.readFile(FILES.recordsSummary, "utf8"),
         fs.readFile(FILES.notificationsSummary, "utf8"),
+        fs.readFile(FILES.adminSummary, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
       ])
@@ -117,6 +121,7 @@ describe("api v1 contract coverage", () => {
     expect(triageSummary).toContain("critical_or_emergency")
     expect(recordsSummary).toContain("discharged")
     expect(notificationsSummary).toContain("live_alerts")
+    expect(adminSummary).toContain("audit_events_24h")
     expect(patientsSummary).toContain("created_in_range")
     expect(billingSummary).toContain("outstanding_balance")
     expect(billingSummary).toContain("open_invoice_count")

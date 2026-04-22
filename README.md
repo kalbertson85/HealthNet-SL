@@ -264,5 +264,6 @@ Current tests include:
 - `tests/api-route-payload-limits.test.ts` – JSON POST payload-size enforcement guardrails.
 - `tests/export-route-security-coverage.test.ts` – export endpoint rate-limit/origin/permission guardrails.
 - `tests/export-route-bounds-coverage.test.ts` – export endpoint result-size and truncation metadata guardrails.
+- `tests/admin-route-hardening-coverage.test.ts` – admin endpoint role/rate-limit/auth-error guardrails.
 
 All of these are designed to validate the critical business logic around visits, billing, pharmacy, notifications, and auditing.

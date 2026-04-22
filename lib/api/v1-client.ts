@@ -23,6 +23,7 @@ import type {
   ApiV1AuditTrailResponse,
   ApiV1ReportsCompanyBillingResponse,
   ApiV1BillingInsuranceResponse,
+  ApiV1PatientsWorkflowResponse,
   ApiV1SessionResponse,
   ApiV1VisitsSummaryResponse,
 } from "@/lib/api/v1"
@@ -443,6 +444,28 @@ const billingInsuranceSchema = z.object({
   server_time_utc: z.string(),
 })
 
+const patientsWorkflowSchema = z.object({
+  ok: z.literal(true),
+  api: z.object({ version: z.string() }),
+  range: z.object({
+    from: z.string(),
+    to: z.string(),
+  }),
+  workflow: z.object({
+    registered_patients: z.number(),
+    triaged_patients: z.number(),
+    queued_patients: z.number(),
+    doctor_stage_visits: z.number(),
+    diagnostics_orders: z.number(),
+    prescriptions_created: z.number(),
+    pharmacy_stage_visits: z.number(),
+    billed_invoices: z.number(),
+    admissions_created: z.number(),
+    discharged_or_completed_visits: z.number(),
+  }),
+  server_time_utc: z.string(),
+})
+
 export class ApiV1ClientError extends Error {
   code: string
   status: number
@@ -675,6 +698,13 @@ export function createApiV1Client(opts?: {
       if (typeof params?.limit === "number") query.set("limit", String(params.limit))
       const suffix = query.toString() ? `?${query.toString()}` : ""
       return request(`/billing/insurance${suffix}`, billingInsuranceSchema) as Promise<ApiV1BillingInsuranceResponse>
+    },
+    async getPatientsWorkflow(params?: { from?: string; to?: string }): Promise<ApiV1PatientsWorkflowResponse> {
+      const query = new URLSearchParams()
+      if (params?.from) query.set("from", params.from)
+      if (params?.to) query.set("to", params.to)
+      const suffix = query.toString() ? `?${query.toString()}` : ""
+      return request(`/patients/workflow${suffix}`, patientsWorkflowSchema) as Promise<ApiV1PatientsWorkflowResponse>
     },
   }
 }

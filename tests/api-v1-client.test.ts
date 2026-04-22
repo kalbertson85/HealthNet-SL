@@ -666,4 +666,38 @@ describe("api v1 client", () => {
     expect(payload.billing_insurance.totals.total_batches).toBe(8)
     expect(fetchImpl).toHaveBeenCalledWith("/api/v1/billing/insurance?limit=15", expect.any(Object))
   })
+
+  it("parses patients workflow response with date range query", async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeJsonResponse({
+        ok: true,
+        api: { version: "v1" },
+        range: { from: "2026-04-01", to: "2026-04-30" },
+        workflow: {
+          registered_patients: 40,
+          triaged_patients: 34,
+          queued_patients: 31,
+          doctor_stage_visits: 18,
+          diagnostics_orders: 22,
+          prescriptions_created: 19,
+          pharmacy_stage_visits: 11,
+          billed_invoices: 27,
+          admissions_created: 6,
+          discharged_or_completed_visits: 16,
+        },
+        server_time_utc: new Date().toISOString(),
+      }),
+    )
+    const client = createApiV1Client({ fetchImpl })
+
+    const payload = await client.getPatientsWorkflow({
+      from: "2026-04-01",
+      to: "2026-04-30",
+    })
+    expect(payload.workflow.registered_patients).toBe(40)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/v1/patients/workflow?from=2026-04-01&to=2026-04-30",
+      expect.any(Object),
+    )
+  })
 })

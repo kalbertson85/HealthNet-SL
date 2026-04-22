@@ -130,6 +130,32 @@ Response fields:
 - `patients.total`
 - `patients.created_in_range`
 
+## `GET /api/v1/patients/workflow`
+
+Purpose:
+- Return end-to-end patient flow stage counts for selected range.
+
+Access:
+- Requires `patients.view`.
+
+Query parameters:
+- `from` (optional, `YYYY-MM-DD`)
+- `to` (optional, `YYYY-MM-DD`)
+
+Response fields:
+- `range.from`
+- `range.to`
+- `workflow.registered_patients`
+- `workflow.triaged_patients`
+- `workflow.queued_patients`
+- `workflow.doctor_stage_visits`
+- `workflow.diagnostics_orders`
+- `workflow.prescriptions_created`
+- `workflow.pharmacy_stage_visits`
+- `workflow.billed_invoices`
+- `workflow.admissions_created`
+- `workflow.discharged_or_completed_visits`
+
 ## `GET /api/v1/visits/summary`
 
 Purpose:

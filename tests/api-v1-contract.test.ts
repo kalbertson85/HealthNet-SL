@@ -26,13 +26,14 @@ const FILES = {
   reportsCompanyBilling: path.join(process.cwd(), "app", "api", "v1", "reports", "company-billing", "route.ts"),
   auditTrail: path.join(process.cwd(), "app", "api", "v1", "audit", "trail", "route.ts"),
   patientsSummary: path.join(process.cwd(), "app", "api", "v1", "patients", "summary", "route.ts"),
+  patientsWorkflow: path.join(process.cwd(), "app", "api", "v1", "patients", "workflow", "route.ts"),
   billingSummary: path.join(process.cwd(), "app", "api", "v1", "billing", "summary", "route.ts"),
   billingInsurance: path.join(process.cwd(), "app", "api", "v1", "billing", "insurance", "route.ts"),
 }
 
 describe("api v1 contract coverage", () => {
   it("protects v1 endpoints with permission guards", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, billingSummary, billingInsurance] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, patientsWorkflow, billingSummary, billingInsurance] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -57,6 +58,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.reportsCompanyBilling, "utf8"),
         fs.readFile(FILES.auditTrail, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
+        fs.readFile(FILES.patientsWorkflow, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
         fs.readFile(FILES.billingInsurance, "utf8"),
       ])
@@ -84,12 +86,13 @@ describe("api v1 contract coverage", () => {
     expect(reportsCompanyBilling).toContain("requirePermission(")
     expect(auditTrail).toContain("requirePermission(")
     expect(patientsSummary).toContain("requirePermission(")
+    expect(patientsWorkflow).toContain("requirePermission(")
     expect(billingSummary).toContain("requirePermission(")
     expect(billingInsurance).toContain("requirePermission(")
   })
 
   it("returns versioned payload fields for cross-platform clients", async () => {
-    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, billingSummary, billingInsurance] =
+    const [meta, session, dashboardSummary, visitsSummary, appointmentsSummary, prescriptionsSummary, labSummary, radiologySummary, pharmacySummary, queueSummary, emergencySummary, inpatientSummary, surgerySummary, nursingSummary, doctorSummary, triageSummary, recordsSummary, notificationsSummary, adminSummary, reportsSummary, reportsCompanyBilling, auditTrail, patientsSummary, patientsWorkflow, billingSummary, billingInsurance] =
       await Promise.all([
         fs.readFile(FILES.meta, "utf8"),
         fs.readFile(FILES.session, "utf8"),
@@ -114,6 +117,7 @@ describe("api v1 contract coverage", () => {
         fs.readFile(FILES.reportsCompanyBilling, "utf8"),
         fs.readFile(FILES.auditTrail, "utf8"),
         fs.readFile(FILES.patientsSummary, "utf8"),
+        fs.readFile(FILES.patientsWorkflow, "utf8"),
         fs.readFile(FILES.billingSummary, "utf8"),
         fs.readFile(FILES.billingInsurance, "utf8"),
       ])
@@ -145,6 +149,8 @@ describe("api v1 contract coverage", () => {
     expect(auditTrail).toContain("occurred_at")
     expect(auditTrail).toContain("resource_type")
     expect(patientsSummary).toContain("created_in_range")
+    expect(patientsWorkflow).toContain("diagnostics_orders")
+    expect(patientsWorkflow).toContain("discharged_or_completed_visits")
     expect(billingSummary).toContain("outstanding_balance")
     expect(billingSummary).toContain("open_invoice_count")
     expect(billingInsurance).toContain("outstanding_amount")

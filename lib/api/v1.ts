@@ -381,3 +381,22 @@ export type ApiV1BillingInsuranceResponse = {
   }
   server_time_utc: string
 }
+
+export type ApiV1PatientsWorkflowResponse = {
+  ok: true
+  api: { version: typeof API_V1_VERSION }
+  range: { from: string; to: string }
+  workflow: {
+    registered_patients: number
+    triaged_patients: number
+    queued_patients: number
+    doctor_stage_visits: number
+    diagnostics_orders: number
+    prescriptions_created: number
+    pharmacy_stage_visits: number
+    billed_invoices: number
+    admissions_created: number
+    discharged_or_completed_visits: number
+  }
+  server_time_utc: string
+}

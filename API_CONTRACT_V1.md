@@ -583,6 +583,9 @@ Response fields:
 
 ## Validation Suite
 
+- Run the fast standalone verifier:
+  - `npm run api:v1:verify`
+  - validates declared capabilities against map entries, route files, docs, and client resolver usage
 - Run the dedicated v1 contract guardrails locally:
   - `npm run test:api-v1:contract`
 - This suite validates:

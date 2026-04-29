@@ -1,0 +1,77 @@
+name: Live Supabase RLS Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment label"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-supabase-rls-${{ github.ref }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify-live-rls:
+    name: Verify live Supabase RLS matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: "true"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      LIVE_RLS_PRIMARY_FACILITY_ID: ${{ secrets.LIVE_RLS_PRIMARY_FACILITY_ID }}
+      LIVE_RLS_SECONDARY_FACILITY_ID: ${{ secrets.LIVE_RLS_SECONDARY_FACILITY_ID }}
+      LIVE_RLS_USER_CASES_JSON: ${{ secrets.LIVE_RLS_USER_CASES_JSON }}
+      LIVE_RLS_TABLE_PROBES_JSON: ${{ secrets.LIVE_RLS_TABLE_PROBES_JSON }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        run: |
+          npm install -g pnpm@10
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate live RLS env
+        run: node scripts/verify-live-rls-env.mjs
+
+      - name: Run live RLS integration test
+        run: pnpm run test:live:rls:enabled
+
+      - name: Upload live RLS report marker
+        if: always()
+        run: |
+          mkdir -p artifacts
+          {
+            echo "environment=${{ inputs.environment }}"
+            echo "executed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "sha=${GITHUB_SHA}"
+          } > artifacts/live-supabase-rls.txt
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: live-supabase-rls-${{ inputs.environment }}
+          path: artifacts/live-supabase-rls.txt
+          if-no-files-found: error

@@ -35,6 +35,9 @@ describe("API v1 no-store coverage", () => {
       const hasGet = source.includes("export async function GET(")
       if (!hasGet) continue
 
+      if (!source.includes('from "@/lib/http/headers"')) {
+        violations.push(`${rel} is missing shared headers module import`)
+      }
       if (!source.includes("NO_STORE_JSON_HEADERS")) {
         violations.push(`${rel} is missing NO_STORE_JSON_HEADERS import/use`)
       }
@@ -46,4 +49,3 @@ describe("API v1 no-store coverage", () => {
     expect(violations).toEqual([])
   })
 })
-

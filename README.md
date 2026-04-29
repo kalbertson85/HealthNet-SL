@@ -276,5 +276,6 @@ Current tests include:
 - `tests/sql-security-invoker-search-path-coverage.test.ts` – SQL SECURITY INVOKER search_path hardening guardrails.
 - `tests/sql-function-volatility-coverage.test.ts` – transactional/security SQL function volatility declaration guardrails.
 - `tests/sql-transactional-rpc-permissions-coverage.test.ts` – transactional RPC revoke/grant permission guardrails.
+- `tests/sql-transactional-rpc-drop-before-create-coverage.test.ts` – transactional RPC drop-before-create migration guardrails.
 
 All of these are designed to validate the critical business logic around visits, billing, pharmacy, notifications, and auditing.

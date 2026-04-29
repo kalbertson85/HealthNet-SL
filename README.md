@@ -268,6 +268,7 @@ Current tests include:
 - `tests/export-route-bounds-coverage.test.ts` – export endpoint result-size and truncation metadata guardrails.
 - `tests/admin-route-hardening-coverage.test.ts` – admin endpoint role/rate-limit/auth-error guardrails.
 - `tests/admin-route-no-store-coverage.test.ts` – admin JSON response no-store header guardrails.
+- `tests/download-route-no-store-coverage.test.ts` – PDF/export download no-store header guardrails.
 - `tests/rate-limit-key-namespace-coverage.test.ts` – rate-limit key namespace consistency guardrails.
 
 All of these are designed to validate the critical business logic around visits, billing, pharmacy, notifications, and auditing.

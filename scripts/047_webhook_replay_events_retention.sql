@@ -5,6 +5,7 @@ CREATE OR REPLACE FUNCTION public.cleanup_webhook_replay_events(max_age_days int
 RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   deleted_count bigint;

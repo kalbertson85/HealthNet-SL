@@ -205,6 +205,12 @@ Run live Supabase RLS integration checks (opt-in):
 pnpm run test:live:rls
 ```
 
+Force live RLS execution:
+
+```bash
+pnpm run test:live:rls:enabled
+```
+
 Run the full release gate (predeploy readiness, tests, build, then lint):
 
 ```bash

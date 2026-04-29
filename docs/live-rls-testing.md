@@ -10,6 +10,12 @@ Run it with:
 pnpm run test:live:rls
 ```
 
+To force live execution in environments where test commands do not set flags automatically:
+
+```bash
+pnpm run test:live:rls:enabled
+```
+
 The test is skipped unless:
 
 - `LIVE_RLS_TESTS_ENABLED=true`
@@ -22,6 +28,7 @@ Required environment variables:
 - `LIVE_RLS_PRIMARY_FACILITY_ID`
 - `LIVE_RLS_SECONDARY_FACILITY_ID`
 - `LIVE_RLS_USER_CASES_JSON`
+- `LIVE_RLS_TABLE_PROBES_JSON` (optional but recommended)
 
 `LIVE_RLS_USER_CASES_JSON` format:
 
@@ -51,6 +58,24 @@ What this validates:
 1. `anon` cannot execute authenticated-only helper RPCs.
 2. Authenticated users can/cannot access facility scope according to expected matrix.
 3. `current_user_facility_id()` returns expected facility context where asserted.
+4. Optional table probes validate row-level visibility for real records across facilities.
+
+`LIVE_RLS_TABLE_PROBES_JSON` format:
+
+```json
+[
+  {
+    "table": "visits",
+    "idInPrimaryFacility": "11111111-1111-4111-8111-111111111111",
+    "idInSecondaryFacility": "22222222-2222-4222-8222-222222222222"
+  },
+  {
+    "table": "invoices",
+    "idInPrimaryFacility": "33333333-3333-4333-8333-333333333333",
+    "idInSecondaryFacility": "44444444-4444-4444-8444-444444444444"
+  }
+]
+```
 
 Security notes:
 

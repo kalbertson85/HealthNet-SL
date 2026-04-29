@@ -1,0 +1,83 @@
+name: Post-Migration Security Verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment label"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+      script_path:
+        description: "Verification SQL script path"
+        required: true
+        default: scripts/086_post_migration_security_verification.sql
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: post-migration-security-verify-${{ github.ref }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify post-migration security checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate required secret
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "Missing required secret: SUPABASE_DB_URL"
+            exit 1
+          fi
+
+      - name: Validate script path
+        run: |
+          test -f "${{ inputs.script_path }}" || {
+            echo "Script not found: ${{ inputs.script_path }}"
+            exit 1
+          }
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Execute post-migration verification SQL
+        run: |
+          psql "${DATABASE_URL}" \
+            --set ON_ERROR_STOP=1 \
+            --file "${{ inputs.script_path }}"
+
+      - name: Persist execution log
+        if: always()
+        run: |
+          mkdir -p artifacts
+          {
+            echo "environment=${{ inputs.environment }}"
+            echo "script_path=${{ inputs.script_path }}"
+            echo "executed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "sha=${GITHUB_SHA}"
+          } > artifacts/post-migration-security-verify.txt
+
+      - name: Upload execution artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: post-migration-security-verify-${{ inputs.environment }}
+          path: artifacts/post-migration-security-verify.txt
+          if-no-files-found: error

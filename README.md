@@ -271,5 +271,6 @@ Current tests include:
 - `tests/download-route-no-store-coverage.test.ts` – PDF/export download no-store header guardrails.
 - `tests/rate-limit-key-namespace-coverage.test.ts` – rate-limit key namespace consistency guardrails.
 - `tests/rls-critical-table-coverage.test.ts` – SQL RLS enablement coverage for critical tables.
+- `tests/rls-policy-critical-table-coverage.test.ts` – SQL CREATE POLICY coverage for critical RLS tables.
 
 All of these are designed to validate the critical business logic around visits, billing, pharmacy, notifications, and auditing.

@@ -11,6 +11,7 @@ CREATE OR REPLACE FUNCTION public.queue_call_next_transactional(
 )
 RETURNS jsonb
 LANGUAGE plpgsql
+VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $$

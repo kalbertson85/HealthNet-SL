@@ -11,6 +11,7 @@ CREATE OR REPLACE FUNCTION public.mark_visit_invoice_paid_transactional(
 )
 RETURNS jsonb
 LANGUAGE plpgsql
+VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $$

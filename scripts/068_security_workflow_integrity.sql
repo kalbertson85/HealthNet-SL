@@ -88,6 +88,7 @@ CREATE OR REPLACE FUNCTION public.create_insurance_billing_batch(
 )
 RETURNS uuid
 LANGUAGE plpgsql
+VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $fn$
@@ -176,6 +177,7 @@ $fn$;
 CREATE OR REPLACE FUNCTION public.enforce_invoice_visit_dependency()
 RETURNS trigger
 LANGUAGE plpgsql
+VOLATILE
 SET search_path = public
 AS $fn$
 DECLARE
@@ -210,6 +212,7 @@ EXECUTE FUNCTION public.enforce_invoice_visit_dependency();
 CREATE OR REPLACE FUNCTION public.enforce_prescription_visit_dependency()
 RETURNS trigger
 LANGUAGE plpgsql
+VOLATILE
 SET search_path = public
 AS $fn$
 DECLARE
@@ -257,6 +260,7 @@ END $$;
 CREATE OR REPLACE FUNCTION public.enforce_lab_visit_dependency()
 RETURNS trigger
 LANGUAGE plpgsql
+VOLATILE
 SET search_path = public
 AS $fn$
 DECLARE
@@ -574,6 +578,7 @@ RETURNS TABLE (
   insurance_batches_without_totals bigint
 )
 LANGUAGE sql
+STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$

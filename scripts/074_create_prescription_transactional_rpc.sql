@@ -14,6 +14,7 @@ CREATE OR REPLACE FUNCTION public.create_prescription_transactional(
 )
 RETURNS jsonb
 LANGUAGE plpgsql
+VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $$

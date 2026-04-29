@@ -274,5 +274,6 @@ Current tests include:
 - `tests/rls-policy-critical-table-coverage.test.ts` – SQL CREATE POLICY coverage for critical RLS tables.
 - `tests/sql-security-definer-search-path-coverage.test.ts` – SQL SECURITY DEFINER search_path hardening guardrails.
 - `tests/sql-security-invoker-search-path-coverage.test.ts` – SQL SECURITY INVOKER search_path hardening guardrails.
+- `tests/sql-function-volatility-coverage.test.ts` – transactional/security SQL function volatility declaration guardrails.
 
 All of these are designed to validate the critical business logic around visits, billing, pharmacy, notifications, and auditing.

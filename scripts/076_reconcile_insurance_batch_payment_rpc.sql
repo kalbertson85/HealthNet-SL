@@ -14,6 +14,7 @@ CREATE OR REPLACE FUNCTION public.reconcile_insurance_batch_payment(
 )
 RETURNS jsonb
 LANGUAGE plpgsql
+VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $$

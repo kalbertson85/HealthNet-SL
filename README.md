@@ -199,6 +199,12 @@ Run security guardrails:
 npm run test:security:guardrails
 ```
 
+Run live Supabase RLS integration checks (opt-in):
+
+```bash
+pnpm run test:live:rls
+```
+
 Run the full release gate (predeploy readiness, tests, build, then lint):
 
 ```bash
